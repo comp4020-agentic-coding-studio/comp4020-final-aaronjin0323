@@ -1,0 +1,257 @@
+:root {
+  color-scheme: light;
+  --bg: #f4efe6;
+  --ink: #1f1d1a;
+  --muted: #6b645a;
+  --accent: #c2410c;
+  --free-top: #e2d9ca;
+  --free-hover: #d3c6b1;
+  --board-edge: #cfc3ae;
+  --ring: #111;
+  --unit: clamp(5px, 1.1vw, 9px); /* how far one neighbour raises a tile */
+  --board: min(34rem, 62vw);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #17181d;
+    --ink: #ece8e1;
+    --muted: #a39d93;
+    --accent: #fb923c;
+    --free-top: #2d2f38;
+    --free-hover: #3b3e4a;
+    --board-edge: #24262e;
+    --ring: #fff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+  padding-inline: 1rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+.top,
+main {
+  max-width: 64rem;
+  margin-inline: auto;
+}
+
+.top {
+  padding-block: 1.5rem 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0.4rem 0 0;
+  max-width: 38rem;
+}
+
+.meta {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* --- controls --- */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding-block: 1rem;
+}
+
+.controls label {
+  font-weight: 600;
+}
+
+.controls input {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 2px solid var(--muted);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  width: 14rem;
+  max-width: 100%;
+}
+
+.controls input:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.status,
+.notice {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.status {
+  color: var(--muted);
+}
+
+.notice {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* --- the 3D board --- */
+
+.stage {
+  perspective: 1400px;
+  display: grid;
+  place-items: center;
+  /* the tilt makes the board look shorter than the box it lays out in */
+  margin-block: -4rem -2rem;
+}
+
+.board {
+  width: var(--board);
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 3px;
+  padding: 6px;
+  background: var(--board-edge);
+  border-radius: 6px;
+  transform-style: preserve-3d;
+  transform: rotateX(52deg) rotateZ(35deg);
+}
+
+.tile {
+  --h: 0;
+  --hue: 30;
+  position: relative;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--free-top);
+  color: #1b1b1b;
+  cursor: pointer;
+  transform-style: preserve-3d;
+  transform: translateZ(calc(var(--h) * var(--unit)));
+  transition: transform 220ms ease-out, background-color 150ms;
+}
+
+/* The two faces the camera sees: south (below the top face) and east (to
+   its right). Both are as tall as the tile is raised, so a flat tile has
+   none. */
+.tile::before,
+.tile::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.tile::before {
+  left: 0;
+  top: 100%;
+  width: 100%;
+  height: calc(var(--h) * var(--unit));
+  transform-origin: top;
+  transform: rotateX(-90deg);
+  background: hsl(var(--hue) 50% 42%);
+}
+
+.tile::after {
+  left: 100%;
+  top: 0;
+  width: calc(var(--h) * var(--unit));
+  height: 100%;
+  transform-origin: left;
+  transform: rotateY(90deg);
+  background: hsl(var(--hue) 50% 32%);
+}
+
+.tile[data-state="free"]:hover {
+  background: var(--free-hover);
+}
+
+.tile[data-state="held"],
+.tile[data-state="mine"] {
+  background: hsl(var(--hue) 65% 64%);
+}
+
+.tile[data-state="mine"] {
+  box-shadow:
+    inset 0 0 0 2px var(--ring),
+    inset 0 0 0 4px hsl(var(--hue) 65% 64%);
+}
+
+.tile:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  z-index: 1;
+}
+
+.initials {
+  display: block;
+  font-size: clamp(0.5rem, 1.3vw, 0.75rem);
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Phones: a gentler tilt with no twist, so the board fills the width and
+   each tile stays as big a target as the screen allows. */
+@media (max-width: 40rem) {
+  :root {
+    --board: 100%;
+    --unit: 4px;
+  }
+
+  .stage {
+    margin-block: 0 1.5rem;
+  }
+
+  .board {
+    transform: rotateX(28deg);
+    gap: 2px;
+    padding: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile {
+    transition: none;
+  }
+}
+
+/* --- /readme/ --- */
+
+.prose {
+  max-width: 42rem;
+  padding-block: 1.5rem 4rem;
+}
+
+.prose img {
+  max-width: 100%;
+  height: auto;
+}
+
+.prose pre {
+  overflow-x: auto;
+}
