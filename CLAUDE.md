@@ -60,6 +60,8 @@ Settled; change them here first, then in the code.
 - **Server: bare `node:http`**, TypeScript run directly by Node 24 (type
   stripping, so erasable syntax only: no enums, no namespaces, no parameter
   properties). No framework and no build step.
+- **`/readme/` is rendered by `marked`** on each request, so it can't lag
+  behind `README.md`.
 - **Storage: SQLite through `node:sqlite`**, one file on the `/data` volume.
   It's built in, needs no native compile, and fits a 256 MB machine.
 
@@ -82,9 +84,14 @@ an `UPDATE ... WHERE claimer_id IS NULL` and "did I win?" is its change count.
 Routes for crit 8's slice:
 
 - `GET /`: the board, rendered on the server from current state
-- `POST /claim`: form fields `cellId`, `label`. `303` to `/` on success or
-  on a contest (with a notice), `409` for a script client that lost, `400`
-  for a bad `cellId` or label
+- `POST /claim`: fields `cellId`, `label`, form-encoded or JSON. A plain
+  form always gets a `303` back to `/?notice=<key>` (`claimed`, `taken`,
+  `label`, `cell`), so a no-JS visitor sees what happened. A client sending
+  `Accept: application/json` gets real statuses instead: `200`, `409` when it
+  lost, `400` for a bad `cellId` or label. A POST whose `Origin` isn't this
+  host is refused with a `403`
+- Notices are picked by key from a fixed table in `src/board.ts`; nothing
+  from the query string is echoed into the page
 - `GET /readme/`: `README.md` rendered to HTML (headings intact), replacing
   the placeholder's verbatim copy. `docs/` is served beneath it so the README's
   relative image links resolve there as they do on GitHub
@@ -102,8 +109,6 @@ and delete the line when one is settled.
 
 - **Real-time transport** (crit 9): SSE vs WebSockets vs polling. The brief
   wants the choice justified in `PROCESS.md`.
-- **Markdown renderer for `/readme/`**: one small dependency (e.g. `marked`)
-  vs hand-rolled. Decide when building the route.
 - **Migrations**: `PRAGMA user_version` plus numbered SQL steps run at boot is
   the default unless something better comes up. Decide before the first
   schema change after crit 8 ships.
@@ -111,6 +116,11 @@ and delete the line when one is settled.
   games for a few friends, single-workshop tools). Every claim in it needs a
   matching rule here or a check in `spec/`, and the README says which claims
   are tested and which are judged.
+- **Phone tap size**: at 390px a tile is about 27x22px, under the 44px
+  comfortable target. Options: zoom/pan, tap-to-select-then-confirm, or a
+  smaller board on phones. Decide before crit 9.
+- **Visual direction**: the current warm-paper palette with per-person hues
+  is a default, not a decision.
 - **Crit 8 cutoff date**: not on the crit page; check the course schedule.
 
 ## How to work in here
@@ -125,6 +135,12 @@ and delete the line when one is settled.
   each piece works are the process record the marker reads against
   `PROCESS.md`, so don't batch them. Pushing and deploying are the
   outward-facing steps: ask each time, and one yes doesn't cover the next.
+- **Look at it at both sizes before calling a UI change done.** Screenshot
+  1440x900 and 390x844 (mobile emulation) with the Playwright script in
+  `/tmp/pw-shot` or equivalent, read the images, and check
+  `scrollWidth` equals the viewport width. Then do a keyboard pass: type a
+  name, focus a tile, press Enter, and confirm a second browser context sees
+  the claim.
 - **After a deploy, fetch the URL and read the status.** The deploy command
   finishing is not the site answering.
 - **Model the slice, not the system.** Build the one flow the current crit
