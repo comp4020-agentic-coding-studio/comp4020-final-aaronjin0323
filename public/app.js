@@ -128,7 +128,7 @@ if (board && stage) {
   hint.textContent = "or drag the board.";
   const keysHint = document.createElement("span");
   keysHint.className = "keys-hint";
-  keysHint.textContent = " On the board: arrows or WASD move, Enter claims, Q/E turn.";
+  keysHint.textContent = " Keys: WASD or arrows move, Enter claims, Q/E turn.";
   hint.append(keysHint);
   bar.append(hint);
   stage.before(bar);
@@ -139,6 +139,7 @@ if (board && stage) {
   // between tiles relative to the screen, so "up" means visually up however
   // the camera is turned.
   const tiles = [...board.querySelectorAll("button.tile")];
+  const nameField = document.querySelector("#label");
   const N = Math.round(Math.sqrt(tiles.length));
   const BOARD_DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]]; // north, east, south, west
   const SCREEN_DIRS = { arrowup: 0, w: 0, arrowright: 1, d: 1, arrowdown: 2, s: 2, arrowleft: 3, a: 3 };
@@ -158,10 +159,31 @@ if (board && stage) {
   });
   board.setAttribute("aria-describedby", "status board-keys");
 
-  board.addEventListener("keydown", (e) => {
+  // Keys work anywhere on the page, not only once a tile has focus: nobody
+  // should have to discover that the board is a Tab stop. The one exception
+  // is a text field, where W, A, S and D are letters.
+  const typing = (el) =>
+    el instanceof HTMLElement && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+
+  document.addEventListener("keydown", (e) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     const key = e.key.toLowerCase();
+
+    // Enter in the name field goes to the board instead of submitting the form
+    // (which, with no tile chosen, would claim nothing useful).
+    if (e.target === nameField && key === "enter") {
+      e.preventDefault();
+      moveTo(current, true);
+      return;
+    }
+    if (typing(e.target)) return;
+
+    const onBoard = tiles.includes(document.activeElement);
     if (key in SCREEN_DIRS) {
+      e.preventDefault();
+      // the first press from elsewhere on the page lands on the board and
+      // shows where you are; after that, each press moves
+      if (!onBoard) return moveTo(current, true);
       // the board's spin, rounded to the nearest quarter turn, says which
       // board direction currently faces each screen direction
       const quarter = ((Math.round(view.spin / 90) % 4) + 4) % 4;
@@ -169,7 +191,6 @@ if (board && stage) {
       const r = Math.floor(current / N) + dr;
       const c = (current % N) + dc;
       if (r >= 0 && r < N && c >= 0 && c < N) moveTo(r * N + c, true);
-      e.preventDefault();
     } else if (key === "q" || key === "e") {
       (key === "q" ? controls[0][1] : controls[1][1])();
       e.preventDefault();

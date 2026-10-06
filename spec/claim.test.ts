@@ -66,6 +66,17 @@ describe("the board", () => {
     expect(form!.querySelector('input[name="label"]')).not.toBeNull();
   });
 
+  it("can't claim tile 0 by pressing Enter in the name field", async () => {
+    // Enter in a text field submits the form with its first submit button.
+    // That has to be a disabled one, which cancels the submission, not tile 0.
+    const res = await fetch(new URL("/", baseUrl));
+    const doc = new JSDOM(await res.text()).window.document;
+    const first = doc.querySelector('form[action="/claim"]')!.querySelector('button:not([type]), button[type="submit"]');
+    expect(first).not.toBeNull();
+    expect(first!.hasAttribute("disabled")).toBe(true);
+    expect(first!.classList.contains("tile")).toBe(false);
+  });
+
   it("draws every tile as a four-sided block, so any camera angle shows a solid", async () => {
     const res = await fetch(new URL("/", baseUrl));
     const doc = new JSDOM(await res.text()).window.document;

@@ -83,6 +83,7 @@ export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): s
     </header>
     <main>
       <form class="claim" method="post" action="/claim">
+        <button type="submit" disabled hidden aria-hidden="true" tabindex="-1"></button>
         <div class="controls">
           <label for="label">Your name</label>
           <input id="label" name="label" maxlength="24" required autocomplete="nickname" value="${escapeHtml(mine?.label ?? "")}">
