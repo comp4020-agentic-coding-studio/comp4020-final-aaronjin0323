@@ -14,6 +14,7 @@ const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -167,6 +168,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
   if (path.startsWith("/readme/docs/")) return serveFile(res, "docs", path.slice("/readme/docs/".length));
   if (path === "/style.css") return serveFile(res, "public", "style.css");
+  if (path === "/app.js") return serveFile(res, "public", "app.js");
   notFound(res);
 }
 

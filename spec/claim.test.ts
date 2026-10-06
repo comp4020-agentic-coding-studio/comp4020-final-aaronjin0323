@@ -66,6 +66,24 @@ describe("the board", () => {
     expect(form!.querySelector('input[name="label"]')).not.toBeNull();
   });
 
+  it("draws every tile as a four-sided block, so any camera angle shows a solid", async () => {
+    const res = await fetch(new URL("/", baseUrl));
+    const doc = new JSDOM(await res.text()).window.document;
+    const tiles = [...doc.querySelectorAll("button.tile")];
+    expect(tiles.length).toBe(N * N);
+    expect(tiles.every((t) => t.querySelector(":scope > .sides") !== null)).toBe(true);
+  });
+
+  it("serves the camera script the board page loads", async () => {
+    const page = await (await fetch(new URL("/", baseUrl))).text();
+    const src = new JSDOM(page).window.document.querySelector("script[src]")?.getAttribute("src");
+    expect(src).toBe("/app.js");
+    const res = await fetch(new URL(src!, baseUrl));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect(await res.text()).toMatch(/--spin/);
+  });
+
   it("gives a new visitor an anonymous id cookie", async () => {
     const res = await fetch(new URL("/", baseUrl));
     expect(res.headers.get("set-cookie")).toMatch(/^pid=[0-9a-f-]{36};.*HttpOnly.*SameSite=Lax/);

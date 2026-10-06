@@ -54,13 +54,13 @@ export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): s
       const h = hs[tile.id];
       const where = `Row ${row}, column ${col}`;
       if (tile.claimerId === null) {
-        return `<button class="tile" name="cellId" value="${tile.id}" data-state="free" data-height="0" style="--h:0" aria-label="${where}, free"></button>`;
+        return `<button class="tile" name="cellId" value="${tile.id}" data-state="free" data-height="0" style="--h:0" aria-label="${where}, free"><span class="sides" aria-hidden="true"></span></button>`;
       }
       const isMine = tile.claimerId === me;
       const label = escapeHtml(tile.label ?? "");
       const state = isMine ? "mine" : "held";
       const who = isMine ? `your tile, ${label}` : `held by ${label}`;
-      return `<button class="tile" name="cellId" value="${tile.id}" data-state="${state}" data-height="${h}" style="--h:${h};--hue:${hue(tile.claimerId)}" aria-label="${where}, ${who}, height ${h}" title="${label}"><span class="initials" aria-hidden="true">${escapeHtml(initials(tile.label ?? ""))}</span></button>`;
+      return `<button class="tile" name="cellId" value="${tile.id}" data-state="${state}" data-height="${h}" style="--h:${h};--hue:${hue(tile.claimerId)}" aria-label="${where}, ${who}, height ${h}" title="${label}"><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(initials(tile.label ?? ""))}</span></button>`;
     })
     .join("\n        ");
 
@@ -74,6 +74,7 @@ export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): s
 
   return page({
     title: "Skyline",
+    script: "/app.js",
     body: `
     <header class="top">
       <h1>Skyline</h1>
@@ -88,7 +89,7 @@ export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): s
           <p class="status" id="status">${status}</p>
           ${noticeHtml}
         </div>
-        <div class="stage">
+        <div class="stage" data-stage>
           <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status">
         ${cells}
           </div>

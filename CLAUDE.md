@@ -52,8 +52,15 @@ Settled; change them here first, then in the code.
   turned down: the server-rendered form grid below has to exist anyway, and
   CSS 3D makes that grid *the* scene instead of a second copy for a canvas to
   keep in sync. Keyboard focus, screen readers and no-JS all come for free.
-  Revisit only if the scene needs something CSS can't do (free camera orbit,
-  lighting).
+  Revisit only if the scene needs something CSS can't do (lighting,
+  shadows, anything beyond rotate and tilt).
+- **The camera turns.** `public/app.js` drives `--tilt` (clamped 10--75°)
+  and `--spin` on `.board`: a drag turns it (touch only turns, so vertical
+  swipes still scroll), and Turn/Tilt/Reset buttons do the same from the
+  keyboard. A drag that moved never claims a tile. The view is remembered in
+  `localStorage`. Without JS the board stays at the default angle and every
+  claim still works. Because the camera can face any side, every tile draws
+  all four side faces (`::before`/`::after` on the button, plus `.sides`).
 - **Claims work without JavaScript.** Each tile is a `<button>` in a form
   that `POST`s to `/claim`, answered with a `303` back to `/`, which renders
   from the database. Script may enhance this; it can't be the only path.

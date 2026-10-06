@@ -8,7 +8,7 @@ const ESCAPES: Record<string, string> = {
 
 export const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (ch) => ESCAPES[ch]);
 
-export function page({ title, body }: { title: string; body: string }): string {
+export function page({ title, body, script }: { title: string; body: string; script?: string }): string {
   return `<!doctype html>
 <html lang="en-AU">
   <head>
@@ -16,6 +16,7 @@ export function page({ title, body }: { title: string; body: string }): string {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/style.css">
+    ${script ? `<script src="${script}" defer></script>` : ""}
   </head>
   <body>${body}
   </body>

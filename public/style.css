@@ -134,7 +134,15 @@ h1 {
   background: var(--board-edge);
   border-radius: 6px;
   transform-style: preserve-3d;
-  transform: rotateX(52deg) rotateZ(35deg);
+  /* the camera: app.js turns these, the defaults are the no-JS view */
+  --tilt: 52deg;
+  --spin: 35deg;
+  transform: rotateX(var(--tilt)) rotateZ(var(--spin));
+  transition: transform 300ms ease-out;
+}
+
+.board.is-instant {
+  transition: none;
 }
 
 .tile {
@@ -154,11 +162,13 @@ h1 {
   transition: transform 220ms ease-out, background-color 150ms;
 }
 
-/* The two faces the camera sees: south (below the top face) and east (to
-   its right). Both are as tall as the tile is raised, so a flat tile has
-   none. */
+/* Four side faces, each as tall as the tile is raised, so a flat tile has
+   none. The button's pseudo-elements are south and east; .sides carries
+   north and west, so the block stays solid however the camera turns. */
 .tile::before,
-.tile::after {
+.tile::after,
+.sides::before,
+.sides::after {
   content: "";
   position: absolute;
   box-sizing: border-box;
@@ -183,6 +193,33 @@ h1 {
   transform-origin: left;
   transform: rotateY(90deg);
   background: hsl(var(--hue) 50% 32%);
+}
+
+.sides {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+.sides::before {
+  left: 0;
+  bottom: 100%;
+  width: 100%;
+  height: calc(var(--h) * var(--unit));
+  transform-origin: bottom;
+  transform: rotateX(90deg);
+  background: hsl(var(--hue) 50% 50%);
+}
+
+.sides::after {
+  right: 100%;
+  top: 0;
+  width: calc(var(--h) * var(--unit));
+  height: 100%;
+  transform-origin: right;
+  transform: rotateY(-90deg);
+  background: hsl(var(--hue) 50% 38%);
 }
 
 .tile[data-state="free"]:hover {
@@ -228,16 +265,59 @@ h1 {
   }
 
   .board {
-    transform: rotateX(28deg);
+    --tilt: 28deg;
+    --spin: 0deg;
     gap: 2px;
     padding: 4px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .board,
   .tile {
     transition: none;
   }
+}
+
+/* --- camera controls (added by app.js) --- */
+
+.stage {
+  touch-action: pan-y; /* a sideways drag turns the board; vertical still scrolls */
+  cursor: grab;
+}
+
+.stage:active {
+  cursor: grabbing;
+}
+
+.camera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  position: relative;
+  z-index: 2;
+}
+
+.camera button {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.65rem;
+  border: 2px solid var(--muted);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.camera button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.camera-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 /* --- /readme/ --- */
