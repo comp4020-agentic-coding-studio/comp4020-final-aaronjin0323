@@ -124,7 +124,55 @@ if (board && stage) {
   }
   const hint = document.createElement("span");
   hint.className = "camera-hint";
-  hint.textContent = "or drag the board";
+  hint.id = "board-keys";
+  hint.textContent = "or drag the board.";
+  const keysHint = document.createElement("span");
+  keysHint.className = "keys-hint";
+  keysHint.textContent = " On the board: arrows or WASD move, Enter claims, Q/E turn.";
+  hint.append(keysHint);
   bar.append(hint);
   stage.before(bar);
+
+  // --- keyboard: the board is one Tab stop ---
+  // Tabbing through 144 tiles is unusable, so only one tile is in the tab
+  // order (a roving tabindex): your own, or the centre. Arrows and WASD move
+  // between tiles relative to the screen, so "up" means visually up however
+  // the camera is turned.
+  const tiles = [...board.querySelectorAll("button.tile")];
+  const N = Math.round(Math.sqrt(tiles.length));
+  const BOARD_DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]]; // north, east, south, west
+  const SCREEN_DIRS = { arrowup: 0, w: 0, arrowright: 1, d: 1, arrowdown: 2, s: 2, arrowleft: 3, a: 3 };
+
+  let current = tiles.findIndex((t) => t.dataset.state === "mine");
+  if (current < 0) current = Math.floor(N / 2) * N + Math.floor(N / 2);
+
+  const moveTo = (i, focus) => {
+    tiles[current].tabIndex = -1;
+    current = i;
+    tiles[current].tabIndex = 0;
+    if (focus) tiles[current].focus({ preventScroll: true });
+  };
+  tiles.forEach((t, i) => {
+    t.tabIndex = i === current ? 0 : -1;
+    t.addEventListener("focus", () => moveTo(i, false));
+  });
+  board.setAttribute("aria-describedby", "status board-keys");
+
+  board.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const key = e.key.toLowerCase();
+    if (key in SCREEN_DIRS) {
+      // the board's spin, rounded to the nearest quarter turn, says which
+      // board direction currently faces each screen direction
+      const quarter = ((Math.round(view.spin / 90) % 4) + 4) % 4;
+      const [dr, dc] = BOARD_DIRS[(SCREEN_DIRS[key] - quarter + 4) % 4];
+      const r = Math.floor(current / N) + dr;
+      const c = (current % N) + dc;
+      if (r >= 0 && r < N && c >= 0 && c < N) moveTo(r * N + c, true);
+      e.preventDefault();
+    } else if (key === "q" || key === "e") {
+      (key === "q" ? controls[0][1] : controls[1][1])();
+      e.preventDefault();
+    }
+  });
 }

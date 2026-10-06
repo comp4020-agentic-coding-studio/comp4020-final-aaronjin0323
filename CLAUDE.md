@@ -61,6 +61,12 @@ Settled; change them here first, then in the code.
   `localStorage`. Without JS the board stays at the default angle and every
   claim still works. Because the camera can face any side, every tile draws
   all four side faces (`::before`/`::after` on the button, plus `.sides`).
+- **The board is one Tab stop.** With JS, only one tile is in the tab order
+  (your own, else the centre). Arrows or WASD move between tiles *relative
+  to the screen*: the spin, rounded to the nearest quarter turn, picks which
+  board direction a key means, so W always goes visually up. Enter claims,
+  Q/E turn the camera. Keys only act while a tile has focus, so typing a name
+  is unaffected. Without JS every tile is tabbable, as before.
 - **Claims work without JavaScript.** Each tile is a `<button>` in a form
   that `POST`s to `/claim`, answered with a `303` back to `/`, which renders
   from the database. Script may enhance this; it can't be the only path.

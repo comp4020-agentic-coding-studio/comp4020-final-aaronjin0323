@@ -320,6 +320,13 @@ h1 {
   font-size: 0.85rem;
 }
 
+/* a touch-only screen has no keyboard to describe */
+@media (hover: none) and (pointer: coarse) {
+  .keys-hint {
+    display: none;
+  }
+}
+
 /* --- /readme/ --- */
 
 .prose {
