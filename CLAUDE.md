@@ -83,6 +83,38 @@ Settled; change them here first, then in the code.
   behind `README.md`.
 - **Storage: SQLite through `node:sqlite`**, one file on the `/data` volume.
   It's built in, needs no native compile, and fits a 256 MB machine.
+- **Schema changes are numbered migrations** run at boot, tracked with
+  `PRAGMA user_version`. Each step runs once, in a transaction, against
+  whatever production already holds. A committed migration is never edited;
+  a fix is a new step.
+
+### Crit 9: real-time and leaving
+
+- **Live updates over SSE** (`GET /events`). Claims stay `POST`s; the server
+  pushes the board to every open page after any change. SSE fits bare
+  `node:http` with no library, reconnects by itself, and only the server ever
+  needs to push. WebSockets would earn their keep only for streaming input
+  from clients (live cursors), which this game doesn't have. A comment
+  heartbeat every 25 s keeps Fly's proxy from closing idle streams.
+- **Each stream gets its own payload.** "Mine" depends on who's asking, and a
+  `pid` is the only thing that proves identity, so it never leaves the
+  server: each connection is sent the board with its own tile marked, and
+  other people appear only as label, hue, height and state.
+- **With JS, claiming happens in place.** The form posts with `fetch` and the
+  board updates from the response and the stream: no reload, and the camera
+  and focus stay put. Without JS it's the `303` reload, as before, and other
+  people's claims show on the next load.
+- **A tile goes dormant after 24 hours unvisited, and a dormant tile can be
+  claimed.** The tile never vanishes and stays yours while nobody needs the
+  room; visiting the page (or keeping it open) wakes it. A dormant tile shows
+  greyed. Recorded as an ADR in `docs/adr/0001-dormant-tiles.md` with the
+  options turned down. The cost to own: someone who comes back after a day
+  may find their tile taken.
+- **Dormant tiles still count toward heights.** They're still standing, so
+  the skyline doesn't drop when people go home; they just stop being safe.
+- **Phones tap to select, then confirm.** On a coarse pointer the first tap
+  on a tile selects it and shows a full-width "Claim row R, column C" bar;
+  that button claims. Mouse and keyboard claim directly, as before.
 
 ## Build sketch
 
@@ -96,6 +128,12 @@ Schema, one table:
     );
     CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id)
       WHERE claimer_id IS NOT NULL;
+
+Migration 2 (crit 9) adds `last_seen_at TEXT`, backfilled from `claimed_at`.
+It's bumped whenever the holder loads the page or holds an open stream. A
+tile is dormant when `last_seen_at` is more than 24 hours old, computed at
+read time, never stored. A claim succeeds on a free tile *or* a dormant one.
+Claim functions take `now` as a parameter so tests can move the clock.
 
 All 144 rows are created at startup (`INSERT OR IGNORE`), so a claim is always
 an `UPDATE ... WHERE claimer_id IS NULL` and "did I win?" is its change count.
@@ -111,6 +149,10 @@ Routes for crit 8's slice:
   host is refused with a `403`
 - Notices are picked by key from a fixed table in `src/board.ts`; nothing
   from the query string is echoed into the page
+- `GET /events`: SSE. On connect, and after every change, it sends a `board`
+  event: per tile `{ state: free|held|mine|dormant, label, hue, height }`.
+  Dormancy crossing the threshold with no claim also triggers a send, checked
+  once a minute
 - `GET /readme/`: `README.md` rendered to HTML (headings intact), replacing
   the placeholder's verbatim copy. `docs/` is served beneath it so the README's
   relative image links resolve there as they do on GitHub
@@ -118,29 +160,22 @@ Routes for crit 8's slice:
 The database path comes from `DB_PATH`: `/data/app.db` in the image,
 `./.data/app.db` locally (gitignored).
 
-Deliberately out of scope for this slice: accounts, live updates between
-browsers, logging. Those get decided, or arrive, in later crits.
+Deliberately out of scope so far: accounts, chat, live cursors, logging
+(crit 10).
 
 ## Open decisions
 
 Named so they're decided on purpose, not by default. Record the answer above
 and delete the line when one is settled.
 
-- **Real-time transport** (crit 9): SSE vs WebSockets vs polling. The brief
-  wants the choice justified in `PROCESS.md`.
-- **Migrations**: `PRAGMA user_version` plus numbered SQL steps run at boot is
-  the default unless something better comes up. Decide before the first
-  schema change after crit 8 ships.
 - **What "good" means**: the README's argument, with sources (small web,
   games for a few friends, single-workshop tools). Every claim in it needs a
   matching rule here or a check in `spec/`, and the README says which claims
   are tested and which are judged.
-- **Phone tap size**: at 390px a tile is about 27x22px, under the 44px
-  comfortable target. Options: zoom/pan, tap-to-select-then-confirm, or a
-  smaller board on phones. Decide before crit 9.
 - **Visual direction**: the current warm-paper palette with per-person hues
   is a default, not a decision.
-- **Crit 8 cutoff date**: not on the crit page; check the course schedule.
+- **Presence ("N here now")**: a count of open streams is cheap. Not part of
+  crit 9's decision; add only if the slice is done early.
 
 ## How to work in here
 
