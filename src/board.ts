@@ -42,9 +42,12 @@ export type TileView = {
 
 export type BoardView = { tiles: TileView[]; claimed: number; status: string };
 
-// A claimed tile's height is how many of its 8 neighbours are claimed too,
-// dormant ones included: they're still standing. Derived, never stored.
-export function heights(tiles: Tile[]): number[] {
+// A claimed tile's height is how many of its 8 neighbours are claimed and
+// not dormant at `now`: someone away over a day stops lifting anyone. A
+// dormant tile keeps its own height, from its active neighbours. The same for
+// every viewer, so all pages agree. Derived, never stored.
+export function heights(tiles: Tile[], now: Date): number[] {
+  const active = tiles.map((t) => t.claimerId !== null && !isDormant(t, now));
   return tiles.map((tile) => {
     if (tile.claimerId === null) return 0;
     const row = Math.floor(tile.id / N);
@@ -54,7 +57,7 @@ export function heights(tiles: Tile[]): number[] {
       for (let dc = -1; dc <= 1; dc++) {
         const r = row + dr;
         const c = col + dc;
-        if ((dr || dc) && r >= 0 && r < N && c >= 0 && c < N && tiles[r * N + c].claimerId !== null) h++;
+        if ((dr || dc) && r >= 0 && r < N && c >= 0 && c < N && active[r * N + c]) h++;
       }
     }
     return h;
@@ -75,7 +78,7 @@ const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(
 // The board as one visitor sees it: their own tile is "mine" (never dormant:
 // they're here), anyone else's is held or dormant.
 export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
-  const hs = heights(tiles);
+  const hs = heights(tiles, now);
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
     if (tile.claimerId === null) {

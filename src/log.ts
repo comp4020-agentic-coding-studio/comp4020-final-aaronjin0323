@@ -62,13 +62,15 @@ export type ClaimEffects = {
   dropped: Tile[]; // and down
 };
 
-// What a successful claim did, from the board before and after it. A height
-// change only counts for a tile that kept its holder, as on the page.
-export function claimEffects(before: Tile[], after: Tile[], pid: string, cellId: number): ClaimEffects {
+// What a successful claim did, from the board before and after it, both at
+// the claim's `now`. A height change only counts for a tile that kept its
+// holder, as on the page. Settling on a dormant tile lifts its neighbours,
+// since a dormant tile lifts nobody.
+export function claimEffects(before: Tile[], after: Tile[], pid: string, cellId: number, now: Date): ClaimEffects {
   const was = before[cellId];
   const fromTile = before.find((t) => t.claimerId === pid);
-  const hb = heights(before);
-  const ha = heights(after);
+  const hb = heights(before, now);
+  const ha = heights(after, now);
   const kept = after.filter((t) => t.claimerId !== null && t.claimerId !== pid && t.claimerId === before[t.id].claimerId);
   return {
     from: fromTile && fromTile.id !== cellId ? fromTile.id : null,
@@ -77,4 +79,16 @@ export function claimEffects(before: Tile[], after: Tile[], pid: string, cellId:
     lifted: kept.filter((t) => ha[t.id] > hb[t.id]),
     dropped: kept.filter((t) => ha[t.id] < hb[t.id]),
   };
+}
+
+// Everyone a tile going dormant just dropped a floor: each claimed neighbour,
+// dormant ones too, since a dormant tile lifts nobody.
+export function dormancyDrops(tiles: Tile[], id: number): Tile[] {
+  const row = Math.floor(id / N);
+  const col = id % N;
+  return tiles.filter((t) => {
+    const dr = Math.abs(Math.floor(t.id / N) - row);
+    const dc = Math.abs((t.id % N) - col);
+    return t.id !== id && dr <= 1 && dc <= 1 && t.claimerId !== null;
+  });
 }

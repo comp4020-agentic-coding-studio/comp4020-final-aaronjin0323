@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
 import { isDormant, openStore, TILES } from "./db.ts";
-import { at, claimEffects, holder, log, people, raw, who } from "./log.ts";
+import { at, claimEffects, dormancyDrops, holder, log, people, raw, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -21,8 +21,9 @@ const store = openStore(DB_PATH);
 // whole board as its own visitor sees it: "mine" depends on who's asking, and
 // a pid never leaves the server. A full board, not a diff, means a stream
 // that drops and reconnects is back in sync from its first event.
-const HEARTBEAT_MS = 15_000; // Fly's proxy closes connections idle ~30-60 s
-const SWEEP_MS = 60_000; // dormancy is time-based, so look for changes each minute
+// Both can be shortened by the environment so a test can watch them happen.
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS) || 15_000; // Fly's proxy closes connections idle ~30-60 s
+const SWEEP_MS = Number(process.env.SWEEP_MS) || 60_000; // dormancy is time-based, so look for changes each minute
 
 type Stream = { pid: string; res: ServerResponse };
 const streams = new Set<Stream>();
@@ -58,17 +59,26 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
   streams.add(stream);
   const now = new Date();
   log("stream.open", { who: who(pid), open: streams.size });
-  // An open page is a visit. If it woke a dormant tile, everyone else's view
-  // of that tile just changed too.
-  if (store.touch(pid, now)) {
-    logWake(pid);
-    broadcast(now);
-  } else sendBoard(stream, now);
+  // An open page is a visit. A holder's visit changes what everyone else sees
+  // of their tile (it wakes, or its safeUntil moves), so they all hear it.
+  if (visit(pid, now)) broadcast(now);
+  else sendBoard(stream, now);
   req.on("close", () => {
     // A shutdown already cleared the set; don't log every stream twice.
     if (!streams.delete(stream)) return;
     log("stream.close", { who: who(pid), open: streams.size, secs: Math.round((Date.now() - now.getTime()) / 1000) });
   });
+}
+
+// Marks a visit. True if the visitor holds a tile, so its safeUntil (and
+// maybe its state) just changed for everyone else: the caller broadcasts, or
+// pages would count down to a time the server no longer holds, and a page
+// reconnecting would be sent the new safeUntil under the old version and keep
+// its stale one.
+function visit(pid: string, now: Date): boolean {
+  const holds = store.tiles().some((t) => t.claimerId === pid);
+  if (store.touch(pid, now)) logWake(pid);
+  return holds;
 }
 
 function logWake(pid: string): void {
@@ -82,8 +92,9 @@ setInterval(() => {
   for (const { res } of streams) res.write(": hb\n\n");
 }, HEARTBEAT_MS).unref();
 
-// Once a minute: holders with an open page count as visiting, and if any tile
-// crossed into dormancy since the last look, every open page hears about it.
+// Once a minute: holders with an open page count as visiting (which moves
+// their safeUntil), and if that happened or any tile crossed into dormancy
+// since the last look, every open page hears about it.
 // Only the sweep logs a tile going dormant: a claim or a wake changes the key
 // too, and those log themselves.
 let lastDormant = "";
@@ -95,16 +106,24 @@ const dormantKey = (now: Date): string =>
     .join(",");
 setInterval(() => {
   const now = new Date();
-  for (const pid of new Set([...streams].map((s) => s.pid))) store.touch(pid, now);
+  const tiles = store.tiles();
+  let moved = false; // some open page's holder had their safeUntil pushed on
+  for (const pid of new Set([...streams].map((s) => s.pid))) {
+    if (tiles.some((t) => t.claimerId === pid)) moved = true;
+    store.touch(pid, now);
+  }
   const key = dormantKey(now);
-  if (key !== lastDormant) {
+  const crossed = key !== lastDormant;
+  if (crossed) {
     const was = new Set(lastDormant.split(","));
     for (const t of store.tiles()) {
-      if (isDormant(t, now) && !was.has(String(t.id))) log("dormant", { at: at(t.id), holder: holder(t) });
+      if (isDormant(t, now) && !was.has(String(t.id))) {
+        log("dormant", { at: at(t.id), holder: holder(t), dropped: people(dormancyDrops(tiles, t.id)) });
+      }
     }
     lastDormant = key;
-    broadcast(now);
   }
+  if (crossed || moved) broadcast(now);
 }, SWEEP_MS).unref();
 lastDormant = dormantKey(new Date());
 
@@ -263,7 +282,7 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
     return fail(409, "taken");
   }
   const after = store.tiles();
-  const did = claimEffects(before, after, pid, cellId);
+  const did = claimEffects(before, after, pid, cellId, now);
   log("claim", {
     who: who(pid),
     label,
@@ -320,10 +339,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     // Loading the page is a visit: it keeps your tile from going dormant, or
     // wakes it if it already had.
     log("page", { who: who(pid), new: res.hasHeader("Set-Cookie") || undefined });
-    if (store.touch(pid, now)) {
-      logWake(pid);
-      broadcast(now);
-    }
+    if (visit(pid, now)) broadcast(now);
     const notice = url.searchParams.get("notice");
     const displaced = store.takeDisplacement(pid) !== null;
     if (displaced) log("displaced.seen", { who: who(pid) });
@@ -377,6 +393,11 @@ function shutdown(signal: string): void {
     store.close();
     process.exit(0);
   });
+  // close() waits for every socket to go quiet, and a stream the browser
+  // dropped can hold its socket for seconds, close to Fly's kill timeout, so
+  // the database would never be closed. Every write is synchronous and
+  // already committed, so nothing is cut short by closing them now.
+  server.closeAllConnections();
   setTimeout(() => process.exit(0), 5000).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));

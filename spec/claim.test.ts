@@ -180,7 +180,7 @@ describe("input", () => {
 });
 
 describe("heights", () => {
-  it("raises each claimed tile by its claimed neighbours, and leaves free ones flat", async () => {
+  it("raises each claimed tile by its active neighbours, and leaves free ones flat", async () => {
     // Put two personas side by side so at least one height is non-zero.
     const free = new Set(await freeTiles());
     const pair = [...free].find((id) => id % N < N - 1 && free.has(id + 1));
@@ -190,6 +190,8 @@ describe("heights", () => {
 
     const tiles = await board();
     const claimed = (id: number): boolean => tiles[id].state !== "free";
+    // A faded neighbour still stands but lifts nobody (ADR 3).
+    const active = (id: number): boolean => tiles[id].state === "held" || tiles[id].state === "mine";
     for (const tile of tiles) {
       const row = Math.floor(tile.id / N);
       const col = tile.id % N;
@@ -199,7 +201,7 @@ describe("heights", () => {
           for (let dc = -1; dc <= 1; dc++) {
             const r = row + dr;
             const c = col + dc;
-            if ((dr || dc) && r >= 0 && r < N && c >= 0 && c < N && claimed(r * N + c)) expected++;
+            if ((dr || dc) && r >= 0 && r < N && c >= 0 && c < N && active(r * N + c)) expected++;
           }
         }
       }

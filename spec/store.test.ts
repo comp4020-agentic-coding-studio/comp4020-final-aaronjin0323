@@ -109,13 +109,38 @@ describe("dormancy", () => {
     expect(boardView(s.tiles(), ALICE, now).tiles[5].state).toBe("mine");
   });
 
-  it("still counts dormant tiles toward their neighbours' height", () => {
+  it("stops counting a dormant tile toward its neighbours' height, and counts it again once it wakes", () => {
     const s = memory();
     s.claim(5, ALICE, "Alice", T0);
     s.claim(6, BOB, "Bob", later(25 * HOUR));
     const view = boardView(s.tiles(), BOB, later(25 * HOUR));
     expect(view.tiles[5].state).toBe("dormant");
-    expect(view.tiles[6].height).toBe(1);
+    expect(view.tiles[6].height).toBe(0);
+    expect(view.tiles[5].height).toBe(1); // a dormant tile still stands, lifted by Bob
+    s.touch(ALICE, later(26 * HOUR));
+    expect(boardView(s.tiles(), BOB, later(26 * HOUR)).tiles[6].height).toBe(1);
+  });
+
+  it("lowers the neighbours of a tile that expired while the server was off, on the first read", () => {
+    // A database file left alone for a day: nothing ran in between, so only
+    // the read-time rule can see the change.
+    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
+    const path = join(dir, "app.db");
+    try {
+      const before = openStore(path);
+      before.claim(5, ALICE, "Alice", T0);
+      before.claim(6, BOB, "Bob", later(20 * HOUR));
+      expect(boardView(before.tiles(), "x", later(20 * HOUR)).tiles[6].height).toBe(1);
+      before.close();
+
+      const after = openStore(path);
+      opened.push(after);
+      const view = boardView(after.tiles(), "x", later(25 * HOUR));
+      expect(view.tiles[5].state).toBe("dormant");
+      expect(view.tiles[6]).toMatchObject({ state: "held", height: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

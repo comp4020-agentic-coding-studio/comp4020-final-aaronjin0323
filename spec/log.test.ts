@@ -155,10 +155,10 @@ describe("what a claim did", () => {
       store.touch(KAI, later); // Kai is still around; Mia has gone dormant
       const before = store.tiles();
       expect(store.claim(0, "ivy-pid", "Ivy", later)).toBe("claimed");
-      const did = claimEffects(before, store.tiles(), "ivy-pid", 0);
+      const did = claimEffects(before, store.tiles(), "ivy-pid", 0, later);
       expect(did.tookFrom && holder(did.tookFrom)).toEqual({ raw: `${tag(MIA)}:"Mia"` });
-      // Kai's neighbour changed hands, so his height didn't change: no lift
-      expect(people(did.lifted)).toBeUndefined();
+      // a dormant tile lifts nobody, so Ivy settling there lifts Kai
+      expect(people(did.lifted)).toEqual({ raw: `${tag(KAI)}:"Kai"` });
       expect(did.from).toBeNull();
     } finally {
       store.close();
