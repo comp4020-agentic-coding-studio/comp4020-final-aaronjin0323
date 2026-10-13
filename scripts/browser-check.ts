@@ -197,6 +197,22 @@ async function hitTesting(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
+// The whole page as the emulated device sees it. Playwright's fullPage
+// renders as a mouse device while it captures: on a phone, (hover: none) and
+// (pointer: coarse) stop matching and the shot shows the desktop styles.
+// Making the viewport as tall as the page keeps the device intact. The two
+// frames matter: a capture straight after the resize can catch it half
+// drawn, with the top of the page tiled down the shot.
+async function wholePage(page: Page, path: string): Promise<void> {
+  const screen = page.viewportSize();
+  if (!screen) throw new Error("wholePage needs a fixed viewport");
+  const height = await page.evaluate(() => document.documentElement.scrollHeight);
+  await page.setViewportSize({ width: screen.width, height });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await page.screenshot({ path });
+  await page.setViewportSize(screen);
+}
+
 async function viewports(browser: Browser): Promise<void> {
   console.log("\n— both viewports —");
   for (const [name, width, height, mobile] of [
@@ -204,9 +220,22 @@ async function viewports(browser: Browser): Promise<void> {
     ["phone", 390, 844, true],
   ] as const) {
     const page = await fresh(browser, { viewport: { width, height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 2 });
+    await page.evaluate(() => document.fonts.ready);
     const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
     check(scrollWidth === width, `${name}: no sideways scroll`, `${scrollWidth}px`);
-    await page.screenshot({ path: `.shots/${name}.png`, fullPage: true });
+    // The page notes every flip of the touch query while the shot is taken:
+    // a flip means the phone shot shows the styles for a mouse.
+    await page.evaluate(() => {
+      const query = matchMedia("(hover: none) and (pointer: coarse)");
+      const seen = [query.matches];
+      query.addEventListener("change", (e) => seen.push(e.matches));
+      Object.assign(window, { touchSeen: seen });
+    });
+    await wholePage(page, `.shots/${name}.png`);
+    if (mobile) {
+      const seen = await page.evaluate(() => (window as unknown as { touchSeen: boolean[] }).touchSeen);
+      check(seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
+    }
     await page.context().close();
   }
 }
