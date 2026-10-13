@@ -37,6 +37,27 @@ const fresh = async (browser: Browser, opts: Parameters<Browser["newContext"]>[0
 const freeTile = (page: Page): Promise<string> =>
   page.locator('button.tile[data-state="free"]').nth(5).getAttribute("value").then((v) => v ?? "");
 
+// Whether a click at the tile's centre lands on the tile. In 3D a taller
+// block in front can cover a shorter one behind it.
+const reachable = (page: Page, cell: string | number): Promise<boolean> =>
+  page.evaluate((c) => {
+    const el = document.querySelector(`button.tile[value="${c}"]`)!;
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return hit === el || el.contains(hit);
+  }, String(cell));
+
+// Turn the camera until the tile is uncovered, the way a player would, then
+// click it. Fails the check rather than clicking through with force.
+async function clickTile(page: Page, cell: string | number): Promise<void> {
+  for (let turns = 0; !(await reachable(page, cell)); turns++) {
+    if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
+    await page.click("text=Turn left");
+    await page.waitForTimeout(350);
+  }
+  await page.click(`button.tile[value="${cell}"]`);
+}
+
 async function realtime(browser: Browser): Promise<void> {
   console.log("\n— real-time: two people, two browsers —");
   const a = await fresh(browser);
@@ -46,6 +67,10 @@ async function realtime(browser: Browser): Promise<void> {
   const url = a.url();
 
   await a.fill("#label", "Ana");
+  while (!(await reachable(a, cell))) {
+    await a.click("text=Turn left");
+    await a.waitForTimeout(350);
+  }
   const started = Date.now();
   await a.click(`button.tile[value="${cell}"]`);
   await b.waitForSelector(`button.tile[value="${cell}"][data-state="held"]`, { timeout: 3000 }).catch(() => null);
@@ -60,7 +85,7 @@ async function realtime(browser: Browser): Promise<void> {
 
   // A refused claim says so in place.
   await b.fill("#label", "Ben");
-  await b.click(`button.tile[value="${cell}"]`);
+  await clickTile(b, cell);
   const notice = await b.waitForSelector('[data-notice="taken"]', { timeout: 3000 }).catch(() => null);
   check(notice !== null, "B's claim on A's tile is refused with a notice");
 
@@ -90,23 +115,13 @@ async function dormant(browser: Browser): Promise<void> {
   const height = Number(await dormantTile.getAttribute("data-height"));
   await page.locator('[data-stage]').screenshot({ path: ".shots/dormant.png" });
 
-  // In 3D a taller tile in front can hide a shorter one behind it; turning
-  // the camera is how a player reaches it. Turn until this tile is the
-  // topmost thing under its own centre, then click it like a player would.
-  const reachable = (): Promise<boolean> =>
-    page.evaluate((c) => {
-      const el = document.querySelector(`button.tile[value="${c}"]`)!;
-      const r = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-      return hit === el || el.contains(hit);
-    }, cell);
   let turns = 0;
-  while (!(await reachable()) && turns < 8) {
+  while (!(await reachable(page, cell)) && turns < 8) {
     await page.click("text=Turn left");
     await page.waitForTimeout(350);
     turns++;
   }
-  check(await reachable(), "turning the camera brings a hidden tile into reach", `${turns} turn(s)`);
+  check(await reachable(page, cell), "turning the camera brings a hidden tile into reach", `${turns} turn(s)`);
 
   const watcher = await fresh(browser);
   await page.fill("#label", "Settler");
@@ -154,10 +169,30 @@ async function noScript(browser: Browser): Promise<void> {
   const page = await fresh(browser, { javaScriptEnabled: false });
   const cell = await freeTile(page);
   await page.fill("#label", "NoJS");
-  await page.click(`button.tile[value="${cell}"]`);
+  await clickTile(page, cell);
   await page.waitForURL(/notice=claimed/, { timeout: 3000 }).catch(() => null);
   check(/notice=claimed/.test(page.url()), "a plain form post claims and reloads");
   check((await page.getAttribute(`button.tile[value="${cell}"]`, "data-state")) === "mine", "the reloaded board shows it");
+  await page.context().close();
+}
+
+async function hitTesting(browser: Browser): Promise<void> {
+  console.log("\n— every free tile takes its own click —");
+  const page = await fresh(browser);
+  const lost = await page.evaluate(() => {
+    const out: string[] = [];
+    for (const el of document.querySelectorAll<HTMLButtonElement>("button.tile")) {
+      if (el.dataset.state !== "free") continue;
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      const tile = hit?.closest("button.tile");
+      // Covered by a taller block is a 3D fact a player turns the camera for;
+      // lost to anything else is a bug.
+      if (tile !== el && !(tile && tile.getAttribute("data-state") !== "free")) out.push(el.value);
+    }
+    return out;
+  });
+  check(lost.length === 0, "no free tile loses its click to the board", lost.length ? `lost: ${lost.join(", ")}` : "");
   await page.context().close();
 }
 
@@ -186,6 +221,8 @@ async function phone(browser: Browser): Promise<void> {
   check(await page.locator(".confirm").isVisible(), "it shows the confirm bar");
   const label = (await page.textContent(".confirm-claim")) ?? "";
   check(/^Claim row \d+, column \d+$/.test(label), "the bar names the tile", label);
+  const title = (await page.textContent(".confirm-text")) ?? "";
+  check(/^(No neighbours yet|Would lift \d+ neighbours?)\.$/.test(title), "and says whom it would lift", title);
   const box = await page.locator(".confirm-claim").boundingBox();
   check((box?.height ?? 0) >= 44, "its button is a comfortable tap", `${Math.round(box?.height ?? 0)}px tall`);
   await page.screenshot({ path: ".shots/phone-confirm.png" });
@@ -193,6 +230,17 @@ async function phone(browser: Browser): Promise<void> {
   await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
   check((await tile.getAttribute("data-state")) === "mine", "confirming claims it");
   check(!(await page.locator(".confirm").isVisible()), "and the bar goes away");
+
+  // Tapping someone else's tile says whose it is: on a phone there's no hover.
+  const held = page.locator('button.tile[data-state="held"]').first();
+  if ((await held.count()) > 0) {
+    const name = (await held.getAttribute("title")) ?? "";
+    await held.tap();
+    const text = (await page.textContent(".confirm-text")) ?? "";
+    check(text.startsWith(`${name} holds row`), "tapping a held tile names its holder", text);
+    check(!(await page.locator(".confirm-claim").isVisible()), "and offers no claim button");
+    await page.locator(".confirm-cancel").tap();
+  }
 
   // Cancel leaves everything as it was.
   const other = await freeTile(page);
@@ -203,7 +251,83 @@ async function phone(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
-const SECTIONS = { realtime, dormant, keyboard, noScript, phone, viewports };
+// Finds a free tile with free neighbours all round, so a scene can be built
+// on any board without bumping into what earlier runs left behind.
+async function openPatch(page: Page): Promise<number> {
+  const states = await page.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
+  for (let r = 1; r < 11; r++) {
+    for (let c = 1; c < 10; c++) {
+      const ids = [-1, 0, 1].flatMap((dr) => [-1, 0, 1, 2].map((dc) => (r + dr) * 12 + c + dc));
+      if (ids.every((id) => states[id] === "free")) return r * 12 + c;
+    }
+  }
+  throw new Error("no open 3x4 patch on the board; reseed it");
+}
+
+async function claimAs(page: Page, name: string, cell: number): Promise<void> {
+  await page.fill("#label", name);
+  await clickTile(page, cell);
+  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 });
+}
+
+async function effects(browser: Browser): Promise<void> {
+  console.log("\n— your choice, shown —");
+  const mia = await fresh(browser);
+  const kai = await fresh(browser);
+  const me = await fresh(browser);
+  await me.waitForTimeout(400);
+  const centre = await openPatch(me);
+  const [left, right] = [centre - 1, centre + 1];
+
+  await claimAs(mia, "Mia", left);
+  await claimAs(kai, "Kai", right);
+  await me.waitForTimeout(300);
+
+  // Watch Mia's page for a +1 appearing on Mia's own tile.
+  const miaFloat = mia.waitForSelector(`button.tile[value="${left}"] .rise[data-delta="up"]`, { timeout: 3000 }).catch(() => null);
+  await claimAs(me, "Me", centre);
+
+  const myNotice = (await me.textContent('[data-notice="claimed"]')) ?? "";
+  check(/You lifted (Mia and Kai|Kai and Mia)\./.test(myNotice), "my claim says who I lifted", myNotice);
+  check((await miaFloat) !== null, "Mia sees +1 float off her tile");
+  await mia.waitForSelector('[data-notice="arrived"]', { timeout: 3000 }).catch(() => null);
+  const miaNotice = (await mia.textContent('[data-notice="arrived"]').catch(() => null)) ?? "";
+  check(/^Me settled beside you\. You're up to height \d\.$/.test(miaNotice), "Mia is told who settled beside her", miaNotice);
+  check((await me.locator('[data-notice]').count()) === 1, "I get one message, not one per channel");
+  // Freeze the badge mid-flight so the screenshot shows what a player sees.
+  await mia.addStyleTag({ content: ".rise { animation-play-state: paused !important; animation-delay: -0.25s !important; }" });
+  const badge = mia.locator(`button.tile[value="${left}"]`);
+  await badge.evaluate((el) => {
+    const r = document.createElement("span");
+    r.className = "rise";
+    r.dataset.delta = "up";
+    r.textContent = "+1";
+    el.append(r);
+  });
+  await mia.locator("[data-stage]").screenshot({ path: ".shots/effects-mia.png" });
+
+  // I move far away: Mia and Kai drop, and both are told.
+  const miaDrop = mia.waitForSelector(`button.tile[value="${left}"] .rise[data-delta="down"]`, { timeout: 3000 }).catch(() => null);
+  // Far away and with no claimed neighbours, so the move lifts nobody.
+  const states = await me.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
+  const lonely = (id: number): boolean =>
+    states[id] === "free" &&
+    [-13, -12, -11, -1, 1, 11, 12, 13].every((d) => id + d < 0 || id + d > 143 || states[id + d] === "free");
+  const far = [...Array(144).keys()].filter((id) => Math.abs((id % 12) - (centre % 12)) > 2 || Math.abs(Math.floor(id / 12) - Math.floor(centre / 12)) > 2).find(lonely);
+  if (far === undefined) throw new Error("no lonely free tile left; reseed the board");
+  await clickTile(me, far);
+  await me.waitForSelector(`button.tile[value="${far}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
+  const moved = (await me.textContent('[data-notice="claimed"]')) ?? "";
+  check(/dropped a floor when you left\./.test(moved), "my move names who dropped", moved);
+  check((await miaDrop) !== null, "Mia sees −1 float off her tile");
+  await mia.waitForSelector('[data-notice="left"]', { timeout: 3000 }).catch(() => null);
+  const left2 = (await mia.textContent('[data-notice="left"]').catch(() => null)) ?? "";
+  check(/^Me moved away from beside you\./.test(left2), "Mia is told I moved away", left2);
+
+  for (const p of [mia, kai, me]) await p.context().close();
+}
+
+const SECTIONS = { realtime, dormant, keyboard, noScript, effects, phone, hitTesting, viewports };
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {

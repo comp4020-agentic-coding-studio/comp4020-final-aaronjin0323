@@ -155,6 +155,11 @@ body.is-offline .meta::after {
   background: var(--board-edge);
   border-radius: 6px;
   transform-style: preserve-3d;
+  /* A free tile lies in the board's own plane, and in 3D the browser can't
+     reliably tell which of two coplanar elements was clicked: at the default
+     angle about a third of free tiles lost the click to the board. The board
+     never needs a click, so it takes none; tiles opt back in. */
+  pointer-events: none;
   /* the camera: app.js turns these, the defaults are the no-JS view */
   --tilt: 52deg;
   --spin: 35deg;
@@ -181,6 +186,7 @@ body.is-offline .meta::after {
   background: var(--free-top);
   color: #1b1b1b;
   cursor: pointer;
+  pointer-events: auto;
   -webkit-tap-highlight-color: transparent; /* the selection outline says it */
   transform-style: preserve-3d;
   transform: translateZ(calc(var(--h) * var(--unit)));

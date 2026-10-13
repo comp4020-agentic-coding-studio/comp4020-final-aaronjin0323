@@ -384,6 +384,13 @@ these tools, not tied to any one prototype's content.
   `.confirm { display: flex }` keeps a "hidden" bar on screen. Keep a global
   `[hidden] { display: none !important }`, and check visibility in the
   browser, not by reading `el.hidden`.
+- **Two elements in the same 3D plane fight over clicks, and the browser
+  can pick either.** A flat tile (`translateZ(0)`) lies exactly in its
+  board's plane, so about a third of free tiles lost the click to the board
+  behind them, and this had been live since crit 8 unnoticed: clicking a
+  tile in a screenshot-driven check found it. Give the container
+  `pointer-events: none` and the interactive children `pointer-events: auto`,
+  and measure with `elementFromPoint` over every target, not one.
 - **In 3D a tall block can hide a shorter one behind it from the click.**
   A browser test that clicks a tile has to check what `elementFromPoint` hits
   at the tile's centre, and turn the camera when it's covered, the way a
