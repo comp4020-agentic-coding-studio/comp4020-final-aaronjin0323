@@ -13,7 +13,7 @@ if (board && stage) {
   const TILT_MIN = 10;
   const TILT_MAX = 75;
   const phone = matchMedia("(max-width: 40rem)");
-  const defaults = () => (phone.matches ? { tilt: 28, spin: 0 } : { tilt: 52, spin: 35 });
+  const defaults = () => (phone.matches ? { tilt: 36, spin: 20 } : { tilt: 52, spin: 35 });
   const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
   let view = defaults();

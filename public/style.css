@@ -311,11 +311,14 @@ body.is-offline .meta::after {
   white-space: nowrap;
 }
 
-/* Phones: a gentler tilt with no twist, so the board fills the width and
-   each tile stays as big a target as the screen allows. */
+/* Phones: a gentler tilt than desktop, with enough twist that blocks show a
+   side face and heights read as a skyline. At no twist they face away and the
+   board looks flat. The twist swings the corners outwards, so the board is
+   narrower than the screen: 80% keeps them in at 360px, with tiles the same
+   size as the untwisted full width. */
 @media (max-width: 40rem) {
   :root {
-    --board: 100%;
+    --board: 80%;
     --unit: 4px;
   }
 
@@ -324,8 +327,8 @@ body.is-offline .meta::after {
   }
 
   .board {
-    --tilt: 28deg;
-    --spin: 0deg;
+    --tilt: 36deg;
+    --spin: 20deg;
     gap: 2px;
     padding: 4px;
   }

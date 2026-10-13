@@ -60,7 +60,10 @@ Settled; change them here first, then in the code.
   and `--spin` on `.board`: a drag turns it (touch only turns, so vertical
   swipes still scroll), and Turn/Tilt/Reset buttons do the same from the
   keyboard. A drag that moved never claims a tile. The view is remembered in
-  `localStorage`. Without JS the board stays at the default angle and every
+  `localStorage`. Phones start at 36° tilt and 20° spin on an 80%-wide board:
+  with no spin the blocks face away and the board reads flat, and the spin
+  swings the corners out, so the board narrows to keep them on a 360px screen
+  with tiles no smaller than before. Without JS the board stays at the default angle and every
   claim still works. Because the camera can face any side, every tile draws
   all four side faces (`::before`/`::after` on the button, plus `.sides`).
 - **WASD and arrows work anywhere on the page.** Nobody should need to
