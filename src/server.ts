@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
 import { isDormant, openStore, TILES } from "./db.ts";
+import { at, claimEffects, holder, log, people, raw, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -12,7 +13,8 @@ const MAX_BODY = 4096;
 const ONE_YEAR = 60 * 60 * 24 * 365;
 const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-const store = openStore(process.env.DB_PATH ?? "./.data/app.db");
+const DB_PATH = process.env.DB_PATH ?? "./.data/app.db";
+const store = openStore(DB_PATH);
 
 // --- live updates (SSE) ---
 // Every open page holds a stream. After any change each one is sent the
@@ -55,11 +57,23 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
   const stream = { pid, res };
   streams.add(stream);
   const now = new Date();
+  log("stream.open", { who: who(pid), open: streams.size });
   // An open page is a visit. If it woke a dormant tile, everyone else's view
   // of that tile just changed too.
-  if (store.touch(pid, now)) broadcast(now);
-  else sendBoard(stream, now);
-  req.on("close", () => streams.delete(stream));
+  if (store.touch(pid, now)) {
+    logWake(pid);
+    broadcast(now);
+  } else sendBoard(stream, now);
+  req.on("close", () => {
+    // A shutdown already cleared the set; don't log every stream twice.
+    if (!streams.delete(stream)) return;
+    log("stream.close", { who: who(pid), open: streams.size, secs: Math.round((Date.now() - now.getTime()) / 1000) });
+  });
+}
+
+function logWake(pid: string): void {
+  const tile = store.tiles().find((t) => t.claimerId === pid);
+  log("wake", { who: who(pid), at: tile ? at(tile.id) : undefined, label: tile?.label });
 }
 
 // Comments keep idle streams under the proxy's timeout; the browser ignores
@@ -70,6 +84,8 @@ setInterval(() => {
 
 // Once a minute: holders with an open page count as visiting, and if any tile
 // crossed into dormancy since the last look, every open page hears about it.
+// Only the sweep logs a tile going dormant: a claim or a wake changes the key
+// too, and those log themselves.
 let lastDormant = "";
 const dormantKey = (now: Date): string =>
   store
@@ -82,6 +98,10 @@ setInterval(() => {
   for (const pid of new Set([...streams].map((s) => s.pid))) store.touch(pid, now);
   const key = dormantKey(now);
   if (key !== lastDormant) {
+    const was = new Set(lastDormant.split(","));
+    for (const t of store.tiles()) {
+      if (isDormant(t, now) && !was.has(String(t.id))) log("dormant", { at: at(t.id), holder: holder(t) });
+    }
     lastDormant = key;
     broadcast(now);
   }
@@ -196,20 +216,64 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
   const wantsJson = (req.headers.accept ?? "").includes("application/json");
   const fail = (status: number, notice: string): void =>
     wantsJson ? sendJson(res, status, { error: notice }) : redirect(res, `/?notice=${notice}`);
+  // A refusal names who tried, what, and why; any typed text is cut short.
+  const cut = (v: unknown): string | undefined =>
+    v === undefined ? undefined : Array.from(typeof v === "string" ? v : JSON.stringify(v)).slice(0, 40).join("");
+  const refused = (pid: string | null, status: number, reason: string, fields: Record<string, unknown> = {}): void => {
+    const tile = validCell(fields.cellId);
+    log("claim.refused", {
+      who: pid ? who(pid) : raw("-"),
+      status,
+      reason: raw(reason),
+      at: tile === null ? undefined : at(tile),
+      cell: tile === null ? cut(fields.cellId) : undefined,
+      label: cut(fields.label),
+      held: reason === "taken" && tile !== null ? holder(store.tiles()[tile]) : undefined,
+    });
+  };
 
-  if (!sameOrigin(req)) return send(res, 403, "text/plain; charset=utf-8", "Cross-site claim refused");
+  if (!sameOrigin(req)) {
+    const cookie = cookies(req).pid;
+    refused(cookie && PID.test(cookie) ? cookie : null, 403, "cross-site");
+    return send(res, 403, "text/plain; charset=utf-8", "Cross-site claim refused");
+  }
   const pid = identify(req, res);
   const body = await readBody(req);
-  if (body === null) return send(res, 413, "text/plain; charset=utf-8", "Too large");
+  if (body === null) {
+    refused(pid, 413, "too-large");
+    return send(res, 413, "text/plain; charset=utf-8", "Too large");
+  }
 
   const fields = parseFields(req, body);
   const cellId = validCell(fields.cellId);
-  if (cellId === null) return fail(400, "cell");
+  if (cellId === null) {
+    refused(pid, 400, "cell", fields);
+    return fail(400, "cell");
+  }
   const label = validLabel(fields.label);
-  if (label === null) return fail(400, "label");
+  if (label === null) {
+    refused(pid, 400, "label", fields);
+    return fail(400, "label");
+  }
 
   const now = new Date();
-  if (store.claim(cellId, pid, label, now) === "taken") return fail(409, "taken");
+  const before = store.tiles();
+  if (store.claim(cellId, pid, label, now) === "taken") {
+    refused(pid, 409, "taken", fields);
+    return fail(409, "taken");
+  }
+  const after = store.tiles();
+  const did = claimEffects(before, after, pid, cellId);
+  log("claim", {
+    who: who(pid),
+    label,
+    at: at(cellId),
+    from: did.from === null ? undefined : at(did.from),
+    renamed: did.renamedFrom ?? undefined,
+    took: did.tookFrom ? holder(did.tookFrom) : undefined,
+    lifted: people(did.lifted),
+    dropped: people(did.dropped),
+  });
   broadcast(now);
   lastDormant = dormantKey(now);
   // A script client gets the board as the claimer now sees it, so the page
@@ -255,9 +319,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const now = new Date();
     // Loading the page is a visit: it keeps your tile from going dormant, or
     // wakes it if it already had.
-    if (store.touch(pid, now)) broadcast(now);
+    log("page", { who: who(pid), new: res.hasHeader("Set-Cookie") || undefined });
+    if (store.touch(pid, now)) {
+      logWake(pid);
+      broadcast(now);
+    }
     const notice = url.searchParams.get("notice");
     const displaced = store.takeDisplacement(pid) !== null;
+    if (displaced) log("displaced.seen", { who: who(pid) });
     const tiles = store.tiles();
     const myLabel = tiles.find((t) => t.claimerId === pid)?.label ?? "";
     const html = renderBoard(boardView(tiles, pid, now), myLabel, {
@@ -285,19 +354,23 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
 const server = createServer((req, res) => {
   handle(req, res).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    log("error", { method: req.method ?? "", path: (req.url ?? "").split("?")[0], message });
     console.error(err);
     if (!res.headersSent) send(res, 500, "text/plain; charset=utf-8", "Something went wrong");
     else res.end();
   });
 }).listen(PORT, "0.0.0.0", () => {
-  console.log(`listening on http://0.0.0.0:${PORT}`);
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : PORT;
+  log("start", { port, db: DB_PATH, dormant: lastDormant ? lastDormant.split(",").length : 0 });
 });
 
 // Fly sends SIGTERM before stopping the machine (a redeploy, or no traffic).
 // Ending the streams first makes every page reconnect at once instead of
 // hanging on a dead connection; closing the database flushes its WAL.
 function shutdown(signal: string): void {
-  console.log(`${signal}: closing ${streams.size} stream(s)`);
+  log("shutdown", { signal: raw(signal), open: streams.size });
   for (const { res } of streams) res.end();
   streams.clear();
   server.close(() => {
