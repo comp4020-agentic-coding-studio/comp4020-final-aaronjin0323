@@ -8,7 +8,19 @@ const ESCAPES: Record<string, string> = {
 
 export const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (ch) => ESCAPES[ch]);
 
-export function page({ title, body, script }: { title: string; body: string; script?: string }): string {
+// `head` is extra markup for <head>, such as a <noscript> style for things
+// only the script can bring to life.
+export function page({
+  title,
+  body,
+  script,
+  head = "",
+}: {
+  title: string;
+  body: string;
+  script?: string;
+  head?: string;
+}): string {
   return `<!doctype html>
 <html lang="en-AU">
   <head>
@@ -16,7 +28,7 @@ export function page({ title, body, script }: { title: string; body: string; scr
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/style.css">
-    ${script ? `<script type="module" src="${script}"></script>` : ""}
+    ${script ? `<script type="module" src="${script}"></script>` : ""}${head}
   </head>
   <body>${body}
   </body>

@@ -129,8 +129,24 @@ function tileButton(t: TileView): string {
   const style = t.hue === null ? `--h:${t.height}` : `--h:${t.height};--hue:${t.hue}`;
   const title = t.label === null ? "" : ` title="${escapeHtml(t.label)}"`;
   const safe = t.safeUntil === null ? "" : ` data-safe-until="${t.safeUntil}"`;
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${safe} style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span></button>`;
+  // .beacon is the marker that floats over the roof: the player's pin on
+  // your own tile, the ghost height of a tile you're about to claim, the +1
+  // over a neighbour you'd lift. Which one shows is all in the stylesheet.
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${safe} style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span></button>`;
 }
+
+// The map key: one sample roof per tile state, so the rules on the tiles can
+// be read off the page before anyone plays.
+const LEGEND: [TileState, string][] = [
+  ["free", "Free"],
+  ["held", "Taken"],
+  ["mine", "Yours"],
+  ["dormant", "Faded: open to claim"],
+];
+
+// Only the script can make the connection line true, so without it the
+// line isn't shown at all rather than saying "Connecting…" for ever.
+const NO_SCRIPT = `<noscript><style>.conn { display: none !important; }</style></noscript>`;
 
 export function renderBoard(
   view: BoardView,
@@ -149,11 +165,12 @@ export function renderBoard(
   return page({
     title: "Skyline",
     script: "/app.js",
+    head: NO_SCRIPT,
     body: `
     <header class="top">
       <h1>Skyline</h1>
       <p class="lede">Hold one tile. It rises a floor for every neighbour, and you lift theirs too. Stay away a day and it fades, open to someone new.</p>
-      <p class="meta"><span data-claimed>${view.claimed}</span> of ${view.tiles.length} tiles claimed · <a href="/readme/">About</a></p>
+      <p class="meta"><a href="/readme/">About</a></p>
     </header>
     <main>
       <form class="claim" method="post" action="/claim">
@@ -164,11 +181,25 @@ export function renderBoard(
           <p class="status" id="status">${escapeHtml(view.status)}</p>
           <div class="notices" data-notices>${notices}</div>
         </div>
-        <div class="stage" data-stage>
-          <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status" data-version="${version}">
-        ${view.tiles.map(tileButton).join("\n        ")}
+        <ul class="legend" aria-label="Map key">
+          ${LEGEND.map(([state, text]) => `<li><span class="swatch" data-swatch="${state}" aria-hidden="true"></span>${text}</li>`).join("\n          ")}
+        </ul>
+        <section class="play" aria-label="The board">
+          <div class="hud">
+            <p class="count"><span data-claimed>${view.claimed}</span> of ${view.tiles.length} tiles claimed</p>
+            <p class="conn" data-conn="connecting">Connecting…</p>
           </div>
-        </div>
+          <div class="stage" data-stage>
+            <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status" data-version="${version}">
+          ${view.tiles.map(tileButton).join("\n          ")}
+            </div>
+          </div>
+        </section>
+        <aside class="inspect" id="inspect" data-inspect hidden aria-label="Tile details">
+          <h2 data-inspect-title></h2>
+          <dl data-inspect-facts></dl>
+        </aside>
+        <div class="sr-only" aria-live="polite" data-announce></div>
       </form>
     </main>`,
   });

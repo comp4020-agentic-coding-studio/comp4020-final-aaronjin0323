@@ -41,9 +41,20 @@
   --road: #5a5472;
   --lot: #272137;
   --lot-hover: #40385a;
+  --lot-edge: rgb(255 255 255 / 0.08); /* the kerb round an empty lot */
+  /* the faded tile's roof: hatched, so it reads apart from a taken one in
+     greyscale too */
+  --hatch: repeating-linear-gradient(45deg, rgb(0 0 0 / 0.28) 0 2px, transparent 2px 6px);
+  --danger: #ff5a4f; /* the wasted red: a drop, a lost connection */
   --display: "Passion One", Impact, "Arial Black", sans-serif;
+  /* One type scale. Display type (Passion One) for labels, buttons and
+     mission text; the system face for anything read as a sentence. */
+  --fs-small: 0.875rem; /* hints, the key, supporting lines */
+  --fs-body: 1rem; /* status, inspector facts */
+  --fs-label: 1.1rem; /* uppercase display labels */
+  --fs-notice: 1.35rem; /* mission text */
   --city-h: 84px; /* the skyline along the foot of the header */
-  --unit: clamp(5px, 1.1vw, 9px); /* how far one neighbour raises a tile */
+  --unit: clamp(5px, 1.1vw, 10px); /* how far one neighbour raises a tile */
   --board: min(34rem, 62vw);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -73,8 +84,28 @@ a {
 
 .top,
 main {
-  max-width: 64rem;
+  max-width: 72rem;
   margin-inline: auto;
+}
+
+/* Every focusable thing shows where focus is, in the HUD's gold. Rules
+   below only adjust the offset or colour for their own backgrounds. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* For text that only a screen reader needs (the live announcer). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* --- the header: a framed sunset, like a panel of cover art --- */
@@ -156,21 +187,7 @@ main {
 
 .meta {
   margin: 0.25rem 0 0;
-  color: var(--muted);
-  font-size: 0.95rem;
-}
-
-/* The claimed count is the HUD's cash counter. Small outlined type takes a
-   thin outline and a hard shadow: a thick outline fills the digits' holes. */
-[data-claimed] {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.45em;
-  line-height: 1;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
+  font-size: var(--fs-small);
 }
 
 /* Wide screens: wordmark on the left, text beside it, and the wordmark
@@ -202,36 +219,78 @@ main {
   }
 }
 
+
+/* --- layout: name and key on the left, the board taking the rest --- */
+
+/* One column on narrow screens, in reading order: name, key, board, then
+   the tile inspector. From 64rem the board gets its own column and
+   everything else stacks beside it, so the board is the biggest thing on
+   the page and sits in its centre. Absolutely placed children (the
+   announcer, the phone's confirm bar) take no grid cell. */
+.claim {
+  display: grid;
+  gap: 0.75rem;
+  margin-block: 1rem 2rem;
+}
+
+@media (min-width: 64rem) {
+  .claim {
+    grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
+    grid-template-rows: auto auto auto 1fr;
+    column-gap: 1.25rem;
+    align-items: start;
+  }
+
+  .controls,
+  .legend,
+  .inspect {
+    grid-column: 1;
+  }
+
+  .play {
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+}
+
 /* --- controls: a HUD panel --- */
 
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-  margin-block: 1rem 0.75rem;
-  padding: 0.75rem 1rem;
+.controls,
+.inspect {
   background: var(--panel);
   border: 3px solid var(--line);
   border-radius: 0.6rem;
   box-shadow: 5px 5px 0 var(--line);
 }
 
-.controls label {
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+/* Display labels: uppercase Passion One, a thin outline and a hard shadow.
+   Regular weight, since Black's counters close up at this size. */
+.controls label,
+.inspect h2 {
   font-family: var(--display);
   font-weight: 400;
-  font-size: 1.3rem;
+  font-size: var(--fs-label);
   line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  color: var(--ink);
   -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
   text-shadow: 2px 2px 0 var(--line);
 }
 
 .controls input {
-  flex: 0 1 14rem;
+  flex: 1 1 10rem;
   min-width: 0;
+  min-height: 44px;
   font: inherit;
   font-weight: 600;
   padding: 0.4rem 0.6rem;
@@ -242,52 +301,223 @@ main {
   box-shadow: inset 0 2px 0 rgb(0 0 0 / 0.15);
 }
 
-.controls input:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .status,
 .notices {
   flex-basis: 100%;
   margin: 0;
 }
 
+.status {
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 1.4;
+}
+
 .notices:empty {
   display: none;
 }
 
+/* Notices are mission text: big, outlined, in the game's gold, with a gold
+   bar down the side so they read as a message even without the colour. */
 .notice {
   margin: 0;
-}
-
-/* The stream dropped and the browser is reconnecting; the board on screen
-   may be behind. Cleared by the next event. */
-body.is-offline .meta::after {
-  content: " · reconnecting…";
-  color: var(--accent);
-}
-
-.status {
-  color: var(--muted);
-}
-
-/* Notices are mission text: big, outlined, in the game's gold. */
-.notice {
+  padding-left: 0.6rem;
+  border-left: 4px solid var(--accent);
   font-family: var(--display);
   font-weight: 400;
-  font-size: 1.35rem;
+  font-size: var(--fs-notice);
   line-height: 1.15;
   letter-spacing: 0.01em;
   color: var(--accent);
   -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
   text-shadow: 2px 2px 0 var(--line);
+  animation: notice-in 240ms ease-out;
 }
 
 /* a visitor back after being displaced can arrive with a second notice */
 .notice + .notice {
   margin-top: 0.4rem;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    translate: 0 -0.3rem;
+  }
+}
+
+/* --- the map key --- */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0 0.25rem;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Each swatch is a roof seen from above, drawn the way the board draws
+   that state: so the key and the map can't drift apart in meaning. */
+.swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 2px;
+  background: var(--lot);
+  box-shadow: inset 0 0 0 1px var(--lot-edge);
+}
+
+.swatch[data-swatch="held"] {
+  background: hsl(200 78% 60%);
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+}
+
+.swatch[data-swatch="mine"] {
+  background: hsl(320 78% 62%);
+  box-shadow:
+    inset 0 0 0 2px var(--line),
+    inset 0 0 0 4px var(--accent),
+    0 0 6px 1px rgb(255 176 0 / 0.7);
+}
+
+.swatch[data-swatch="dormant"] {
+  background: var(--hatch), hsl(0 0% 46%);
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+}
+
+/* --- the board's HUD: claimed count and connection --- */
+
+.play {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding-inline: 0.25rem;
+}
+
+.hud p {
+  margin: 0;
+}
+
+.count {
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+/* The claimed count is the HUD's cash counter. Small outlined type takes a
+   thin outline and a hard shadow: a thick outline fills the digits' holes. */
+[data-claimed] {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--money);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+  margin-right: 0.15em;
+}
+
+/* Connection: understated, and told by the dot's shape as well as its
+   colour: a filled dot when live, a dashed ring while trying, a hollow
+   square when the line is down. */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.conn::before {
+  content: "";
+  box-sizing: border-box;
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px dashed var(--muted);
+  border-radius: 50%;
+}
+
+.conn[data-conn="live"]::before {
+  border: 0;
+  background: var(--money);
+  box-shadow: 0 0 6px var(--money);
+}
+
+.conn[data-conn="reconnecting"]::before {
+  border-color: var(--accent);
+  animation: spin 1.6s linear infinite;
+}
+
+.conn[data-conn="offline"]::before {
+  border: 2px solid var(--danger);
+  border-radius: 1px;
+  animation: none;
+}
+
+.conn[data-conn="offline"] {
+  color: var(--ink);
+}
+
+@keyframes spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+/* --- the tile inspector, filled by app.js --- */
+
+.inspect {
+  padding: 0.75rem 1rem;
+}
+
+.inspect h2 {
+  margin: 0 0 0.5rem;
+}
+
+/* Each fact is a small label over its value: the panel is narrow beside
+   the board, and a two-column list squeezed values into one word a line. */
+.inspect dl {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
+.inspect dt {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.inspect dt:not(:first-child) {
+  margin-top: 0.4rem;
+}
+
+.inspect dd {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 
 /* --- the 3D board: a city map at night --- */
@@ -298,8 +528,14 @@ body.is-offline .meta::after {
   display: grid;
   place-items: center;
   /* the tilt makes the board look shorter than the box it lays out in */
-  margin-block: -4rem -2rem;
+  margin-block: -3.5rem -2.5rem;
   background: radial-gradient(closest-side, rgb(214 64 160 / 0.22), transparent);
+  touch-action: pan-y; /* a sideways drag turns the board; vertical still scrolls */
+  cursor: grab;
+}
+
+.stage:active {
+  cursor: grabbing;
 }
 
 /* The board is the street grid: the gaps between tiles are the roads. */
@@ -330,8 +566,15 @@ body.is-offline .meta::after {
   transition: none;
 }
 
+/* A tile's whole look is a handful of custom properties: how high it
+   stands (--lift is an extra nudge for hover and selection), and its
+   roof's colour. The states below only change those, plus an outline or a
+   pattern, so every state still reads in greyscale: free is a flat dark
+   lot, taken is a lit tower, yours carries the gold ring and marker,
+   faded is hatched grey with its lights out. */
 .tile {
   --h: 0;
+  --lift: 0px;
   --hue: 30;
   --s: 60%; /* side faces */
   --top-s: 78%;
@@ -343,13 +586,18 @@ body.is-offline .meta::after {
   border: 0;
   border-radius: 2px;
   background: var(--lot);
+  box-shadow: inset 0 0 0 1px var(--lot-edge);
   color: #fff;
   cursor: pointer;
   pointer-events: auto;
   -webkit-tap-highlight-color: transparent; /* the selection outline says it */
   transform-style: preserve-3d;
-  transform: translateZ(calc(var(--h) * var(--unit)));
-  transition: transform 220ms ease-out, background-color 150ms;
+  transform: translateZ(calc(var(--h) * var(--unit) + var(--lift)));
+  /* a slight overshoot, so a block rising reads as rising */
+  transition:
+    transform 320ms cubic-bezier(0.3, 1.4, 0.6, 1),
+    background-color 150ms,
+    box-shadow 150ms;
 }
 
 /* Four side faces, each as tall as the tile is raised, so a flat tile has
@@ -448,18 +696,40 @@ body.is-offline .meta::after {
   transform: rotateY(-90deg);
 }
 
-.tile[data-state="free"]:hover {
-  background: var(--lot-hover);
+/* The walls grow with the block rather than snapping to the new height. */
+.tile::before,
+.sides::before {
+  transition: height 320ms cubic-bezier(0.3, 1.4, 0.6, 1);
 }
 
+.tile::after,
+.sides::after {
+  transition: width 320ms cubic-bezier(0.3, 1.4, 0.6, 1);
+}
+
+/* --- tile states --- */
+
+/* Free: a dark empty lot with a faint kerb, so the grid of open places
+   reads at a glance. Hover lifts it a touch and lights the kerb. */
+@media (hover: hover) {
+  .tile[data-state="free"]:hover {
+    --lift: 3px;
+    background: var(--lot-hover);
+    box-shadow: inset 0 0 0 2px var(--cream);
+  }
+}
+
+/* Held, yours, faded: a roof. A taller tower's roof is a little lighter,
+   as if nearer the light, which helps heights read from straight above. */
 .tile[data-state="held"],
 .tile[data-state="mine"],
 .tile[data-state="dormant"] {
-  background: hsl(var(--hue) var(--top-s) var(--top-l));
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.5);
+  background: hsl(var(--hue) var(--top-s) calc(var(--top-l) + var(--h) * 1.5%));
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.55);
 }
 
-/* Yours wears the player's marker: a gold ring on the roof, and a glow. */
+/* Yours wears the player's marker: a gold ring on the roof, a glow, and a
+   gold pointer hanging over it (the beacon, below). */
 .tile[data-state="mine"] {
   box-shadow:
     inset 0 0 0 2px var(--line),
@@ -467,12 +737,13 @@ body.is-offline .meta::after {
     0 0 14px 2px rgb(255 176 0 / 0.75);
 }
 
-/* Dormant: still standing (it keeps its height), but grey with its lights
-   out, and open to whoever settles there. */
+/* Faded: still standing, but grey and hatched with its lights out, and open
+   to whoever settles there. */
 .tile[data-state="dormant"] {
   --s: 6%;
-  --top-s: 8%;
-  --top-l: 46%;
+  --top-s: 6%;
+  --top-l: 44%;
+  background: var(--hatch), hsl(0 0% calc(var(--top-l) + var(--h) * 1.5%));
 }
 
 .tile[data-state="dormant"]::before,
@@ -483,24 +754,185 @@ body.is-offline .meta::after {
 }
 
 .tile[data-state="dormant"] .initials {
-  opacity: 0.6;
+  opacity: 0.7;
 }
 
-.tile[data-state="dormant"]:hover {
-  --top-l: 56%;
+@media (hover: hover) {
+  .tile[data-state="dormant"]:hover {
+    --top-l: 54%;
+    --lift: 3px;
+    box-shadow: inset 0 0 0 2px var(--cream);
+  }
 }
 
+/* Keyboard focus: the gold ring, standing off the roof. */
 .tile:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
   z-index: 1;
 }
 
+/* Selected (a phone's first tap): a double white ring and a small lift, so
+   it differs from focus (single gold) and from a preview ghost (dashed) by
+   shape, not only colour. */
+.tile.is-selected,
+.tile[data-selected] {
+  --lift: 4px;
+  outline: 5px double var(--cream);
+  outline-offset: 2px;
+  z-index: 1;
+}
+
+/* Pending: a claim on its way to the server. Diagonal stripes run across
+   the roof until the answer comes back; nothing waits on them. */
+.tile[data-pending],
+.tile[aria-busy="true"] {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(255 247 236 / 0.55) 0 4px,
+    transparent 4px 9px
+  );
+  background-size: 200% 200%;
+  animation: pending 700ms linear infinite;
+  cursor: progress;
+}
+
+@keyframes pending {
+  to {
+    background-position: 25.5px 0;
+  }
+}
+
+/* Someone else just claimed it: a white ring that spreads and fades. */
+.tile[data-fresh] {
+  animation: fresh 1.4s ease-out;
+}
+
+@keyframes fresh {
+  from {
+    outline: 3px solid var(--cream);
+    outline-offset: 0;
+  }
+  to {
+    outline: 3px solid transparent;
+    outline-offset: 10px;
+  }
+}
+
+/* --- the beacon: whatever floats over a roof --- */
+
+/* It sits flat on the roof by default and shows nothing. Each use moves it
+   with translateZ and gives it content; pointer-events stay off so it can
+   never take a click from the tile under it or the one behind. */
+.beacon {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  transform-style: preserve-3d;
+}
+
+/* Yours: a gold marker pointing down at your roof, turned to face the
+   camera like the +1 floats, bobbing gently. */
+.tile[data-state="mine"]:not([data-preview]) .beacon::after {
+  content: "";
+  width: 70%;
+  aspect-ratio: 1 / 0.8;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line));
+  translate: 0 0 calc(var(--unit) * 3 + 12px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt))) translateY(-50%);
+  animation: bob 2s ease-in-out infinite;
+}
+
+@keyframes bob {
+  50% {
+    translate: 0 0 calc(var(--unit) * 3 + 18px);
+  }
+}
+
+/* Preview: what claiming this tile would do. The target shows a dashed
+   ghost roof at the height it would stand, with that number on it; each
+   neighbour it would lift shows a green ghost a floor above its roof,
+   marked +1, and each it would drop a red one a floor below, marked −1.
+   --gz is how many floors above this tile's own roof the ghost floats. */
+.tile[data-preview] .beacon {
+  --gz: 0;
+  border: 2px dashed var(--cream);
+  border-radius: 2px;
+  background: rgb(255 247 236 / 0.16);
+  transform: translateZ(calc(var(--gz) * var(--unit) + 1px));
+  font-family: var(--display);
+  font-weight: 400;
+  line-height: 1;
+  color: var(--ink);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  font-size: clamp(0.75rem, 1.4vw, 1rem);
+}
+
+/* The target's number comes straight from data-preview-height: typed
+   attr() reads it as a number to float the ghost by, and a counter prints
+   it. Where typed attr() isn't supported the ghost stays on the roof,
+   dashed, with no number; the inspector still says the height. */
+@supports (x: attr(x type(*))) {
+  .tile[data-preview="target"] {
+    --ph: attr(data-preview-height type(<integer>), 0);
+    counter-reset: ph var(--ph);
+  }
+
+  .tile[data-preview="target"] .beacon {
+    --gz: calc(var(--ph) - var(--h));
+  }
+
+  .tile[data-preview="target"] .beacon::after {
+    content: counter(ph);
+  }
+
+  /* the ghost carries the number, so the initials make way */
+  .tile[data-preview="target"] .initials {
+    visibility: hidden;
+  }
+}
+
+/* a neighbour's mark sits in the ghost's corner, clear of its initials */
+.tile[data-preview="lift"] .beacon,
+.tile[data-preview="drop"] .beacon {
+  place-items: start end;
+  padding: 1px 2px;
+  font-size: clamp(0.65rem, 1.1vw, 0.85rem);
+}
+
+.tile[data-preview="lift"] .beacon {
+  --gz: 1;
+  border-color: var(--money);
+  background: rgb(141 224 141 / 0.2);
+}
+
+.tile[data-preview="lift"] .beacon::after {
+  content: "+1";
+  color: var(--money);
+}
+
+.tile[data-preview="drop"] .beacon {
+  --gz: -1;
+  border-style: dotted;
+  border-color: var(--danger);
+  background: rgb(255 90 79 / 0.2);
+}
+
+.tile[data-preview="drop"] .beacon::after {
+  content: "\2212 1";
+  color: var(--danger);
+}
+
 /* Names on the roofs are map labels: white, outlined in black, legible on
    any colour of roof. */
 .initials {
   display: block;
-  font-size: clamp(0.6rem, 1.3vw, 0.8rem);
+  font-size: clamp(0.65rem, 1.25vw, 0.85rem);
   font-weight: 800;
   line-height: 1;
   -webkit-text-stroke: 2.5px var(--line);
@@ -536,7 +968,7 @@ body.is-offline .meta::after {
 }
 
 .rise[data-delta="down"] {
-  color: #ff5a4f;
+  color: var(--danger);
 }
 
 @keyframes rise {
@@ -553,67 +985,13 @@ body.is-offline .meta::after {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .rise {
-    animation: none;
-  }
-}
-
-/* Phones: a gentler tilt than desktop, with enough twist that blocks show a
-   side face and heights read as a skyline. At no twist they face away and the
-   board looks flat. The twist swings the corners outwards, so the board is
-   narrower than the screen: 80% keeps them in at 360px, with tiles the same
-   size as the untwisted full width. */
-@media (max-width: 40rem) {
-  :root {
-    --board: 80%;
-    --unit: 4px;
-    --city-h: 52px;
-  }
-
-  .top {
-    margin-top: 0.75rem;
-    padding-inline: 1rem;
-  }
-
-  .lede {
-    font-size: 1rem;
-  }
-
-  .stage {
-    margin-block: 0 1.5rem;
-  }
-
-  .board {
-    --tilt: 36deg;
-    --spin: 20deg;
-    gap: 2px;
-    padding: 4px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .board,
-  .tile {
-    transition: none;
-  }
-}
-
-/* --- camera controls (added by app.js) --- */
-
-.stage {
-  touch-action: pan-y; /* a sideways drag turns the board; vertical still scrolls */
-  cursor: grab;
-}
-
-.stage:active {
-  cursor: grabbing;
-}
+/* --- camera controls (added by app.js, just above the board) --- */
 
 .camera {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   position: relative;
   z-index: 2;
@@ -627,6 +1005,7 @@ body.is-offline .meta::after {
   line-height: 1;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  min-height: 36px;
   padding: 0.4rem 0.6rem 0.35rem;
   border: 3px solid var(--line);
   border-radius: 0.45rem;
@@ -634,6 +1013,7 @@ body.is-offline .meta::after {
   color: var(--night);
   box-shadow: 3px 3px 0 var(--line);
   cursor: pointer;
+  transition: background-color 120ms;
 }
 
 @media (hover: hover) {
@@ -647,23 +1027,12 @@ body.is-offline .meta::after {
   box-shadow: 1px 1px 0 var(--line);
 }
 
-.camera button:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .camera-hint {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-small);
 }
 
 /* --- phones: the bar that confirms a tapped tile --- */
-
-.tile.is-selected {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-  z-index: 1;
-}
 
 .confirm {
   position: fixed;
@@ -716,20 +1085,139 @@ body.is-offline .meta::after {
   background: var(--cream);
 }
 
+/* gold on a gold button would vanish */
 .confirm button:focus-visible {
-  outline: 3px solid var(--ink);
-  outline-offset: 2px;
+  outline-color: var(--ink);
 }
 
-/* leave room so the bar never covers the bottom rows of the board */
+/* leave room so the bar never covers the bottom rows of the board, or the
+   inspector under it */
 body:has(.confirm:not([hidden])) main {
-  padding-bottom: 6rem;
+  padding-bottom: 8rem;
 }
 
 /* a touch-only screen has no keyboard to describe */
 @media (hover: none) and (pointer: coarse) {
   .keys-hint {
     display: none;
+  }
+}
+
+/* --- phones --- */
+
+/* A gentler tilt than desktop, with enough twist that blocks show a side
+   face and heights read as a skyline. At no twist they face away and the
+   board looks flat. The twist swings the corners outwards, so the board is
+   narrower than the screen: 80% keeps them in at 360px, with tiles the same
+   size as the untwisted full width. */
+@media (max-width: 40rem) {
+  :root {
+    --board: 80%;
+    --unit: 4px;
+    --city-h: 52px;
+    --fs-notice: 1.2rem;
+  }
+
+  .top {
+    margin-top: 0.75rem;
+    padding: 1rem 1rem calc(var(--city-h) + 0.5rem);
+  }
+
+  .top h1 {
+    width: 11rem;
+  }
+
+  .lede {
+    margin-top: 0.5rem;
+    font-size: 0.95rem;
+    line-height: 1.4;
+  }
+
+  /* The board comes straight after the name, so it's on the first screen;
+     the key follows it. The camera buttons go under the board, where a
+     thumb reaches them. */
+  .claim {
+    margin-top: 0.75rem;
+    gap: 0.6rem;
+  }
+
+  .play {
+    order: 1;
+  }
+
+  .legend,
+  .inspect {
+    order: 2;
+  }
+
+  .camera {
+    order: 1;
+  }
+
+  .controls {
+    padding: 0.6rem 0.75rem;
+  }
+
+  .stage {
+    margin-block: -0.5rem 0.5rem;
+  }
+
+  .board {
+    --tilt: 36deg;
+    --spin: 20deg;
+    gap: 2px;
+    padding: 4px;
+  }
+
+  /* Five buttons in one row of thumb-sized targets; a long label wraps
+     inside its own button instead of pushing the row onto two lines. */
+  .camera {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.4rem;
+  }
+
+  .camera button {
+    min-height: 44px;
+    padding: 0.3rem 0.2rem;
+    font-size: 0.8rem;
+  }
+
+  .camera-hint {
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+}
+
+/* --- reduced motion: nothing moves that doesn't have to --- */
+
+/* Changes still happen, instantly: a block jumps to its new height, a
+   claim's stripes stand still, the fresh ring just shows and goes. */
+@media (prefers-reduced-motion: reduce) {
+  .board,
+  .tile,
+  .tile::before,
+  .tile::after,
+  .sides::before,
+  .sides::after,
+  .camera button {
+    transition: none;
+  }
+
+  .rise,
+  .notice,
+  .tile[data-pending],
+  .tile[aria-busy="true"],
+  .tile[data-state="mine"]:not([data-preview]) .beacon::after,
+  .conn::before,
+  .conn[data-conn="reconnecting"]::before {
+    animation: none;
+  }
+
+  .tile[data-fresh] {
+    animation: none;
+    outline: 3px solid var(--cream);
+    outline-offset: 2px;
   }
 }
 
