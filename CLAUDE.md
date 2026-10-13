@@ -462,6 +462,11 @@ these tools, not tied to any one prototype's content.
   is allowed, and prefer SIL OFL faces for live text.
 - **A missing font or image fails silently,** as a fallback that still
   looks like a page. Fetch every `url()` the stylesheet names in a test.
+- **Judge display type on every glyph it can show, not the ones the test
+  data happens to produce.** A local board showing "21" hid that a heavy
+  face with a thick outline turns "9" and "0" into blobs; production showed
+  9. Set the text to its worst cases (every digit, the longest message)
+  and look at 1x as well as 2x, where small holes close first.
 - **`* { box-sizing: border-box }` doesn't reach `::before`/`::after`.** A
   pseudo-element given the same height and border as its neighbour comes out
   taller by the border. Set `box-sizing` on the pseudo-element itself, and
