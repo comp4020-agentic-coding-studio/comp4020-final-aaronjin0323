@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
-import { openStore, TILES } from "./db.ts";
+import { isDormant, openStore, TILES } from "./db.ts";
 import { renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -13,6 +13,72 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const store = openStore(process.env.DB_PATH ?? "./.data/app.db");
+
+// --- live updates (SSE) ---
+// Every open page holds a stream. After any change each one is sent the
+// whole board as its own visitor sees it: "mine" depends on who's asking, and
+// a pid never leaves the server. A full board, not a diff, means a stream
+// that drops and reconnects is back in sync from its first event.
+const HEARTBEAT_MS = 15_000; // Fly's proxy closes connections idle ~30-60 s
+const SWEEP_MS = 60_000; // dormancy is time-based, so look for changes each minute
+
+type Stream = { pid: string; res: ServerResponse };
+const streams = new Set<Stream>();
+
+function sendBoard(stream: Stream, now: Date): void {
+  const view = boardView(store.tiles(), stream.pid, now);
+  stream.res.write(`event: board\ndata: ${JSON.stringify(view)}\n\n`);
+}
+
+function broadcast(now = new Date()): void {
+  for (const stream of streams) sendBoard(stream, now);
+}
+
+function openStream(req: IncomingMessage, res: ServerResponse): void {
+  const pid = identify(req, res);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  // retry: how long the browser waits before reconnecting a dropped stream
+  res.write("retry: 2000\n\n");
+  const stream = { pid, res };
+  streams.add(stream);
+  const now = new Date();
+  // An open page is a visit. If it woke a dormant tile, everyone else's view
+  // of that tile just changed too.
+  if (store.touch(pid, now)) broadcast(now);
+  else sendBoard(stream, now);
+  req.on("close", () => streams.delete(stream));
+}
+
+// Comments keep idle streams under the proxy's timeout; the browser ignores
+// them.
+setInterval(() => {
+  for (const { res } of streams) res.write(": hb\n\n");
+}, HEARTBEAT_MS).unref();
+
+// Once a minute: holders with an open page count as visiting, and if any tile
+// crossed into dormancy since the last look, every open page hears about it.
+let lastDormant = "";
+const dormantKey = (now: Date): string =>
+  store
+    .tiles()
+    .filter((t) => isDormant(t, now))
+    .map((t) => t.id)
+    .join(",");
+setInterval(() => {
+  const now = new Date();
+  for (const pid of new Set([...streams].map((s) => s.pid))) store.touch(pid, now);
+  const key = dormantKey(now);
+  if (key !== lastDormant) {
+    lastDormant = key;
+    broadcast(now);
+  }
+}, SWEEP_MS).unref();
+lastDormant = dormantKey(new Date());
 
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -132,8 +198,13 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
   const label = validLabel(fields.label);
   if (label === null) return fail(400, "label");
 
-  if (store.claim(cellId, pid, label, new Date()) === "taken") return fail(409, "taken");
-  if (wantsJson) return sendJson(res, 200, { cellId, label });
+  const now = new Date();
+  if (store.claim(cellId, pid, label, now) === "taken") return fail(409, "taken");
+  broadcast(now);
+  lastDormant = dormantKey(now);
+  // A script client gets the board as the claimer now sees it, so the page
+  // updates at once without waiting for its stream.
+  if (wantsJson) return sendJson(res, 200, { cellId, label, board: boardView(store.tiles(), pid, now) });
   redirect(res, "/?notice=claimed");
 }
 
@@ -163,7 +234,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const now = new Date();
     // Loading the page is a visit: it keeps your tile from going dormant, or
     // wakes it if it already had.
-    store.touch(pid, now);
+    if (store.touch(pid, now)) broadcast(now);
     const notice = url.searchParams.get("notice");
     const displaced = store.takeDisplacement(pid) !== null;
     const tiles = store.tiles();
@@ -175,6 +246,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return send(res, 200, "text/html; charset=utf-8", html);
   }
   if (path === "/claim" && req.method === "POST") return postClaim(req, res);
+  if (path === "/events" && req.method === "GET") return openStream(req, res);
   if (path === "/readme") return redirect(res, "/readme/");
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {
     return send(res, 200, "text/html; charset=utf-8", renderReadme());
@@ -185,7 +257,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   notFound(res);
 }
 
-createServer((req, res) => {
+const server = createServer((req, res) => {
   handle(req, res).catch((err: unknown) => {
     console.error(err);
     if (!res.headersSent) send(res, 500, "text/plain; charset=utf-8", "Something went wrong");
@@ -194,3 +266,19 @@ createServer((req, res) => {
 }).listen(PORT, "0.0.0.0", () => {
   console.log(`listening on http://0.0.0.0:${PORT}`);
 });
+
+// Fly sends SIGTERM before stopping the machine (a redeploy, or no traffic).
+// Ending the streams first makes every page reconnect at once instead of
+// hanging on a dead connection; closing the database flushes its WAL.
+function shutdown(signal: string): void {
+  console.log(`${signal}: closing ${streams.size} stream(s)`);
+  for (const { res } of streams) res.end();
+  streams.clear();
+  server.close(() => {
+    store.close();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
