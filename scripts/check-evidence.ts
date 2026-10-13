@@ -34,6 +34,17 @@ if (found.length > 0) {
   fail(`no reflection — each crit's cutoff reads its own: ${REFLECTIONS.join(", ")}`);
 }
 
+// A warning, not a failure: a red check here would block CI's deploy all week.
+let tags: string[] = [];
+try {
+  tags = execFileSync("git", ["tag", "--list", "crit-*"], { encoding: "utf8" }).split("\n");
+} catch {}
+const shipped = tags.map((t) => Number(t.match(/^crit-(\d+)$/)?.[1])).filter((n) => n > 0);
+const next = `crit-${Math.max(7, ...shipped) + 1}.md`;
+if (REFLECTIONS.includes(next) && !reflections.includes(next)) {
+  console.warn(`! no reflections/${next} yet — this crit's cutoff sweep reads that exact file`);
+}
+
 if (!existsSync("PROCESS.md")) {
   fail("no PROCESS.md in the repo root");
   process.exit(1);

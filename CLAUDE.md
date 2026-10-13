@@ -285,6 +285,10 @@ and delete the line when one is settled.
   runs at a throwaway `DB_PATH`, never at data you want to keep. A test that
   claims a tile must not depend on the board starting empty, since a second
   run won't find it empty.
+- **Never point `pnpm check` at the live URL.** The spec claims tiles as its
+  fixture players, so a run against production leaves Alice, Bob and Fay
+  holding tiles on the real board. CI already runs the spec against the
+  built image; after a deploy, fetch the URL instead.
 
 ## The checks
 
