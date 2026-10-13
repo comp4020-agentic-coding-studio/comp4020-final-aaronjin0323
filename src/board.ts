@@ -111,7 +111,11 @@ function tileButton(t: TileView): string {
 export function renderBoard(
   view: BoardView,
   myLabel: string,
-  { notice = null, displaced = false }: { notice?: Notice | null; displaced?: boolean } = {},
+  {
+    notice = null,
+    displaced = false,
+    version = 0,
+  }: { notice?: Notice | null; displaced?: boolean; version?: number } = {},
 ): string {
   const notices = [
     displaced ? `<p class="notice" data-notice="displaced" role="status">${DISPLACED}</p>` : "",
@@ -124,7 +128,7 @@ export function renderBoard(
     body: `
     <header class="top">
       <h1>Skyline</h1>
-      <p class="lede">Everyone here holds one tile. A tile rises for every claimed neighbour, so standing alone keeps you flat and settling beside strangers builds a skyline. A tile whose holder stays away for a day fades, and anyone may settle there.</p>
+      <p class="lede">Hold one tile. It rises a floor for every neighbour, and you lift theirs too. Stay away a day and it fades, open to someone new.</p>
       <p class="meta"><span data-claimed>${view.claimed}</span> of ${view.tiles.length} tiles claimed · <a href="/readme/">About</a></p>
     </header>
     <main>
@@ -137,7 +141,7 @@ export function renderBoard(
           <div class="notices" data-notices>${notices}</div>
         </div>
         <div class="stage" data-stage>
-          <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status">
+          <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status" data-version="${version}">
         ${view.tiles.map(tileButton).join("\n        ")}
           </div>
         </div>

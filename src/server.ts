@@ -25,12 +25,20 @@ const SWEEP_MS = 60_000; // dormancy is time-based, so look for changes each min
 type Stream = { pid: string; res: ServerResponse };
 const streams = new Set<Stream>();
 
+// Every board carries a version that goes up with each change, so a page
+// that gets the same moment twice (a claim's response and its stream event)
+// or out of order can keep the newest. Seeded from the clock so it keeps
+// rising across a restart, when every page reconnects.
+let version = Date.now();
+const versioned = (pid: string, now: Date) => ({ ...boardView(store.tiles(), pid, now), version });
+
 function sendBoard(stream: Stream, now: Date): void {
-  const view = boardView(store.tiles(), stream.pid, now);
-  stream.res.write(`event: board\ndata: ${JSON.stringify(view)}\n\n`);
+  stream.res.write(`event: board\ndata: ${JSON.stringify(versioned(stream.pid, now))}\n\n`);
 }
 
+// Called after every change, and only then.
 function broadcast(now = new Date()): void {
+  version = Math.max(version + 1, Date.now());
   for (const stream of streams) sendBoard(stream, now);
 }
 
@@ -204,7 +212,7 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
   lastDormant = dormantKey(now);
   // A script client gets the board as the claimer now sees it, so the page
   // updates at once without waiting for its stream.
-  if (wantsJson) return sendJson(res, 200, { cellId, label, board: boardView(store.tiles(), pid, now) });
+  if (wantsJson) return sendJson(res, 200, { cellId, label, board: versioned(pid, now) });
   redirect(res, "/?notice=claimed");
 }
 
@@ -216,7 +224,8 @@ async function serveFile(res: ServerResponse, root: string, rel: string): Promis
   if (!file.startsWith(base + sep) || !type) return notFound(res);
   try {
     const data = await readFile(file);
-    res.writeHead(200, { "Content-Type": type, "Cache-Control": "public, max-age=300" });
+    const fresh = type.startsWith("text/javascript") || type.startsWith("text/css");
+    res.writeHead(200, { "Content-Type": type, "Cache-Control": fresh ? "no-cache" : "public, max-age=300" });
     res.end(data);
   } catch {
     notFound(res);
@@ -252,6 +261,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const html = renderBoard(boardView(tiles, pid, now), myLabel, {
       notice: isNotice(notice) ? notice : null,
       displaced,
+      version,
     });
     return send(res, 200, "text/html; charset=utf-8", html);
   }
@@ -265,6 +275,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path.startsWith("/readme/docs/")) return serveFile(res, "docs", path.slice("/readme/docs/".length));
   if (path === "/style.css") return serveFile(res, "public", "style.css");
   if (path === "/app.js") return serveFile(res, "public", "app.js");
+  if (path === "/diff.js") return serveFile(res, "public", "diff.js");
   notFound(res);
 }
 

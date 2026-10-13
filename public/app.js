@@ -1,3 +1,5 @@
+import { describeTile, diffBoards } from "./diff.js";
+
 // Everything the board does beyond plain HTML. Without this script the board
 // sits at a fixed angle, every claim is a form post and a reload, and other
 // people's claims show on the next load. With it: a camera you can turn,
@@ -222,7 +224,41 @@ if (board && stage) {
     if (initials && initials.textContent !== t.initials) initials.textContent = t.initials;
   };
 
+  // The board the page currently shows, read from the server-rendered HTML,
+  // so the very first update has something to be compared with.
+  const readBoard = () => ({
+    version: Number(board.dataset.version) || 0,
+    tiles: tiles.map((el, id) => ({
+      id,
+      state: el.dataset.state,
+      height: Number(el.dataset.height),
+      label: el.dataset.state === "free" ? null : el.title,
+      hue: el.style.getPropertyValue("--hue") === "" ? null : Number(el.style.getPropertyValue("--hue")),
+    })),
+  });
+  let shown = readBoard();
+
+  // A "+1" or "−1" that floats up off a tile whose height just changed. It
+  // sits inside the tile, so it moves with the camera and the block.
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const float = (id, delta) => {
+    const el = document.createElement("span");
+    el.className = "rise";
+    el.dataset.delta = delta > 0 ? "up" : "down";
+    el.setAttribute("aria-hidden", "true");
+    el.textContent = delta > 0 ? `+${delta}` : `−${-delta}`;
+    tiles[id].append(el);
+    setTimeout(() => el.remove(), reducedMotion.matches ? 1500 : 1300);
+  };
+
+  // Every board, from the stream or from a claim's own response, comes
+  // through here. A board no newer than the one shown is dropped, so the
+  // same change arriving twice is shown, and narrated, once.
   const applyBoard = (view) => {
+    if (view.version <= shown.version) return;
+    const { rises, messages } = diffBoards(shown, view);
+    shown = view;
+
     view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t));
     if (selected) select(selected); // re-read its state: someone may have taken it
     if (claimedCount) claimedCount.textContent = String(view.claimed);
@@ -230,6 +266,9 @@ if (board && stage) {
     // The tile in the tab order follows yours when you get one.
     const mine = view.tiles.findIndex((t) => t.state === "mine");
     if (mine >= 0 && !tiles.includes(document.activeElement)) moveTo(mine, false);
+
+    for (const { id, delta } of rises) float(id, delta);
+    if (messages.length) showNotice(messages[0].key, messages.map((m) => m.text).join(" "));
   };
 
   const showNotice = (key, text) => {
@@ -260,8 +299,9 @@ if (board && stage) {
   // With script the form posts through fetch: no reload, so the camera and
   // focus stay put. The server answers with the board as you now see it. Any
   // failure to reach it falls back to a real form post.
+  // Failures only: a successful claim is narrated by applyBoard, from what
+  // actually changed.
   const MESSAGES = {
-    claimed: "Claimed. Your tile rises for every neighbour who settles next to you.",
     taken: "Someone got there first. Pick another tile.",
     label: "Names are 1 to 24 characters.",
     cell: "That tile doesn't exist.",
@@ -279,6 +319,7 @@ if (board && stage) {
   confirmBar.className = "confirm";
   confirmBar.hidden = true;
   const confirmText = document.createElement("span");
+  confirmText.className = "confirm-text";
   const confirmButton = document.createElement("button");
   confirmButton.type = "submit";
   confirmButton.name = "cellId";
@@ -299,12 +340,13 @@ if (board && stage) {
       return;
     }
     tile.classList.add("is-selected");
-    const where = tile.getAttribute("aria-label").split(",").slice(0, 2).join(",");
-    const verb = tile.dataset.state === "dormant" ? "Settle on" : tile.dataset.state === "mine" ? "Rename at" : "Claim";
-    confirmText.textContent = tile.dataset.state === "held" ? `${where} is held` : "";
-    confirmButton.textContent = `${verb} ${where.toLowerCase()}`;
+    // On a phone this bar is the only place to learn who holds a tile, and
+    // whom you'd lift by settling there.
+    const { title, action, open } = describeTile(shown, Number(tile.value));
+    confirmText.textContent = title;
+    confirmButton.textContent = action ?? "";
     confirmButton.value = tile.value;
-    confirmButton.hidden = tile.dataset.state === "held";
+    confirmButton.hidden = !open;
     confirmBar.hidden = false;
   };
   confirmCancel.addEventListener("click", () => select(null));
@@ -343,9 +385,8 @@ if (board && stage) {
       });
       const body = await res.json();
       if (res.ok) {
-        applyBoard(body.board);
         select(null);
-        showNotice("claimed", MESSAGES.claimed);
+        applyBoard(body.board); // narrates the claim, unless the stream already did
       } else {
         showNotice(body.error, MESSAGES[body.error] ?? "That didn't work. Try again.");
       }

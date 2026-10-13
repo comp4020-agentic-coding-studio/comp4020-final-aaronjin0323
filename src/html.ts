@@ -16,7 +16,7 @@ export function page({ title, body, script }: { title: string; body: string; scr
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/style.css">
-    ${script ? `<script src="${script}" defer></script>` : ""}
+    ${script ? `<script type="module" src="${script}"></script>` : ""}
   </head>
   <body>${body}
   </body>
