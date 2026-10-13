@@ -168,6 +168,33 @@ whole point. So:
 - **The lede is three short sentences.** The rules people need while playing
   are on the tiles, the status line and the confirm bar, not in a paragraph.
 
+### Crit 10: telling people apart, and who did what
+
+- **What each person may see and change is decided on the server, and
+  recorded in `docs/adr/0002-who-may-see-and-change-what.md`** with the
+  options turned down. The page may hide things as a courtesy; every rule
+  has to hold for a client that ignores the page and posts with `curl`.
+  Change the ADR's table before changing who may do what.
+- **One line per event on stdout, `event key=value`,** so `flyctl logs` is
+  the narration at the crit and the first thing read when production
+  misbehaves. Events: `start`, `page`, `stream.open`/`stream.close`,
+  `claim` (with `from`, `renamed`, `took`, `lifted`, `dropped`),
+  `claim.refused` (status, reason, and `held` on a `409`), `wake`,
+  `dormant`, `displaced.seen`, `error`, `shutdown`.
+- **A person in the logs is a tag, never their `pid`.** The tag is the first
+  6 hex of a SHA-256 of the `pid`: two visitors read apart, and nobody
+  reading the logs can turn it back into a cookie. Logs leave the server, and
+  the `pid` is the only proof of identity, so a `pid` next to a label would
+  let a log reader act as that person.
+- **Every typed string is quoted as JSON,** with line separators and format
+  characters (bidi overrides) escaped too, so a label can't end the line,
+  forge a second one, or hide text. Only tags, tiles, numbers and fixed
+  words go in unquoted.
+- **Logging lives in `src/log.ts`, called from `src/server.ts`.** `db.ts`
+  and `board.ts` stay pure. What a claim did (`lifted`, `dropped`, `took`)
+  is worked out by comparing the board before and after, the same rule as
+  the page's +1/−1.
+
 ### The look
 
 - **Styled after a GTA title screen.** A framed sunset header over a
@@ -246,8 +273,8 @@ Routes for crit 8's slice:
 The database path comes from `DB_PATH`: `/data/app.db` in the image,
 `./.data/app.db` locally (gitignored).
 
-Deliberately out of scope so far: accounts, chat, live cursors, logging
-(crit 10).
+Deliberately out of scope so far: accounts, chat, live cursors, and rate
+limiting (ADR 0002 says why).
 
 ## Open decisions
 
@@ -320,6 +347,15 @@ and delete the line when one is settled.
   receive the change within 1000 ms. It runs in CI against the built image.
 - **Dormancy and migrations are unit tests over `openStore(":memory:")`**
   with an injected clock, in `spec/` alongside the HTTP tests.
+- **The logs are tested from a server the test starts itself.** The app at
+  `APP_URL` is a separate process (a container in CI), so its stdout can't be
+  read. `spec/log.test.ts` spawns `node src/server.ts` on `PORT=0` with a
+  temp `DB_PATH` and reads what it prints.
+- **Every access rule in ADR 0002 has a test in `spec/access.test.ts` or
+  `spec/claim.test.ts`,** each seen to fail with the rule broken.
+- **Spec files run in parallel against one app.** A test that claims many
+  tiles takes them from the far end of the board, so it can't make another
+  file's "first free tile" fail for the wrong reason.
 
 `spec/invariants.test.ts` ships with the template: `/` answers, and `/readme/`
 carries every README heading in order. Keep it. Everything else in `spec/` is
@@ -474,6 +510,17 @@ these tools, not tied to any one prototype's content.
 - **A background paints under content, so it can't cover anything.** To mask
   content scrolling beneath a pinned corner, the mask has to be a positioned
   element (e.g. a sticky pseudo-element with a `z-index`), not a background.
+- **A "never prints X" assertion only covers what was actually printed.**
+  A leak on a path the test never exercised passes. Drive every path that
+  logs, assert each expected line exists, and only then assert the secret
+  is absent.
+- **`key in obj` finds inherited names.** A lookup table keyed by user
+  input (`?notice=constructor`) needs `Object.hasOwn`, or it serves
+  `Object.prototype`.
+- **The Write tool can turn `\u` escapes into the raw characters.** A test
+  meant to hold a bidi override or line separator may end up holding the
+  invisible character itself. Grep new files for non-ASCII after writing
+  escapes.
 - **A recorded "source" field is not necessarily a bare URL.** Notes get
   appended to it. Anything that turns data into an `href` extracts and tests
   the URL shape, or the link checker finds it after the deploy.
