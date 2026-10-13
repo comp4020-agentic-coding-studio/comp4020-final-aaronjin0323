@@ -1,30 +1,39 @@
+/* Skyline, styled after a GTA title screen: a framed sunset over a city
+   skyline, heavy outlined display type, flat colour with hard black shadows,
+   and a board that reads as a city map at night, where every claimed tile is
+   a lit tower.
+
+   Two typefaces. Passion One (SIL Open Font License, public/fonts/OFL.txt)
+   sets live text. The wordmark is Pricedown Black by Typodermic Fonts,
+   converted to outlines as one fixed image (public/art/logo.svg): its free
+   licence allows that, but not a web font, nor the font file in a public
+   repo. */
+
+@font-face {
+  font-family: "Passion One";
+  src: url("/fonts/PassionOne-Black.ttf") format("truetype");
+  font-weight: 900;
+  font-display: swap;
+}
+
 :root {
-  color-scheme: light;
-  --bg: #f4efe6;
-  --ink: #1f1d1a;
-  --muted: #6b645a;
-  --accent: #c2410c;
-  --free-top: #e2d9ca;
-  --free-hover: #d3c6b1;
-  --board-edge: #cfc3ae;
-  --ring: #111;
+  color-scheme: dark;
+  --night: #120a1f;
+  --ink: #fff7ec;
+  --muted: #d9c7e8;
+  --accent: #ffb000; /* the wanted stars' gold */
+  --money: #8de08d; /* the cash counter's green */
+  --line: #000; /* every outline and hard shadow */
+  --cream: #fff7ec;
+  --panel: #1c0f2e;
+  --road: #5a5472;
+  --lot: #272137;
+  --lot-hover: #40385a;
+  --display: "Passion One", Impact, "Arial Black", sans-serif;
+  --city-h: 84px; /* the skyline along the foot of the header */
   --unit: clamp(5px, 1.1vw, 9px); /* how far one neighbour raises a tile */
   --board: min(34rem, 62vw);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #17181d;
-    --ink: #ece8e1;
-    --muted: #a39d93;
-    --accent: #fb923c;
-    --free-top: #2d2f38;
-    --free-hover: #3b3e4a;
-    --board-edge: #24262e;
-    --ring: #fff;
-  }
 }
 
 * {
@@ -39,7 +48,7 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--night);
   color: var(--ink);
   line-height: 1.5;
   padding-inline: 1rem;
@@ -47,6 +56,7 @@ body {
 
 a {
   color: var(--accent);
+  font-weight: 700;
 }
 
 .top,
@@ -55,55 +65,170 @@ main {
   margin-inline: auto;
 }
 
+/* --- the header: a framed sunset, like a panel of cover art --- */
+
+/* The sky's colours are pinned to the skyline's height, measured up from the
+   bottom, and the text always sits just above the skyline. So whatever the
+   header's height, the text lands on the same dark band of sky. */
 .top {
-  padding-block: 1.5rem 0;
+  position: relative;
+  isolation: isolate; /* keeps the skyline (z-index -1) inside the panel */
+  overflow: clip;
+  margin-top: 1rem;
+  padding: 1.25rem 1.5rem calc(var(--city-h) + 0.75rem);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
+  background:
+    radial-gradient(ellipse 24rem calc(var(--city-h) * 1.7) at 72% 100%, rgb(255 214 120 / 0.9), transparent 70%),
+    linear-gradient(
+      to top,
+      #ffb35c 0,
+      #f06a4e calc(var(--city-h) * 0.45),
+      #8a2464 var(--city-h),
+      #4d1763 calc(var(--city-h) + 5rem),
+      #1f0d3d 100%
+    );
 }
 
-h1 {
+/* The skyline silhouette, drawn by scripts/draw-skyline.ts. A mask, so its
+   colour is set here. */
+.top::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: auto 0 0;
+  height: var(--city-h);
+  background: #170a28;
+  mask: url("/art/city.svg") left bottom / auto 100% repeat-x;
+}
+
+/* The heading's text stays in the page for screen readers, search and the
+   tab title; on screen it's drawn by the wordmark instead. */
+.top h1 {
   margin: 0;
-  font-size: clamp(1.8rem, 5vw, 2.6rem);
-  letter-spacing: -0.02em;
+  width: clamp(13rem, 30vw, 21rem);
+  aspect-ratio: 3197 / 986; /* logo.svg's viewBox */
+  background: url("/art/logo.svg") left center / contain no-repeat;
+  color: transparent;
+  font-size: 1px;
+  line-height: 1;
+  overflow: hidden;
+  rotate: -3deg;
+}
+
+/* Where backgrounds are switched off, the wordmark goes with them: show the
+   heading as text. */
+@media (forced-colors: active) {
+  .top h1 {
+    width: auto;
+    aspect-ratio: auto;
+    background: none;
+    color: CanvasText;
+    font-size: 2.6rem;
+    rotate: none;
+  }
+}
+
+.lede,
+.meta {
+  max-width: 38rem;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
 }
 
 .lede {
-  margin: 0.4rem 0 0;
-  max-width: 38rem;
+  margin: 0.75rem 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
 }
 
 .meta {
-  margin: 0.4rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
-/* --- controls --- */
+/* The claimed count is the HUD's cash counter. */
+[data-claimed] {
+  font-family: var(--display);
+  font-size: 1.45em;
+  line-height: 1;
+  color: var(--money);
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
+  text-shadow: none;
+}
+
+/* Wide screens: wordmark on the left, text beside it, and the wordmark
+   hangs down over the skyline like a title card, which keeps the header
+   short enough for the whole board to fit on a laptop screen. */
+@media (min-width: 52rem) {
+  .top {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: 1fr auto auto 1fr;
+    column-gap: 2rem;
+  }
+
+  .top h1 {
+    grid-row: 1 / -1;
+    align-self: center;
+    margin-bottom: calc(var(--city-h) * -0.5);
+  }
+
+  .lede {
+    grid-column: 2;
+    grid-row: 2;
+    margin: 0;
+  }
+
+  .meta {
+    grid-column: 2;
+    grid-row: 3;
+  }
+}
+
+/* --- controls: a HUD panel --- */
 
 .controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
-  padding-block: 1rem;
+  margin-block: 1rem 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
 }
 
 .controls label {
-  font-weight: 600;
+  font-family: var(--display);
+  font-size: 1.3rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
 }
 
 .controls input {
+  flex: 0 1 14rem;
+  min-width: 0;
   font: inherit;
-  padding: 0.45rem 0.6rem;
-  border: 2px solid var(--muted);
+  font-weight: 600;
+  padding: 0.4rem 0.6rem;
+  border: 3px solid var(--line);
   border-radius: 0.4rem;
-  background: transparent;
-  color: inherit;
-  width: 14rem;
-  max-width: 100%;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: inset 0 2px 0 rgb(0 0 0 / 0.15);
 }
 
 .controls input:focus-visible {
   outline: 3px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .status,
@@ -131,29 +256,45 @@ body.is-offline .meta::after {
   color: var(--muted);
 }
 
+/* Notices are mission text: big, outlined, in the game's gold. */
 .notice {
-  font-weight: 600;
+  font-family: var(--display);
+  font-size: 1.35rem;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
   color: var(--accent);
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
 }
 
-/* --- the 3D board --- */
+/* a visitor back after being displaced can arrive with a second notice */
+.notice + .notice {
+  margin-top: 0.4rem;
+}
 
+/* --- the 3D board: a city map at night --- */
+
+/* A soft neon glow on the ground under the board. */
 .stage {
   perspective: 1400px;
   display: grid;
   place-items: center;
   /* the tilt makes the board look shorter than the box it lays out in */
   margin-block: -4rem -2rem;
+  background: radial-gradient(closest-side, rgb(214 64 160 / 0.22), transparent);
 }
 
+/* The board is the street grid: the gaps between tiles are the roads. */
 .board {
   width: var(--board);
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: 3px;
   padding: 6px;
-  background: var(--board-edge);
+  background: var(--road);
+  border: 3px solid var(--line);
   border-radius: 6px;
+  box-shadow: 0 0 36px rgb(255 90 170 / 0.35);
   transform-style: preserve-3d;
   /* A free tile lies in the board's own plane, and in 3D the browser can't
      reliably tell which of two coplanar elements was clicked: at the default
@@ -174,17 +315,17 @@ body.is-offline .meta::after {
 .tile {
   --h: 0;
   --hue: 30;
-  --s: 50%; /* side faces */
-  --top-s: 65%;
-  --top-l: 64%;
+  --s: 60%; /* side faces */
+  --top-s: 78%;
+  --top-l: 60%;
   position: relative;
   aspect-ratio: 1;
   min-width: 0;
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: var(--free-top);
-  color: #1b1b1b;
+  background: var(--lot);
+  color: #fff;
   cursor: pointer;
   pointer-events: auto;
   -webkit-tap-highlight-color: transparent; /* the selection outline says it */
@@ -195,7 +336,12 @@ body.is-offline .meta::after {
 
 /* Four side faces, each as tall as the tile is raised, so a flat tile has
    none. The button's pseudo-elements are south and east; .sides carries
-   north and west, so the block stays solid however the camera turns. */
+   north and west, so the block stays solid however the camera turns.
+
+   Each face is a tower wall with a row of lit windows per floor: the floors
+   repeat every --unit, so a tower of height 3 has exactly three rows. Two
+   layers make the grid: bands of wall and window, one per floor, and over
+   them solid wall columns between the windows. */
 .tile::before,
 .tile::after,
 .sides::before,
@@ -204,26 +350,57 @@ body.is-offline .meta::after {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
+  --win: #ffd76a;
+  --floors: repeating-linear-gradient(
+    var(--up),
+    var(--wall) 0 calc(var(--unit) * 0.3),
+    var(--win) calc(var(--unit) * 0.3) calc(var(--unit) * 0.75),
+    var(--wall) calc(var(--unit) * 0.75) var(--unit)
+  );
+  --columns: linear-gradient(
+    var(--across),
+    var(--wall) 0 14%,
+    transparent 14% 43%,
+    var(--wall) 43% 57%,
+    transparent 57% 86%,
+    var(--wall) 86%
+  );
+  background: var(--columns), var(--floors);
+}
+
+/* The south and north faces stand on their bottom edge: floors stack down
+   the face, windows run across it. East and west faces are turned on their
+   side before they're stood up, so for them it's the other way round. */
+.tile::before,
+.sides::before {
+  --up: 180deg;
+  --across: 90deg;
+}
+
+.tile::after,
+.sides::after {
+  --up: 90deg;
+  --across: 180deg;
 }
 
 .tile::before {
+  --wall: hsl(var(--hue) var(--s) 34%);
   left: 0;
   top: 100%;
   width: 100%;
   height: calc(var(--h) * var(--unit));
   transform-origin: top;
   transform: rotateX(-90deg);
-  background: hsl(var(--hue) var(--s) 42%);
 }
 
 .tile::after {
+  --wall: hsl(var(--hue) var(--s) 24%);
   left: 100%;
   top: 0;
   width: calc(var(--h) * var(--unit));
   height: 100%;
   transform-origin: left;
   transform: rotateY(90deg);
-  background: hsl(var(--hue) var(--s) 32%);
 }
 
 .sides {
@@ -234,66 +411,65 @@ body.is-offline .meta::after {
 }
 
 .sides::before {
+  --wall: hsl(var(--hue) var(--s) 40%);
   left: 0;
   bottom: 100%;
   width: 100%;
   height: calc(var(--h) * var(--unit));
   transform-origin: bottom;
   transform: rotateX(90deg);
-  background: hsl(var(--hue) var(--s) 50%);
 }
 
 .sides::after {
+  --wall: hsl(var(--hue) var(--s) 28%);
   right: 100%;
   top: 0;
   width: calc(var(--h) * var(--unit));
   height: 100%;
   transform-origin: right;
   transform: rotateY(-90deg);
-  background: hsl(var(--hue) var(--s) 38%);
 }
 
 .tile[data-state="free"]:hover {
-  background: var(--free-hover);
+  background: var(--lot-hover);
 }
 
 .tile[data-state="held"],
 .tile[data-state="mine"],
 .tile[data-state="dormant"] {
   background: hsl(var(--hue) var(--top-s) var(--top-l));
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.5);
 }
 
+/* Yours wears the player's marker: a gold ring on the roof, and a glow. */
 .tile[data-state="mine"] {
   box-shadow:
-    inset 0 0 0 2px var(--ring),
-    inset 0 0 0 4px hsl(var(--hue) var(--top-s) var(--top-l));
+    inset 0 0 0 2px var(--line),
+    inset 0 0 0 4px var(--accent),
+    0 0 14px 2px rgb(255 176 0 / 0.75);
 }
 
-/* Dormant: still standing (it keeps its height), drained of colour, and
-   open to whoever settles there. */
+/* Dormant: still standing (it keeps its height), but grey with its lights
+   out, and open to whoever settles there. */
 .tile[data-state="dormant"] {
   --s: 6%;
   --top-s: 8%;
-  --top-l: 80%;
+  --top-l: 46%;
+}
+
+.tile[data-state="dormant"]::before,
+.tile[data-state="dormant"]::after,
+.tile[data-state="dormant"] .sides::before,
+.tile[data-state="dormant"] .sides::after {
+  --win: var(--wall);
 }
 
 .tile[data-state="dormant"] .initials {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .tile[data-state="dormant"]:hover {
-  --top-l: 72%;
-}
-
-/* In dark mode a pale grey tile would glow brighter than the live ones. */
-@media (prefers-color-scheme: dark) {
-  .tile[data-state="dormant"] {
-    --top-l: 42%;
-  }
-
-  .tile[data-state="dormant"]:hover {
-    --top-l: 50%;
-  }
+  --top-l: 56%;
 }
 
 .tile:focus-visible {
@@ -302,11 +478,15 @@ body.is-offline .meta::after {
   z-index: 1;
 }
 
+/* Names on the roofs are map labels: white, outlined in black, legible on
+   any colour of roof. */
 .initials {
   display: block;
-  font-size: clamp(0.5rem, 1.3vw, 0.75rem);
-  font-weight: 700;
+  font-size: clamp(0.6rem, 1.3vw, 0.8rem);
+  font-weight: 800;
   line-height: 1;
+  -webkit-text-stroke: 2.5px var(--line);
+  paint-order: stroke fill;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -319,25 +499,25 @@ body.is-offline .meta::after {
   position: absolute;
   left: 50%;
   top: 50%;
-  padding: 0.1em 0.35em;
-  border-radius: 0.3em;
-  font-size: clamp(0.7rem, 1.5vw, 0.95rem);
-  font-weight: 800;
+  font-family: var(--display);
+  font-size: clamp(1rem, 2.2vw, 1.45rem);
   line-height: 1;
   white-space: nowrap;
-  color: #fff;
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
   pointer-events: none;
   translate: -50% -50% 2px;
   transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
   animation: rise 1.3s ease-out forwards;
 }
 
+/* green like cash going up, red coming down */
 .rise[data-delta="up"] {
-  background: #15803d;
+  color: var(--money);
 }
 
 .rise[data-delta="down"] {
-  background: #b91c1c;
+  color: #ff5a4f;
 }
 
 @keyframes rise {
@@ -369,6 +549,16 @@ body.is-offline .meta::after {
   :root {
     --board: 80%;
     --unit: 4px;
+    --city-h: 52px;
+  }
+
+  .top {
+    margin-top: 0.75rem;
+    padding-inline: 1rem;
+  }
+
+  .lede {
+    font-size: 1rem;
   }
 
   .stage {
@@ -405,25 +595,41 @@ body.is-offline .meta::after {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   position: relative;
   z-index: 2;
 }
 
+/* Chunky game-menu buttons, on a hard shadow they press down into. */
 .camera button {
-  font: inherit;
-  font-size: 0.9rem;
-  padding: 0.3rem 0.65rem;
-  border: 2px solid var(--muted);
-  border-radius: 0.4rem;
-  background: transparent;
-  color: inherit;
+  font-family: var(--display);
+  font-size: 0.95rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.6rem 0.35rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
   cursor: pointer;
+}
+
+@media (hover: hover) {
+  .camera button:hover {
+    background: var(--accent);
+  }
+}
+
+.camera button:active {
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
 }
 
 .camera button:focus-visible {
   outline: 3px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .camera-hint {
@@ -449,9 +655,11 @@ body.is-offline .meta::after {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
-  background: var(--bg);
-  border-top: 2px solid var(--board-edge);
-  box-shadow: 0 -4px 16px rgb(0 0 0 / 0.12);
+  background: var(--panel);
+  border-top: 3px solid var(--line);
+  box-shadow:
+    0 -3px 0 var(--accent),
+    0 -8px 24px rgb(0 0 0 / 0.5);
 }
 
 .confirm-text:empty {
@@ -461,28 +669,30 @@ body.is-offline .meta::after {
 .confirm-text {
   flex-basis: 100%;
   color: var(--muted);
+  font-weight: 600;
 }
 
 .confirm button {
-  font: inherit;
+  font-family: var(--display);
+  font-size: 1.2rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
   min-height: 48px; /* a comfortable thumb */
   padding: 0.6rem 1rem;
+  border: 3px solid var(--line);
   border-radius: 0.5rem;
+  box-shadow: 3px 3px 0 var(--line);
+  color: var(--night);
   cursor: pointer;
 }
 
 .confirm-claim {
   flex: 1;
-  border: 0;
   background: var(--accent);
-  color: #fff;
-  font-weight: 700;
 }
 
 .confirm-cancel {
-  border: 2px solid var(--muted);
-  background: transparent;
-  color: inherit;
+  background: var(--cream);
 }
 
 .confirm button:focus-visible {
@@ -502,11 +712,36 @@ body:has(.confirm:not([hidden])) main {
   }
 }
 
-/* --- /readme/ --- */
+/* --- /readme/: a briefing on a HUD panel --- */
 
 .prose {
-  max-width: 42rem;
-  padding-block: 1.5rem 4rem;
+  max-width: 44rem;
+  margin-block: 1.5rem 4rem;
+  padding: 1.25rem 1.5rem 2rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
+}
+
+.prose h1,
+.prose h2,
+.prose h3 {
+  font-family: var(--display);
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
+}
+
+.prose h1 {
+  font-size: clamp(2rem, 6vw, 2.8rem);
+}
+
+.prose h2 {
+  font-size: 1.7rem;
+  color: var(--accent);
 }
 
 .prose img {
@@ -516,4 +751,10 @@ body:has(.confirm:not([hidden])) main {
 
 .prose pre {
   overflow-x: auto;
+}
+
+.prose code {
+  background: rgb(255 255 255 / 0.1);
+  border-radius: 0.25rem;
+  padding: 0.05em 0.3em;
 }

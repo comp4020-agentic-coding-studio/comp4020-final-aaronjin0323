@@ -97,6 +97,8 @@ const TYPES: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 function cookies(req: IncomingMessage): Record<string, string> {
@@ -276,6 +278,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/style.css") return serveFile(res, "public", "style.css");
   if (path === "/app.js") return serveFile(res, "public", "app.js");
   if (path === "/diff.js") return serveFile(res, "public", "diff.js");
+  // the artwork and the font the stylesheet loads (the font's licence too)
+  if (path.startsWith("/art/") || path.startsWith("/fonts/")) return serveFile(res, "public", path.slice(1));
   notFound(res);
 }
 

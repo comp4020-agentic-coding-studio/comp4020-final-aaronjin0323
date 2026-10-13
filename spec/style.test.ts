@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, inject, it } from "vitest";
 
 // The stylesheet and the code agree on names only by convention: a class the
-// script adds, an attribute value the code writes. No behaviour test can catch
-// them drifting apart, since a selector finds an unstyled element just as
-// well: the +1/−1 float shipped with no style at all.
+// script adds, an attribute value the code writes, a file the CSS points at.
+// No behaviour test can catch them drifting apart, since a selector finds an
+// unstyled element just as well: the +1/−1 float shipped with no style at all.
+const baseUrl = inject("baseUrl");
 // comments dropped: a class named only in a comment isn't styled
 const css = readFileSync("public/style.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const app = readFileSync("public/app.js", "utf8");
@@ -29,5 +30,16 @@ describe("the stylesheet and the code", () => {
     const quoted = (v: string): boolean => ['"', "'", "`"].some((q) => code.includes(`${q}${v}${q}`));
     const unwritten = [...new Set(selected)].filter((v) => !quoted(v));
     expect(unwritten, "values style.css selects that no code writes").toEqual([]);
+  });
+
+  // A missing font or image fails silently: the page still renders, just in
+  // a fallback, so only a check that fetches each one notices.
+  it("can load every file the stylesheet points at", async () => {
+    const files = [...css.matchAll(/url\("(\/[^"]*)"\)/g)].map((m) => m[1]);
+    expect(files.length, "style.css points at no files; nothing to check").toBeGreaterThan(0);
+    for (const file of new Set(files)) {
+      const res = await fetch(new URL(file, baseUrl));
+      expect(res.status, `style.css points at ${file}, which doesn't load`).toBe(200);
+    }
   });
 });
