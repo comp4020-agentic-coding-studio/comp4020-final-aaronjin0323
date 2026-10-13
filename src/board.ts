@@ -1,4 +1,4 @@
-import { isDormant, N, type Tile } from "./db.ts";
+import { DORMANT_AFTER_MS, isDormant, N, type Tile } from "./db.ts";
 import { escapeHtml, page } from "./html.ts";
 
 // Notices are chosen from this fixed set by key; nothing from the query
@@ -33,6 +33,11 @@ export type TileView = {
   label: string | null;
   initials: string;
   aria: string;
+  // When a held tile stops being safe (ISO, server time): its holder's last
+  // visit plus a day. Null for a free tile, your own (you're here, so it's
+  // always safe) and a dormant one (already open). A time, not a countdown,
+  // so the page can count down without the server sending every second.
+  safeUntil: string | null;
 };
 
 export type BoardView = { tiles: TileView[]; claimed: number; status: string };
@@ -74,7 +79,16 @@ export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
     if (tile.claimerId === null) {
-      return { id: tile.id, state: "free", height: 0, hue: null, label: null, initials: "", aria: `${where}, free` };
+      return {
+        id: tile.id,
+        state: "free",
+        height: 0,
+        hue: null,
+        label: null,
+        initials: "",
+        aria: `${where}, free`,
+        safeUntil: null,
+      };
     }
     const label = tile.label ?? "";
     const h = hs[tile.id];
@@ -93,6 +107,10 @@ export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
       label,
       initials: initials(label),
       aria: `${where}, ${who}, height ${h}`,
+      safeUntil:
+        state === "held" && tile.lastSeenAt !== null
+          ? new Date(new Date(tile.lastSeenAt).getTime() + DORMANT_AFTER_MS).toISOString()
+          : null,
     };
   });
 
@@ -107,7 +125,8 @@ export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
 function tileButton(t: TileView): string {
   const style = t.hue === null ? `--h:${t.height}` : `--h:${t.height};--hue:${t.hue}`;
   const title = t.label === null ? "" : ` title="${escapeHtml(t.label)}"`;
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}" style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span></button>`;
+  const safe = t.safeUntil === null ? "" : ` data-safe-until="${t.safeUntil}"`;
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${safe} style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span></button>`;
 }
 
 export function renderBoard(
