@@ -7,12 +7,24 @@
    sets live text. The wordmark is Pricedown Black by Typodermic Fonts,
    converted to outlines as one fixed image (public/art/logo.svg): its free
    licence allows that, but not a web font, nor the font file in a public
-   repo. */
+   repo.
+
+   Passion One comes in two weights here, and every rule that uses it names
+   one. Black (900) is for big type and buttons. Regular (400) is for small
+   outlined type: Black's 0, 6, 8 and 9 have holes a pixel wide at that
+   size, which an outline fills, and the claimed count read as a blob. */
 
 @font-face {
   font-family: "Passion One";
   src: url("/fonts/PassionOne-Black.ttf") format("truetype");
   font-weight: 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Passion One";
+  src: url("/fonts/PassionOne-Regular.ttf") format("truetype");
+  font-weight: 400;
   font-display: swap;
 }
 
@@ -148,15 +160,17 @@ main {
   font-size: 0.95rem;
 }
 
-/* The claimed count is the HUD's cash counter. */
+/* The claimed count is the HUD's cash counter. Small outlined type takes a
+   thin outline and a hard shadow: a thick outline fills the digits' holes. */
 [data-claimed] {
   font-family: var(--display);
+  font-weight: 400;
   font-size: 1.45em;
   line-height: 1;
   color: var(--money);
-  -webkit-text-stroke: 4px var(--line);
+  -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
-  text-shadow: none;
+  text-shadow: 2px 2px 0 var(--line);
 }
 
 /* Wide screens: wordmark on the left, text beside it, and the wordmark
@@ -205,12 +219,14 @@ main {
 
 .controls label {
   font-family: var(--display);
+  font-weight: 400;
   font-size: 1.3rem;
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  -webkit-text-stroke: 4px var(--line);
+  -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
 }
 
 .controls input {
@@ -259,12 +275,14 @@ body.is-offline .meta::after {
 /* Notices are mission text: big, outlined, in the game's gold. */
 .notice {
   font-family: var(--display);
+  font-weight: 400;
   font-size: 1.35rem;
   line-height: 1.15;
   letter-spacing: 0.01em;
   color: var(--accent);
-  -webkit-text-stroke: 4px var(--line);
+  -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
 }
 
 /* a visitor back after being displaced can arrive with a second notice */
@@ -500,6 +518,7 @@ body.is-offline .meta::after {
   left: 50%;
   top: 50%;
   font-family: var(--display);
+  font-weight: 900;
   font-size: clamp(1rem, 2.2vw, 1.45rem);
   line-height: 1;
   white-space: nowrap;
@@ -603,6 +622,7 @@ body.is-offline .meta::after {
 /* Chunky game-menu buttons, on a hard shadow they press down into. */
 .camera button {
   font-family: var(--display);
+  font-weight: 900;
   font-size: 0.95rem;
   line-height: 1;
   letter-spacing: 0.03em;
@@ -674,6 +694,7 @@ body.is-offline .meta::after {
 
 .confirm button {
   font-family: var(--display);
+  font-weight: 900;
   font-size: 1.2rem;
   line-height: 1;
   letter-spacing: 0.02em;
