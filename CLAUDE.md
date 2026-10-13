@@ -342,6 +342,15 @@ these tools, not tied to any one prototype's content.
 - **`toContain` on a string is a substring check, and it makes a regression
   test toothless.** Assert the *shape* you actually care about (a regex, a
   parsed DOM query) and prove it fails both ways.
+- **Any CSS rule that sets `display` overrides the `hidden` attribute.** The
+  browser's own `[hidden] { display: none }` has the lowest priority, so a
+  `.confirm { display: flex }` keeps a "hidden" bar on screen. Keep a global
+  `[hidden] { display: none !important }`, and check visibility in the
+  browser, not by reading `el.hidden`.
+- **In 3D a tall block can hide a shorter one behind it from the click.**
+  A browser test that clicks a tile has to check what `elementFromPoint` hits
+  at the tile's centre, and turn the camera when it's covered, the way a
+  player would.
 - **Two single-class CSS rules have equal specificity, so the later one wins
   silently.** When a class is meant for one context, scope it to that context
   (`.actor .fig`) rather than relying on where it happens to sit in the file.

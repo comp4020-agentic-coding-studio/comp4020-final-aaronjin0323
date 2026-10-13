@@ -31,6 +31,12 @@
   box-sizing: border-box;
 }
 
+/* Any rule that sets `display` beats the browser's own [hidden] style, so
+   an element the script hides would stay on screen. This wins over all. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -175,6 +181,7 @@ body.is-offline .meta::after {
   background: var(--free-top);
   color: #1b1b1b;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent; /* the selection outline says it */
   transform-style: preserve-3d;
   transform: translateZ(calc(var(--h) * var(--unit)));
   transition: transform 220ms ease-out, background-color 150ms;
@@ -364,6 +371,70 @@ body.is-offline .meta::after {
 .camera-hint {
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+/* --- phones: the bar that confirms a tapped tile --- */
+
+.tile.is-selected {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  z-index: 1;
+}
+
+.confirm {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  border-top: 2px solid var(--board-edge);
+  box-shadow: 0 -4px 16px rgb(0 0 0 / 0.12);
+}
+
+.confirm span:empty {
+  display: none;
+}
+
+.confirm span {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
+.confirm button {
+  font: inherit;
+  min-height: 48px; /* a comfortable thumb */
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.confirm-claim {
+  flex: 1;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.confirm-cancel {
+  border: 2px solid var(--muted);
+  background: transparent;
+  color: inherit;
+}
+
+.confirm button:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* leave room so the bar never covers the bottom rows of the board */
+body:has(.confirm:not([hidden])) main {
+  padding-bottom: 6rem;
 }
 
 /* a touch-only screen has no keyboard to describe */

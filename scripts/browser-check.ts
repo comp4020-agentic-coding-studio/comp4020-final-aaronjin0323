@@ -175,7 +175,35 @@ async function viewports(browser: Browser): Promise<void> {
   }
 }
 
-const SECTIONS = { realtime, dormant, keyboard, noScript, viewports };
+async function phone(browser: Browser): Promise<void> {
+  console.log("\n— phone: tap to select, then confirm —");
+  const page = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  const cell = await freeTile(page);
+  await page.fill("#label", "Thumb");
+  const tile = page.locator(`button.tile[value="${cell}"]`);
+  await tile.tap();
+  check((await tile.getAttribute("data-state")) === "free", "the first tap doesn't claim");
+  check(await page.locator(".confirm").isVisible(), "it shows the confirm bar");
+  const label = (await page.textContent(".confirm-claim")) ?? "";
+  check(/^Claim row \d+, column \d+$/.test(label), "the bar names the tile", label);
+  const box = await page.locator(".confirm-claim").boundingBox();
+  check((box?.height ?? 0) >= 44, "its button is a comfortable tap", `${Math.round(box?.height ?? 0)}px tall`);
+  await page.screenshot({ path: ".shots/phone-confirm.png" });
+  await page.locator(".confirm-claim").tap();
+  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
+  check((await tile.getAttribute("data-state")) === "mine", "confirming claims it");
+  check(!(await page.locator(".confirm").isVisible()), "and the bar goes away");
+
+  // Cancel leaves everything as it was.
+  const other = await freeTile(page);
+  await page.locator(`button.tile[value="${other}"]`).tap();
+  await page.locator(".confirm-cancel").tap();
+  check(!(await page.locator(".confirm").isVisible()), "Cancel closes the bar");
+  check((await page.getAttribute(`button.tile[value="${other}"]`, "data-state")) === "free", "and claims nothing");
+  await page.context().close();
+}
+
+const SECTIONS = { realtime, dormant, keyboard, noScript, phone, viewports };
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {

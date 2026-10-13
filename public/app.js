@@ -224,6 +224,7 @@ if (board && stage) {
 
   const applyBoard = (view) => {
     view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t));
+    if (selected) select(selected); // re-read its state: someone may have taken it
     if (claimedCount) claimedCount.textContent = String(view.claimed);
     if (status) status.textContent = view.status;
     // The tile in the tab order follows yours when you get one.
@@ -268,9 +269,63 @@ if (board && stage) {
   let posting = false;
   let fallback = false; // set just before handing a post back to the browser
 
+  // --- phones: tap to select, then confirm ---
+  // A tile on a phone is about 27px across, under a comfortable tap, so a
+  // first tap only selects it and a full-width bar names it and claims it.
+  // Mouse and keyboard keep claiming directly. Only the first tap is
+  // intercepted; the bar's button is an ordinary submitter for the tile.
+  const touch = matchMedia("(hover: none) and (pointer: coarse)");
+  const confirmBar = document.createElement("div");
+  confirmBar.className = "confirm";
+  confirmBar.hidden = true;
+  const confirmText = document.createElement("span");
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "submit";
+  confirmButton.name = "cellId";
+  confirmButton.className = "confirm-claim";
+  const confirmCancel = document.createElement("button");
+  confirmCancel.type = "button";
+  confirmCancel.className = "confirm-cancel";
+  confirmCancel.textContent = "Cancel";
+  confirmBar.append(confirmText, confirmButton, confirmCancel);
+  form?.append(confirmBar);
+
+  let selected = null;
+  const select = (tile) => {
+    selected?.classList.remove("is-selected");
+    selected = tile;
+    if (!tile) {
+      confirmBar.hidden = true;
+      return;
+    }
+    tile.classList.add("is-selected");
+    const where = tile.getAttribute("aria-label").split(",").slice(0, 2).join(",");
+    const verb = tile.dataset.state === "dormant" ? "Settle on" : tile.dataset.state === "mine" ? "Rename at" : "Claim";
+    confirmText.textContent = tile.dataset.state === "held" ? `${where} is held` : "";
+    confirmButton.textContent = `${verb} ${where.toLowerCase()}`;
+    confirmButton.value = tile.value;
+    confirmButton.hidden = tile.dataset.state === "held";
+    confirmBar.hidden = false;
+  };
+  confirmCancel.addEventListener("click", () => select(null));
+
+  form?.addEventListener(
+    "click",
+    (e) => {
+      const tile = e.target instanceof Element ? e.target.closest("button.tile") : null;
+      if (!tile || !touch.matches || e.detail === 0) return; // detail 0: keyboard Enter
+      e.preventDefault(); // the first tap selects; it never submits
+      select(tile === selected ? null : tile);
+    },
+    true,
+  );
+
   form?.addEventListener("submit", async (e) => {
     const submitter = e.submitter;
-    if (!(submitter instanceof HTMLButtonElement) || !submitter.classList.contains("tile")) return;
+    const isClaim =
+      submitter instanceof HTMLButtonElement &&
+      (submitter.classList.contains("tile") || submitter === confirmButton);
+    if (!isClaim) return;
     if (fallback) return; // the real form post: let it through
     e.preventDefault();
     if (posting) return;
@@ -289,6 +344,7 @@ if (board && stage) {
       const body = await res.json();
       if (res.ok) {
         applyBoard(body.board);
+        select(null);
         showNotice("claimed", MESSAGES.claimed);
       } else {
         showNotice(body.error, MESSAGES[body.error] ?? "That didn't work. Try again.");
