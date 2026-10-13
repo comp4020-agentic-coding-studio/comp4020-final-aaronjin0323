@@ -184,6 +184,8 @@ async function hitTesting(browser: Browser): Promise<void> {
     const out: string[] = [];
     for (const el of document.querySelectorAll<HTMLButtonElement>("button.tile")) {
       if (el.dataset.state !== "free") continue;
+      // Off screen, elementFromPoint finds nothing: scroll to it, as a player would.
+      el.scrollIntoView({ block: "center", behavior: "instant" });
       const r = el.getBoundingClientRect();
       const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       const tile = hit?.closest("button.tile");
@@ -357,7 +359,194 @@ async function effects(browser: Browser): Promise<void> {
   for (const p of [mia, kai, me]) await p.context().close();
 }
 
-const SECTIONS = { realtime, dormant, keyboard, noScript, effects, phone, hitTesting, viewports };
+// The tile's data-* hooks, as a short string for a check's detail.
+const hooks = (page: Page, cell: number): Promise<Record<string, string | undefined>> =>
+  page.$eval(`button.tile[value="${cell}"]`, (el) => ({ ...(el as HTMLElement).dataset }));
+// Whether an element is really on screen: [hidden] can lose to a display rule.
+const shown = (page: Page, sel: string): Promise<boolean> =>
+  page.$eval(sel, (el) => getComputedStyle(el).display !== "none").catch(() => false);
+
+async function preview(browser: Browser): Promise<void> {
+  console.log("\n— preview and inspector, by mouse and keyboard —");
+  const mia = await fresh(browser);
+  const me = await fresh(browser);
+  await me.waitForTimeout(400);
+  const centre = await openPatch(me);
+  const left = centre - 1;
+  await claimAs(mia, "Mia", left);
+  await me.waitForSelector(`button.tile[value="${left}"][data-state="held"]`, { timeout: 3000 });
+  check((await me.getAttribute("[data-conn]", "data-conn")) === "live", "the connection line says live");
+
+  // Hover a free tile beside Mia: it previews its height and Mia's rise.
+  const before = await me.$$eval("button.tile", (els) => els.map((e) => `${(e as HTMLElement).dataset.state}:${(e as HTMLElement).dataset.height}`).join());
+  while (!(await reachable(me, centre))) {
+    await me.click("text=Turn left");
+    await me.waitForTimeout(350);
+  }
+  await me.hover(`button.tile[value="${centre}"]`);
+  const target = await hooks(me, centre);
+  check(target.preview === "target" && target.previewHeight === "1", "hovering a free tile previews its height", JSON.stringify(target));
+  check((await hooks(me, left)).preview === "lift", "and marks the neighbour it would lift");
+  check(
+    (await me.$$eval("[data-preview]", (els) => els.length)) === 2,
+    "and nothing else",
+    `${await me.$$eval("[data-preview]", (els) => els.map((e) => (e as HTMLButtonElement).value).join())}`,
+  );
+  const facts = (await me.textContent("[data-inspect]").catch(() => "")) ?? "";
+  check((await shown(me, "[data-inspect]")) && /If you settle here/.test(facts), "the inspector says what settling would do", facts.replace(/\s+/g, " ").trim());
+  await me.locator("[data-stage]").screenshot({ path: ".shots/preview-hover.png" });
+  const after = await me.$$eval("button.tile", (els) => els.map((e) => `${(e as HTMLElement).dataset.state}:${(e as HTMLElement).dataset.height}`).join());
+  check(after === before, "previewing changes no real state");
+
+  // Hover Mia's tile: who holds it and how long it's safe.
+  if (await reachable(me, left)) {
+    await me.hover(`button.tile[value="${left}"]`);
+    const info = ((await me.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
+    check(/Mia/.test(info) && /safe for \d+ h \d+ m/.test(info), "hovering a held tile shows its holder and protection left", info.trim());
+  }
+
+  // Moving the mouse off the board clears it all.
+  await me.mouse.move(2, 2);
+  check((await me.$$eval("[data-preview]", (els) => els.length)) === 0, "leaving the board clears the preview");
+  check(!(await shown(me, "[data-inspect]")), "and hides the inspector");
+
+  // Keyboard alone reaches the same information.
+  await me.press("#label", "Enter"); // lands on the board
+  // A key press makes the focus keyboard-visible. Step away and back; at a
+  // board edge one order can't move, so try the other.
+  for (const [away, back] of [["ArrowLeft", "ArrowRight"], ["ArrowRight", "ArrowLeft"]]) {
+    await me.evaluate((c) => (document.querySelector(`button.tile[value="${c}"]`) as HTMLElement).focus(), String(left));
+    await me.keyboard.press(away);
+    await me.keyboard.press(back);
+    if ((await me.evaluate(() => (document.activeElement as HTMLButtonElement).value)) === String(left)) break;
+  }
+  const keyed = await me.evaluate(() => (document.activeElement as HTMLButtonElement).value);
+  const keyInfo = ((await me.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
+  check(keyed === String(left) && /Mia/.test(keyInfo), "the keyboard reaches the inspector", `focused ${keyed}: ${keyInfo.trim()}`);
+  const describedBy = await me.evaluate(() => document.activeElement?.getAttribute("aria-describedby") ?? "");
+  check(describedBy !== "" && (await me.$(`#${describedBy}[data-inspect]`)) !== null, "and the focused tile is described by it", describedBy);
+  await me.keyboard.press("Tab"); // off the board
+  await me.waitForTimeout(50);
+  check(!(await shown(me, "[data-inspect]")), "leaving the board by keyboard hides it");
+
+  await mia.context().close();
+  await me.context().close();
+}
+
+async function claiming(browser: Browser): Promise<void> {
+  console.log("\n— a claim in flight —");
+  const page = await fresh(browser);
+  const watcher = await fresh(browser);
+  await page.waitForTimeout(400);
+  const cell = Number(await freeTile(page));
+  await page.fill("#label", "Slow");
+
+  // The claim reaches the server, but its reply is held back: the stream
+  // shows the new board first, and the page must still not say "claimed"
+  // until the reply confirms it. Every post is counted.
+  let posts = 0;
+  let release = (): void => {};
+  await page.route("**/claim", async (route) => {
+    posts++;
+    const reply = await route.fetch();
+    await new Promise<void>((done) => (release = done));
+    await route.fulfill({ response: reply });
+  });
+  const fresh1 = watcher.waitForSelector(`button.tile[value="${cell}"][data-fresh]`, { timeout: 4000 }).catch(() => null);
+  while (!(await reachable(page, cell))) {
+    await page.click("text=Turn left");
+    await page.waitForTimeout(350);
+  }
+  await page.click(`button.tile[value="${cell}"]`);
+  await page.waitForTimeout(100);
+  check((await hooks(page, cell)).pending === "", "the tile shows pending while the claim runs");
+  await page.click(`button.tile[value="${cell}"]`);
+  await page.focus(`button.tile[value="${cell}"]`);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  check(posts === 1, "a second click or Enter while pending posts nothing", `${posts} post(s)`);
+  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
+  check(
+    (await page.locator('[data-notice="claimed"]').count()) === 0 && !/Claimed/.test((await page.textContent("[data-announce]")) ?? ""),
+    "the stream showing it first doesn't announce success before the reply",
+  );
+  check((await hooks(page, cell)).pending === "", "and it stays pending until the reply");
+  release();
+  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
+  await page.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 3000 }).catch(() => null);
+  check((await hooks(page, cell)).pending === undefined, "and pending clears when it answers");
+  const said = (await page.textContent('[data-notice="claimed"]').catch(() => "")) ?? "";
+  check(/^Claimed row \d+, column \d+\./.test(said), "success says what was claimed", said);
+  await page.waitForTimeout(100);
+  const spoken = (await page.textContent("[data-announce]")) ?? "";
+  check(spoken === said, "and it's announced to screen readers", spoken);
+
+  // Someone else's claim is marked on the watcher's board, briefly.
+  check((await fresh1) !== null, "another page marks the fresh claim");
+  await watcher.waitForTimeout(2300);
+  check((await hooks(watcher, cell)).fresh === undefined, "and the mark goes after about two seconds");
+  check(
+    await watcher.evaluate(() => !document.activeElement || !document.activeElement.classList.contains("tile")),
+    "without taking the watcher's focus",
+  );
+  await page.unroute("**/claim");
+
+  // Failures say why, and never show a claim as made.
+  const other = Number(await freeTile(page));
+  for (const [what, handler, pattern] of [
+    ["the network failing", (r: import("playwright-core").Route) => r.abort("internetdisconnected"), /Couldn't reach the server/],
+    ["a 403", (r: import("playwright-core").Route) => r.fulfill({ status: 403, body: "Cross-site claim refused" }), /refused a claim/],
+    ["a 409", (r: import("playwright-core").Route) => r.fulfill({ status: 409, contentType: "application/json", body: '{"error":"taken"}' }), /got there first/],
+    ["a 400", (r: import("playwright-core").Route) => r.fulfill({ status: 400, contentType: "application/json", body: '{"error":"label"}' }), /1 to 24 characters/],
+  ] as const) {
+    await page.route("**/claim", handler);
+    await clickTile(page, other);
+    await page.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 3000 }).catch(() => null);
+    const text = (await page.textContent("[data-notices]")) ?? "";
+    check(pattern.test(text), `${what} is explained`, text);
+    check((await hooks(page, other)).state === "free", `and after ${what} the tile isn't shown as mine`);
+    await page.unroute("**/claim");
+  }
+
+  // Space claims a focused tile too.
+  const spaced = Number(await freeTile(page));
+  await page.press("#label", "Enter");
+  await page.evaluate((c) => (document.querySelector(`button.tile[value="${c}"]`) as HTMLElement).focus(), String(spaced));
+  await page.keyboard.press("Space");
+  await page.waitForSelector(`button.tile[value="${spaced}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
+  check((await hooks(page, spaced)).state === "mine", "Space claims the focused tile");
+
+  await page.context().close();
+  await watcher.context().close();
+}
+
+async function touchInspect(browser: Browser): Promise<void> {
+  console.log("\n— phone: tap to inspect and preview —");
+  const ana = await fresh(browser);
+  const page = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await page.waitForTimeout(400);
+  const centre = await openPatch(page);
+  await claimAs(ana, "Ana", centre - 1);
+  await page.waitForSelector(`button.tile[value="${centre - 1}"][data-state="held"]`, { timeout: 3000 });
+
+  await page.locator(`button.tile[value="${centre}"]`).tap();
+  const t = await hooks(page, centre);
+  check(t.selected === "" && t.preview === "target", "tapping a free tile selects and previews it", JSON.stringify(t));
+  check((await hooks(page, centre - 1)).preview === "lift", "and marks whom it would lift");
+  await page.screenshot({ path: ".shots/phone-preview.png" });
+
+  await page.locator(`button.tile[value="${centre - 1}"]`).tap();
+  const info = ((await page.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
+  check((await shown(page, "[data-inspect]")) && /Ana/.test(info) && /safe for/.test(info), "tapping a held tile inspects it", info.trim());
+  check((await page.$$eval("[data-preview]", (els) => els.length)) === 0, "and a held tile previews nothing");
+  await page.locator(".confirm-cancel").tap();
+  check((await page.$$eval("[data-selected], [data-preview]", (els) => els.length)) === 0, "Cancel clears the selection and preview");
+  check(!(await shown(page, "[data-inspect]")), "and the inspector");
+  await ana.context().close();
+  await page.context().close();
+}
+
+const SECTIONS = { realtime, dormant, keyboard, noScript, effects, phone, preview, claiming, touchInspect, hitTesting, viewports };
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {

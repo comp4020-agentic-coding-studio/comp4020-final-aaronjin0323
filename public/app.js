@@ -1,4 +1,4 @@
-import { describeTile, diffBoards } from "./diff.js";
+import { accepts, arrivals, describeTile, diffBoards, inspect, preview } from "./diff.js";
 
 // Everything the board does beyond plain HTML. Without this script the board
 // sits at a fixed angle, every claim is a form post and a reload, and other
@@ -222,6 +222,8 @@ if (board && stage) {
     else el.title = t.label;
     const initials = el.querySelector(".initials");
     if (initials && initials.textContent !== t.initials) initials.textContent = t.initials;
+    if (t.safeUntil) el.dataset.safeUntil = t.safeUntil;
+    else delete el.dataset.safeUntil;
   };
 
   // The board the page currently shows, read from the server-rendered HTML,
@@ -234,9 +236,135 @@ if (board && stage) {
       height: Number(el.dataset.height),
       label: el.dataset.state === "free" ? null : el.title,
       hue: el.style.getPropertyValue("--hue") === "" ? null : Number(el.style.getPropertyValue("--hue")),
+      safeUntil: el.dataset.safeUntil ?? null,
     })),
   });
   let shown = readBoard();
+
+  // --- what a tile is, and what claiming it would do ---
+  // One tile at a time is "looked at": the one under the mouse, else the one
+  // with keyboard focus, else the one tapped on a phone. It gets the preview
+  // (its height if you settled there, and whose tiles would rise or drop) and
+  // the inspector. Only data-* attributes change: the board itself doesn't.
+  const inspector = document.querySelector("[data-inspect]");
+  const inspectTitle = inspector?.querySelector("[data-inspect-title]");
+  const inspectFacts = inspector?.querySelector("[data-inspect-facts]");
+  if (inspector && !inspector.id) inspector.id = "inspect";
+  const announcer = document.querySelector("[data-announce]");
+  let hovered = null;
+  let looked = null; // tile id currently previewed and inspected
+
+  const clearPreview = () => {
+    for (const el of board.querySelectorAll("[data-preview]")) {
+      delete el.dataset.preview;
+      delete el.dataset.previewHeight;
+    }
+  };
+  const showPreview = (id) => {
+    clearPreview();
+    const p = id === null ? null : preview(shown, id);
+    if (!p) return;
+    tiles[id].dataset.preview = "target";
+    tiles[id].dataset.previewHeight = String(p.height);
+    for (const n of p.lifted) tiles[n].dataset.preview = "lift";
+    for (const n of p.dropped) tiles[n].dataset.preview = "drop";
+  };
+  const showInspect = (id) => {
+    if (!inspector) return;
+    const info = id === null ? null : inspect(shown, id, new Date());
+    if (!info) {
+      inspector.hidden = true;
+      return;
+    }
+    if (inspectTitle) inspectTitle.textContent = info.title;
+    if (inspectFacts) {
+      inspectFacts.replaceChildren(
+        ...info.facts.flatMap(([term, value]) => {
+          const dt = document.createElement("dt");
+          dt.textContent = term;
+          const dd = document.createElement("dd");
+          dd.textContent = value;
+          return [dt, dd];
+        }),
+      );
+    }
+    inspector.hidden = false;
+  };
+  // Keyboard focus only: a tile focused by a mouse click isn't "looked at"
+  // once the pointer leaves it.
+  const focusedTile = () => {
+    const el = document.activeElement;
+    return tiles.includes(el) && el.matches(":focus-visible") ? el : null;
+  };
+  // Re-picks the tile being looked at and redraws its preview and inspector:
+  // after a hover, focus or selection change, and after every new board.
+  const look = () => {
+    const el = hovered ?? focusedTile() ?? selected;
+    looked = el ? Number(el.value) : null;
+    showPreview(looked);
+    showInspect(looked);
+    // A screen reader hears the inspector as the focused tile's description.
+    const focused = tiles.includes(document.activeElement) ? document.activeElement : null;
+    for (const t of tiles) {
+      if (inspector && t === focused && looked === Number(t.value) && !inspector.hidden) t.setAttribute("aria-describedby", inspector.id);
+      else if (t.hasAttribute("aria-describedby")) t.removeAttribute("aria-describedby");
+    }
+  };
+
+  board.addEventListener("pointerover", (e) => {
+    if (e.pointerType === "touch") return; // a tap selects instead
+    const tile = e.target instanceof Element ? e.target.closest("button.tile") : null;
+    if (tile && tile !== hovered) {
+      hovered = tile;
+      look();
+    }
+  });
+  board.addEventListener("pointerout", (e) => {
+    if (!hovered || e.pointerType === "touch") return;
+    const to = e.relatedTarget instanceof Element ? e.relatedTarget.closest("button.tile") : null;
+    if (to === hovered) return;
+    hovered = to;
+    look();
+  });
+  // A keyboard move takes over from a mouse resting on the board.
+  board.addEventListener("focusin", () => {
+    if (focusedTile()) hovered = null;
+    look();
+  });
+  // Focus leaving the board: wait until it has landed, so moving between
+  // tiles doesn't flash the inspector shut.
+  board.addEventListener("focusout", () => setTimeout(look, 0));
+
+  // The protection countdown ticks while it's on screen.
+  setInterval(() => {
+    if (looked !== null && inspector && !inspector.hidden) showInspect(looked);
+  }, 15_000);
+
+  // Read out through the one polite live region, so a screen reader hears
+  // each claim's result once. Cleared first, so the same words twice in a
+  // row are still read.
+  const announce = (text) => {
+    if (!announcer) return;
+    announcer.textContent = "";
+    requestAnimationFrame(() => {
+      announcer.textContent = text;
+    });
+  };
+
+  // A tile someone else just claimed is marked for a moment, so a claim
+  // across the board catches the eye without taking focus.
+  const freshTimers = new Map();
+  const markFresh = (id) => {
+    clearTimeout(freshTimers.get(id));
+    tiles[id].dataset.fresh = "";
+    freshTimers.set(
+      id,
+      setTimeout(() => {
+        delete tiles[id].dataset.fresh;
+        freshTimers.delete(id);
+      }, 2000),
+    );
+  };
 
   // A "+1" or "−1" that floats up off a tile whose height just changed. It
   // sits inside the tile, so it moves with the camera and the block.
@@ -254,9 +382,12 @@ if (board && stage) {
   // Every board, from the stream or from a claim's own response, comes
   // through here. A board no newer than the one shown is dropped, so the
   // same change arriving twice is shown, and narrated, once.
-  const applyBoard = (view) => {
-    if (view.version <= shown.version) return;
+  // `streamVersion` is passed only for the first board on a reopened stream
+  // (see accepts() in diff.js: it lets a restarted server's board through).
+  const applyBoard = (view, { streamVersion = null } = {}) => {
+    if (!accepts(shown.version, view.version, streamVersion)) return;
     const { rises, messages } = diffBoards(shown, view);
+    const fresh = arrivals(shown, view);
     shown = view;
 
     view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t));
@@ -268,15 +399,28 @@ if (board && stage) {
     if (mine >= 0 && !tiles.includes(document.activeElement)) moveTo(mine, false);
 
     for (const { id, delta } of rises) float(id, delta);
-    if (messages.length) showNotice(messages[0].key, messages.map((m) => m.text).join(" "));
+    for (const id of fresh) markFresh(id);
+    look(); // the preview and inspector follow the new board
+    if (messages.length) {
+      const text = messages.map((m) => m.text).join(" ");
+      // My own claim is shown and read out when the server's reply confirms
+      // it (see the submit handler), even if the stream brought it first.
+      // (A claim from another tab of mine has no reply here: shown now.)
+      if (messages[0].key === "claimed" && pending) claimText = text;
+      else showNotice(messages[0].key, text);
+    }
   };
+  let claimText = null; // my last claim's narration, waiting for its reply
 
-  const showNotice = (key, text) => {
+  // A notice is shown, and read out once: through the page's one live region
+  // when it has one, else as its own status element.
+  const showNotice = (key, text, { speak = true } = {}) => {
+    if (speak) announce(text);
     if (!notices) return;
     const p = document.createElement("p");
     p.className = "notice";
     p.dataset.notice = key;
-    p.setAttribute("role", "status");
+    if (!announcer) p.setAttribute("role", "status");
     p.textContent = text;
     notices.replaceChildren(p);
   };
@@ -285,29 +429,57 @@ if (board && stage) {
   // post) is shown once; drop it from the address so a reload doesn't repeat it.
   if (location.search.includes("notice=")) history.replaceState(null, "", location.pathname);
 
+  // --- the connection ---
+  // On a drop the browser reconnects by itself (the server sets retry), and
+  // the first event after reconnecting is the full board, so nothing is
+  // missed. The line says whether what's on screen is live.
+  const conn = document.querySelector("[data-conn]");
+  const CONN_TEXT = { live: "Live", reconnecting: "Reconnecting…", offline: "Offline: the board may be out of date" };
+  const setConn = (state) => {
+    if (!conn) return;
+    if (conn.dataset.conn !== state) conn.dataset.conn = state;
+    conn.textContent = CONN_TEXT[state];
+  };
   if ("EventSource" in window) {
     const events = new EventSource("/events");
-    events.addEventListener("board", (e) => applyBoard(JSON.parse(e.data)));
-    // On a drop the browser reconnects by itself (the server sets retry), and
-    // the first event after reconnecting is the full board, so nothing is
-    // missed. The marker below only says whether we're currently live.
-    events.addEventListener("open", () => document.body.classList.remove("is-offline"));
-    events.addEventListener("error", () => document.body.classList.add("is-offline"));
-  }
+    let streamVersion = null; // the last version this stream delivered
+    let reopened = false; // the next board is the first since a drop
+    events.addEventListener("board", (e) => {
+      const view = JSON.parse(e.data);
+      applyBoard(view, { streamVersion: reopened ? streamVersion : null });
+      streamVersion = view.version;
+      reopened = false;
+      setConn("live");
+    });
+    events.addEventListener("open", () => setConn("live"));
+    events.addEventListener("error", () => {
+      reopened = true;
+      // CONNECTING: the browser is retrying by itself. CLOSED: it gave up
+      // (the server answered with an error), and only a reload helps.
+      setConn(events.readyState === EventSource.CLOSED ? "offline" : "reconnecting");
+    });
+    addEventListener("offline", () => setConn("offline"));
+    addEventListener("online", () => events.readyState !== EventSource.OPEN && setConn("reconnecting"));
+  } else setConn("offline");
 
   // --- claiming in place ---
   // With script the form posts through fetch: no reload, so the camera and
-  // focus stay put. The server answers with the board as you now see it. Any
-  // failure to reach it falls back to a real form post.
-  // Failures only: a successful claim is narrated by applyBoard, from what
-  // actually changed.
+  // focus stay put. The server answers with the board as you now see it.
+  // While a claim is in flight its tile is marked pending and every other
+  // claim is ignored, so a double click or a held Enter posts once. Nothing
+  // says "claimed" until the server's reply does: the stream may show the
+  // board first, but the words wait for the reply.
   const MESSAGES = {
     taken: "Someone got there first. Pick another tile.",
     label: "Names are 1 to 24 characters.",
     cell: "That tile doesn't exist.",
   };
-  let posting = false;
-  let fallback = false; // set just before handing a post back to the browser
+  const STATUS_MESSAGES = {
+    403: "The server refused a claim from this page. Reload and try again.",
+    409: MESSAGES.taken,
+    413: "That claim was too large to send.",
+  };
+  let pending = null; // the tile whose claim is in flight
 
   // --- phones: tap to select, then confirm ---
   // A tile on a phone is about 27px across, under a comfortable tap, so a
@@ -333,13 +505,18 @@ if (board && stage) {
 
   let selected = null;
   const select = (tile) => {
-    selected?.classList.remove("is-selected");
+    if (selected !== tile) {
+      selected?.classList.remove("is-selected");
+      if (selected) delete selected.dataset.selected;
+    }
     selected = tile;
     if (!tile) {
       confirmBar.hidden = true;
+      look();
       return;
     }
     tile.classList.add("is-selected");
+    tile.dataset.selected = "";
     // On a phone this bar is the only place to learn who holds a tile, and
     // whom you'd lift by settling there.
     const { title, action, open } = describeTile(shown, Number(tile.value));
@@ -348,6 +525,7 @@ if (board && stage) {
     confirmButton.value = tile.value;
     confirmButton.hidden = !open;
     confirmBar.hidden = false;
+    look();
   };
   confirmCancel.addEventListener("click", () => select(null));
 
@@ -368,42 +546,57 @@ if (board && stage) {
       submitter instanceof HTMLButtonElement &&
       (submitter.classList.contains("tile") || submitter === confirmButton);
     if (!isClaim) return;
-    if (fallback) return; // the real form post: let it through
     e.preventDefault();
-    if (posting) return;
+    if (pending) return; // one claim at a time: a second click or Enter does nothing
     if (!nameField.value.trim()) {
       showNotice("label", "Type a name first, then pick a tile.");
       nameField.focus();
       return;
     }
+    const id = Number(submitter.value);
     // Already held as shown: name the holder rather than post a claim that can
     // only lose, whose reply ("someone got there first") would read as a race.
-    const target = describeTile(shown, Number(submitter.value));
+    const target = describeTile(shown, id);
     if (!target.open) {
       showNotice("held", `${target.title}. Pick a free or faded tile.`);
       return;
     }
-    posting = true;
+    pending = tiles[id];
+    pending.dataset.pending = "";
+    pending.setAttribute("aria-busy", "true");
+    confirmButton.disabled = true;
+    claimText = null;
     try {
-      const res = await fetch("/claim", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-        body: new URLSearchParams({ cellId: submitter.value, label: nameField.value }),
-      });
-      const body = await res.json();
-      if (res.ok) {
-        select(null);
-        applyBoard(body.board); // narrates the claim, unless the stream already did
-      } else {
-        showNotice(body.error, MESSAGES[body.error] ?? "That didn't work. Try again.");
+      let res;
+      try {
+        res = await fetch("/claim", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+          body: new URLSearchParams({ cellId: String(id), label: nameField.value }),
+        });
+      } catch {
+        // Never reached the server, so nothing is claimed, whatever the board
+        // shows. The stream will resync the board when it's back.
+        showNotice("network", "Couldn't reach the server, so nothing was claimed. Check your connection and try again.");
+        return;
       }
-    } catch {
-      // Offline or the server is restarting: hand it to the browser as a real
-      // form post, which reloads into whatever the server says.
-      fallback = true;
-      form.requestSubmit(submitter);
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.board) {
+        select(null);
+        applyBoard(body.board); // a no-op if the stream already brought it
+        // A rename on your own tile moves nobody, so the diff has no words.
+        const where = `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
+        showNotice("claimed", claimText ?? `Saved: you hold ${where} as ${body.label ?? nameField.value.trim()}.`);
+      } else {
+        const text = MESSAGES[body.error] ?? STATUS_MESSAGES[res.status] ?? `That didn't work (error ${res.status}). Try again.`;
+        showNotice(body.error ?? `http-${res.status}`, text);
+      }
     } finally {
-      posting = false;
+      delete pending.dataset.pending;
+      pending.removeAttribute("aria-busy");
+      pending = null;
+      claimText = null;
+      confirmButton.disabled = false;
     }
   });
 }
