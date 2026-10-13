@@ -168,6 +168,26 @@ whole point. So:
 - **The lede is three short sentences.** The rules people need while playing
   are on the tiles, the status line and the confirm bar, not in a paragraph.
 
+### The look
+
+- **Styled after a GTA title screen.** A framed sunset header over a
+  skyline with palms, flat colour with black outlines and hard shadows, and
+  the board as a city map at night: the gaps are roads, and every claimed
+  tile is a tower with one row of lit windows per floor, so a height reads
+  as a count of floors. A dormant tower is grey with its lights out. Each
+  person keeps their own hue; that was the one part of the old warm-paper
+  look worth keeping, since it's how you tell people apart.
+- **Pricedown is artwork, never a font.** The wordmark is Pricedown (the
+  GTA logo face) converted to outlines in `public/art/logo.svg`. Its free
+  licence (Typodermic's desktop EULA) allows fixed artwork and logos, and
+  forbids a web font or putting the font file anywhere public, so no
+  Pricedown file ever enters the repo, and new words in it are new
+  artwork, not new text. Live text uses Passion One under the SIL OFL,
+  with its licence beside it in `public/fonts/`.
+- **The skyline is drawn by a script.** `scripts/draw-skyline.ts` writes
+  `public/art/city.svg` from a fixed seed, so it's redrawn, never
+  hand-edited. The page shows it as a mask, so its colour is in the CSS.
+
 ## Build sketch
 
 Schema, one table:
@@ -238,8 +258,6 @@ and delete the line when one is settled.
   games for a few friends, single-workshop tools). Every claim in it needs a
   matching rule here or a check in `spec/`, and the README says which claims
   are tested and which are judged.
-- **Visual direction**: the current warm-paper palette with per-person hues
-  is a default, not a decision.
 - **The rest of the roadmap (weeks 11--12)**, from the same review:
   "N here now" (a count of open streams); a warning before a move ("moving
   will drop 3 neighbours"); a shared room score ("room skyline: 46 floors"),
@@ -428,6 +446,22 @@ these tools, not tied to any one prototype's content.
   screenshot is really wider and reports overflow that isn't there. Emulate
   the viewport through CDP (`Emulation.setDeviceMetricsOverride`, `mobile`
   on) and check `scrollWidth` against it.
+- **Playwright's `fullPage` screenshot turns an emulated phone into a mouse
+  device while it captures.** `(hover: none) and (pointer: coarse)` stops
+  matching, so the "phone" shot shows the desktop styles, and checking the
+  query before the capture passes anyway. Grow the viewport to the page's
+  height and take a normal screenshot, and prove it with a `change`
+  listener on the query that records any flip during the capture.
+- **A capture straight after a viewport resize can catch a half-drawn
+  page,** with its top tiled down the image. It looks like a layout bug
+  and isn't. Wait two `requestAnimationFrame`s after resizing.
+- **A free font download isn't necessarily free for the web.** Its licence
+  can cover desktop use and fixed artwork only (Pricedown's does): no web
+  font, no font file in a public repo. Read the licence before the file
+  goes anywhere near `public/`, convert text to outlines when only artwork
+  is allowed, and prefer SIL OFL faces for live text.
+- **A missing font or image fails silently,** as a fallback that still
+  looks like a page. Fetch every `url()` the stylesheet names in a test.
 - **`* { box-sizing: border-box }` doesn't reach `::before`/`::after`.** A
   pseudo-element given the same height and border as its neighbour comes out
   taller by the border. Set `box-sizing` on the pseudo-element itself, and
