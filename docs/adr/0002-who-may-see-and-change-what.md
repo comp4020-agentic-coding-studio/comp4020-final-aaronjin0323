@@ -30,7 +30,7 @@ row their `pid` holds, or a row nobody is still around for.
 | Anyone | Never another person's `pid` | | `pid` never enters `TileView`; hue is a one-way hash of it (`hue`, `src/board.ts`); the cookie is `HttpOnly` (`identify`, `src/server.ts`) |
 | You | Your own tile as "mine", your status line, your one-time displacement notice | | Per request and per stream: `boardView(tiles, pid)`; each `/events` connection holds its own `pid` (`openStream`); `takeDisplacement(pid)` |
 | You | | Claim a free tile | `take`'s `WHERE claimer_id IS NULL …` in `claim`, `src/db.ts`; the change count decides who won |
-| You | | Claim a dormant tile (away over 24 h) | Same `WHERE … OR last_seen_at < cutoff`; the old holder is recorded in `displaced` ([ADR 1](0001-dormant-tiles.md)) |
+| You | | Claim a dormant tile (away over 24 h) | Same `WHERE … OR last_seen_at < cutoff`; the old holder is recorded in `displaced` ([ADR 3](0003-faded-tiles-lift-nobody.md)) |
 | You | | Rename yourself, by claiming your own tile again | `relabel`'s `WHERE id = ? AND claimer_id = ?`, in `claim` |
 | You | | Move, which releases your old tile | `release` then `take` in one `BEGIN IMMEDIATE` transaction; a lost move rolls back and you keep your tile |
 | You | | Keep your tile awake, by visiting | `touch(pid)` on `GET /` and `/events`; it only ever updates the row your `pid` holds |

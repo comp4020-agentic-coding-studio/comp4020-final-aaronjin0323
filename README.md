@@ -18,8 +18,9 @@ commitments:
    told who.
 2. **Your mark stays while you're part of the room.** A claim survives
    closing the tab, a restart and a redeploy. After a day away your tile
-   fades but keeps standing, and a newcomer may settle there; you're told if
-   they do. [Why a day, and what it costs](docs/adr/0001-dormant-tiles.md).
+   fades: it keeps standing but stops lifting your neighbours, and a
+   newcomer may settle there; you're told if they do.
+   [Why a day, and what it costs](docs/adr/0003-faded-tiles-lift-nobody.md).
 3. **Anyone can join in seconds.** No account and no install: type a name,
    pick a tile. Drag the board to turn it, or play from the keyboard (WASD or
    arrows to move, Enter to claim). On a phone, tap a tile, then confirm.

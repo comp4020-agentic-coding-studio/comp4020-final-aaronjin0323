@@ -46,8 +46,9 @@ Settled; change them here first, then in the code.
   holds row 5, column 6"), so "got there first" only ever means a real race.
 - **Grid is 12×12 (144 tiles).** `N = 12` is a constant in code, not a config
   table.
-- **Height = number of claimed neighbours**, counting the 8 surrounding tiles
-  (0--8). It's derived when the page renders, never stored.
+- **Height = number of active claimed neighbours**, counting the 8
+  surrounding tiles (0--8) and skipping dormant ones. It's derived when the
+  page renders, never stored.
 - **The 3D board is CSS 3D transforms over real DOM buttons.** The board is
   tilted with `perspective`/`rotateX` and each tile is raised with
   `translateZ` by its height. Three.js/WebGL was the alternative and was
@@ -119,8 +120,8 @@ Settled; change them here first, then in the code.
 - **A tile goes dormant after 24 hours unvisited, and a dormant tile can be
   claimed.** The tile never vanishes and stays yours while nobody needs the
   room; visiting the page (or keeping it open) wakes it. A dormant tile shows
-  greyed. Recorded as an ADR in `docs/adr/0001-dormant-tiles.md` with the
-  options turned down. The cost to own: someone who comes back after a day
+  greyed. Recorded in `docs/adr/0003-faded-tiles-lift-nobody.md` with the
+  options turned down (ADR 1 is dropped). The cost to own: someone who comes back after a day
   may find their tile taken.
 - **Being displaced is told, not hidden.** When a dormant tile is claimed,
   the previous holder is recorded, and their next visit shows once: "Your
@@ -129,8 +130,12 @@ Settled; change them here first, then in the code.
 - **An open page counts as a visit.** While a holder's stream is open, their
   `last_seen_at` is bumped on connect and once a minute, so nobody playing
   goes dormant.
-- **Dormant tiles still count toward heights.** They're still standing, so
-  the skyline doesn't drop when people go home; they just stop being safe.
+- **Dormant tiles don't count toward heights** (changed at crit 10; ADR 1
+  had them counting). Height counts only neighbours that are claimed and not
+  dormant, so the skyline shows who is around. A dormant tile still stands
+  and keeps its own height from its active neighbours. When a tile fades its
+  neighbours drop at the next sweep; when it wakes or someone settles there
+  they rise. `heights(tiles, now)` takes the clock for that reason.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
   on a tile selects it and shows a full-width "Claim row R, column C" bar;
   that button claims. Mouse and keyboard claim directly, as before. The bar
