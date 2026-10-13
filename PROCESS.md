@@ -1,9 +1,9 @@
 # Process overview
 
-How Skyline got from the brief to a live, real-time board, as of crit 9.
-Every linked commit is in this repo; the tag `crit-8` marks the state my
-first crit saw, and the range
-[`3add18f...616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/compare/3add18f...616eaa6)
+How Skyline got from the brief to a live board that tells people apart and
+says who did what, as of crit 10. Every linked commit is in this repo; the
+tag `crit-8` marks the state my first crit saw, and the range
+[`6999be5...4194287`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/compare/6999be5...4194287)
 is this week's work.
 
 ## Harness before code
@@ -14,9 +14,10 @@ before any code. At crit 8 that settled the game: one tile each, and a tile
 rises for every claimed neighbour, so the only way up is to stand near
 strangers
 ([`2cc77e4`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2cc77e4)).
-At crit 9 it settled the transport, in-place claims, what happens when people
-leave, and phone input
+At crit 9 it settled the transport, in-place claims, leaving, and phone input
 ([`2f50d78`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2f50d78)).
+At crit 10 it settled who may see and change what, and the log format
+([`df8f06d`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/df8f06d)).
 I carry only general lessons forward from earlier crits, never last week's
 domain rules, which would be noise the agent tries to satisfy.
 
@@ -29,100 +30,105 @@ domain rules, which would be noise the agent tries to satisfy.
   allowed, and a built-in driver needs no native compile. A unique index
   makes "one tile per person" a database guarantee
   ([`7183b98`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7183b98)).
-- **CSS 3D over real buttons, not Three.js.** Markers do a keyboard pass, so
-  a form of tile buttons had to exist anyway; with CSS 3D that form *is* the
-  scene, so focus, screen-reader labels and no-JS claiming come free
+- **CSS 3D over real buttons, not Three.js.** A form of tile buttons had to
+  exist anyway for keyboard and no-JS play; with CSS 3D that form *is* the
+  scene
   ([`7301095`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7301095)).
   The cost is no real lighting.
-- **Server-sent events for real-time.** Only the server ever needs to push;
-  claims are already `POST`s. SSE runs on bare `node:http` with no library
-  and reconnects by itself. WebSockets would pay off only for streaming
-  input like live cursors, which this game deliberately doesn't have.
-  Polling would keep every tab hitting the 256 MB machine every second.
+- **Server-sent events for real-time.** Only the server pushes; claims are
+  already `POST`s. Every event carries the whole board, so a page that
+  reconnects after Fly drops it is correct from its first message, and a
+  heartbeat keeps idle streams under Fly's proxy timeout
+  ([`9f51eb8`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/9f51eb8)).
+- **`stdout` for logs, no logging library.** Fly already collects stdout and
+  `flyctl logs` tails it; one line per event is all the narration needs.
 
-## Crit 9: designing for a connection that drops
+## Crit 10: who may see and change what
 
-Before building, I had the agent research how Fly treats long-lived
-connections instead of assuming. It found that Fly's proxy closes a
-connection after about 60 seconds of silence (a recent report says about 30
-for a stalled stream), and that machines have been stopped with connections
-open. Three design rules came from that, all written into `CLAUDE.md` first
-([`364d658`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/364d658)):
-a heartbeat every 15 seconds; every event carries the *whole* board, so a
-page that reconnects is correct from its first message with no replay logic;
-and on shutdown the server ends its streams so pages reconnect at once
-([`9f51eb8`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/9f51eb8)).
+There are no accounts: a random `pid` in an HttpOnly cookie is a person, and
+the typed name is display only. Before writing anything down I had an agent
+audit every route against the code, then try to break each rule with
+`curl` against a local server: claiming a held tile with someone else's
+cookie and with none, a foreign and a `null` `Origin`, twenty concurrent
+claims from one person, and looking for any `pid` in the page and the
+stream. The claim rules held, because they live in one SQL `WHERE` inside an
+immediate transaction, not in the page.
 
-Each stream is sent the board *as its own visitor sees it*: "mine" depends on
-who's asking, and a visitor's identity cookie never leaves the server.
+It did find one real bug: `?notice=constructor` printed `function Object()
+{ [native code] }` as the page's notice, because the notice lookup used
+`in`, which finds inherited names
+([`9ac2629`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/9ac2629)).
+It couldn't inject anything, but it was the server showing text nobody
+chose.
 
-## The multi-person decision
+The decision is [ADR 0002](docs/adr/0002-who-may-see-and-change-what.md): a
+table of what anyone, you, and nobody may see or change, and the server
+function that enforces each. It owns its limits rather than hiding them: one
+tile per person really means one per browser profile, and losing the cookie
+loses the tile. Accounts, signed tokens, IP identity and rate limiting were
+each turned down, with the reason recorded: an IP limit would make the whole
+showcase room, behind one NAT, a single person.
 
-The decision I wrote up is what happens to the tile of someone who leaves
-([ADR 0001](docs/adr/0001-dormant-tiles.md)). Permanent tiles honour "your
-mark stays" but fill the showcase board with people who went home; expiring
-leases free space but erase people. I chose a middle path: after 24 hours
-away a tile fades but keeps standing and keeps raising its neighbours, and
-anyone new may settle on it. The holder is told once if that happens. The
-cost, which the ADR owns, is that someone returning after a day may find
-their tile taken. The README's second commitment was rewritten to say so,
-because a promise the rules don't keep is worse than a smaller promise.
+## Crit 10: who did what
 
-## Reviewing the whole interaction
+At the crit two of my pod use the app from its URL while I narrate from
+`flyctl logs`, so the logs had to tell two strangers apart without leaking
+the one thing that proves who they are
+([`4194287`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/4194287)):
 
-With real-time working, I stopped and asked what the main interaction
-actually was. The honest answer: the game was one decision deep. You claim,
-and the page never shows that your position lifts or drops strangers, which
-is the whole point of the README. So I had the agent show it: a tile whose
-height changes floats +1 or −1 on every screen, and your own claim says
-whom you lifted
-([`616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/616eaa6)).
-It's worked out on the page by comparing consecutive boards, so the server
-changed by one field: a version, so a claim isn't narrated twice. A warning
-before moving, a room score and "since you left" are recorded for weeks
-11--12.
+    claim who=4c6894 label="Kai" at=r6c7 lifted=12584b:"Mia"
+    claim.refused who=4c6894 status=409 reason=taken at=r6c6 label="Kai" held=12584b:"Mia"
+
+A person is a six-character hash of their `pid`, never the `pid`: logs
+leave the server, and a `pid` beside a name would let anyone reading them
+act as that person. Names are typed by strangers, so every string is quoted;
+a test posts a name containing a newline and a fake `claim` line and checks
+it stays one line. A claim names whom it lifted and dropped, worked out by
+the same before-and-after comparison the page uses for its +1/−1, so the
+log and the screen can't disagree.
 
 ## Directing, grounding and correcting
 
-**Tests that move the clock.** Dormancy needs a day to pass, so the store
-now takes its database and the current time as arguments, and
-`spec/store.test.ts` jumps 25 hours forward. The same file upgrades a copy
-of a crit-8 database and checks no claim is lost: this was the first schema
-change against real production data
+**Delegating in parallel, with fixed boundaries.** This week I split the
+work between two agents that owned separate files: one built logging and
+tests in `src/` and `spec/`, the other audited access and wrote the ADR in
+`docs/`. When the audit found the notice bug, I routed the fix to the agent
+that owned `src/` rather than letting two agents edit one file. I wrote
+`CLAUDE.md` and this file myself, and checked their work by reading the diff
+and rerunning the full suite, rather than trusting their reports.
+
+**Breaking things on purpose.** A test written after the code has never
+been seen to fail, so every rule was broken once and its test watched go
+red: a raw `pid` in the logs, one tag for everyone, unquoted names, a
+cookie-less claim on a held tile, any `Origin` accepted. One break stayed
+green at first: a `pid` printed only on page loads passed the "no `pid` in
+the logs" test, because that test never loaded a page. It now drives every
+path that logs and requires each line to exist before checking for absence.
+That became a general lesson in `CLAUDE.md`.
+
+**Tests that hold the brief's main lines.** `spec/realtime.test.ts` fails
+unless a claim reaches two other people within 1000 ms. `spec/store.test.ts`
+moves the clock 25 hours to test dormancy, and upgrades a copy of a crit-8
+database to check no claim is lost
 ([`1df0f39`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/1df0f39)).
+`spec/log.test.ts` reads the output of a server it starts itself, because
+the app CI tests runs in a container whose stdout the spec can't see.
 
-**The brief's main line as a test.** `spec/realtime.test.ts` opens two
-streams as different people, claims as a third, and fails unless both see
-it within 1000 ms. It runs in CI against the built image.
-
-**Breaking things on purpose.** A test written after the code has never been
-seen to fail, so each rule was broken once to watch its test go red:
-removing or delaying the broadcast, leaking identity cookies, the dormancy
-rule, the migration's backfill.
-
-**A real browser, kept in the repo.** The browser checks are now a committed
-script ([`7036cc5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7036cc5)):
-two browsers time a claim crossing (under 100 ms locally), plus the keyboard
-pass, no-JS posting and both viewports. It caught two things the HTTP tests
-couldn't. In 3D a tall block can hide a shorter one, so the script turns the
-camera to reach a tile, as a player would. And the phone confirm bar stayed
-on screen after hiding, because a CSS `display` rule beat the `hidden`
-attribute
-([`586b139`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/586b139)).
-Both became general lessons in `CLAUDE.md`.
-
-**A bug hiding since crit 8.** Building a check that clicks tiles the way a
-player does exposed that about a third of empty tiles couldn't be clicked at
-the default angle: a flat tile lies in the board's own 3D plane and the
-board was taking the click. The check now measures every free tile, and
-failed listing them with the fix removed
+**A real browser, kept in the repo.** The browser checks are a committed
+script ([`7036cc5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7036cc5))
+that found what HTTP tests couldn't: a third of empty tiles were
+unclickable at the default angle, live since crit 8, because a flat tile
+lay in the board's own 3D plane
 ([`3157737`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/3157737)).
 
-**Correcting from use.** At crit 8, playing it myself found that keyboard
-play meant tabbing through 144 tiles. I rejected the agent's first fix and
-described what a player should do instead, which led to page-wide WASD and
-exposed a bug where Enter in the name field claimed the top-left tile
+**Correcting from use.** Playing it myself found that keyboard play meant
+tabbing through 144 tiles; I rejected the agent's first fix and described
+what a player should do instead
 ([`2ae2576`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2ae2576)).
+At crit 9, asking what the main interaction actually was found the game
+one decision deep, which led to showing whom each claim lifts
+([`616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/616eaa6)).
 
-**Keeping production clean.** The browser script refuses a `fly.dev` URL;
-every claim there stays on the showcase board.
+**Keeping production clean.** Neither the spec nor the browser script is
+ever pointed at the `fly.dev` URL; every claim there stays on the showcase
+board.
