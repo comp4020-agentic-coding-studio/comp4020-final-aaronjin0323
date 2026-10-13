@@ -217,6 +217,9 @@ and delete the line when one is settled.
   each piece works are the process record the marker reads against
   `PROCESS.md`, so don't batch them. Pushing and deploying are the
   outward-facing steps: ask each time, and one yes doesn't cover the next.
+- **Since the repo went public, a push to `main` is a deploy.** CI deploys
+  every push once its checks pass, so a half-built feature pushed is a
+  half-built feature live. Push only when the slice works end to end.
 - **Look at it at both sizes before calling a UI change done.** Run
   `node scripts/browser-check.ts` against the running app (`APP_URL`; it
   drives your installed Chrome through `playwright-core`). It screenshots
