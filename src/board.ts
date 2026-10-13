@@ -11,7 +11,9 @@ export const NOTICES = {
 } as const;
 export type Notice = keyof typeof NOTICES;
 
-export const isNotice = (s: string | null): s is Notice => s !== null && s in NOTICES;
+// Own keys only: `in` also finds what every object inherits, so
+// ?notice=constructor would print a function's source as the notice.
+export const isNotice = (s: string | null): s is Notice => s !== null && Object.hasOwn(NOTICES, s);
 
 // Not in NOTICES, so no query string can show it: it only appears when the
 // database says this visitor's tile was settled while they were away.
