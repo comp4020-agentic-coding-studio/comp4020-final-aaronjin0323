@@ -89,13 +89,15 @@ log and the screen can't disagree.
 
 ## Directing, grounding and correcting
 
-**Delegating in parallel, with fixed boundaries.** This week I split the
-work between two agents that owned separate files: one built logging and
-tests in `src/` and `spec/`, the other audited access and wrote the ADR in
-`docs/`. When the audit found the notice bug, I routed the fix to the agent
-that owned `src/` rather than letting two agents edit one file. I wrote
-`CLAUDE.md` and this file myself, and checked their work by reading the diff
-and rerunning the full suite, rather than trusting their reports.
+**Delegating in parallel, with fixed boundaries.** This week I asked the
+main agent session to fan the work out. It split it between two subagents
+that owned separate files: one built logging and tests in `src/` and
+`spec/`, the other audited access and wrote the ADR in `docs/`. When the
+audit found the notice bug, the fix went to the subagent that owned `src/`
+rather than two agents editing one file. The main session then checked
+their work by reading the diff and rerunning the full suite instead of
+trusting their reports, and drafted the `CLAUDE.md` changes and this file
+for me to review.
 
 **Breaking things on purpose.** A test written after the code has never
 been seen to fail, so every rule was broken once and its test watched go
