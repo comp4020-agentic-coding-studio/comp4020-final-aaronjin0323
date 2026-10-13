@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
-import { isNotice, renderBoard } from "./board.ts";
-import { allTiles, claim, TILES } from "./db.ts";
+import { boardView, isNotice, renderBoard } from "./board.ts";
+import { openStore, TILES } from "./db.ts";
 import { renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -11,6 +11,8 @@ const PRODUCTION = process.env.NODE_ENV === "production";
 const MAX_BODY = 4096;
 const ONE_YEAR = 60 * 60 * 24 * 365;
 const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const store = openStore(process.env.DB_PATH ?? "./.data/app.db");
 
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -130,7 +132,7 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
   const label = validLabel(fields.label);
   if (label === null) return fail(400, "label");
 
-  if (claim(cellId, pid, label) === "taken") return fail(409, "taken");
+  if (store.claim(cellId, pid, label, new Date()) === "taken") return fail(409, "taken");
   if (wantsJson) return sendJson(res, 200, { cellId, label });
   redirect(res, "/?notice=claimed");
 }
@@ -158,8 +160,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (path === "/" && (req.method === "GET" || req.method === "HEAD")) {
     const pid = identify(req, res);
+    const now = new Date();
+    // Loading the page is a visit: it keeps your tile from going dormant, or
+    // wakes it if it already had.
+    store.touch(pid, now);
     const notice = url.searchParams.get("notice");
-    return send(res, 200, "text/html; charset=utf-8", renderBoard(allTiles(), pid, isNotice(notice) ? notice : null));
+    const displaced = store.takeDisplacement(pid) !== null;
+    const tiles = store.tiles();
+    const myLabel = tiles.find((t) => t.claimerId === pid)?.label ?? "";
+    const html = renderBoard(boardView(tiles, pid, now), myLabel, {
+      notice: isNotice(notice) ? notice : null,
+      displaced,
+    });
+    return send(res, 200, "text/html; charset=utf-8", html);
   }
   if (path === "/claim" && req.method === "POST") return postClaim(req, res);
   if (path === "/readme") return redirect(res, "/readme/");

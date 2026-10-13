@@ -1,4 +1,4 @@
-import { N, type Tile } from "./db.ts";
+import { isDormant, N, type Tile } from "./db.ts";
 import { escapeHtml, page } from "./html.ts";
 
 // Notices are chosen from this fixed set by key; nothing from the query
@@ -13,8 +13,30 @@ export type Notice = keyof typeof NOTICES;
 
 export const isNotice = (s: string | null): s is Notice => s !== null && s in NOTICES;
 
-// A claimed tile's height is how many of its 8 neighbours are claimed too.
-// Derived on every render, never stored.
+// Not in NOTICES, so no query string can show it: it only appears when the
+// database says this visitor's tile was settled while they were away.
+export const DISPLACED = "Your tile went quiet after a day away, and someone else settled there.";
+
+export type TileState = "free" | "held" | "mine" | "dormant";
+
+// One tile as anyone but its holder's id: everything the page needs to draw
+// it, and nothing that identifies a person. The server renders these into
+// HTML, and the live stream sends the same objects for the page to patch in,
+// so the two can't disagree.
+export type TileView = {
+  id: number;
+  state: TileState;
+  height: number;
+  hue: number | null;
+  label: string | null;
+  initials: string;
+  aria: string;
+};
+
+export type BoardView = { tiles: TileView[]; claimed: number; status: string };
+
+// A claimed tile's height is how many of its 8 neighbours are claimed too,
+// dormant ones included: they're still standing. Derived, never stored.
 export function heights(tiles: Tile[]): number[] {
   return tiles.map((tile) => {
     if (tile.claimerId === null) return 0;
@@ -41,36 +63,60 @@ function hue(id: string): number {
 }
 
 const initials = (label: string): string => Array.from(label.trim()).slice(0, 2).join("");
+const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
 
-export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): string {
+// The board as one visitor sees it: their own tile is "mine" (never dormant:
+// they're here), anyone else's is held or dormant.
+export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
   const hs = heights(tiles);
-  const mine = tiles.find((t) => t.claimerId === me) ?? null;
-  const claimedCount = tiles.filter((t) => t.claimerId !== null).length;
+  const views = tiles.map((tile): TileView => {
+    const where = place(tile.id).replace(/^r/, "R");
+    if (tile.claimerId === null) {
+      return { id: tile.id, state: "free", height: 0, hue: null, label: null, initials: "", aria: `${where}, free` };
+    }
+    const label = tile.label ?? "";
+    const h = hs[tile.id];
+    const state: TileState = tile.claimerId === me ? "mine" : isDormant(tile, now) ? "dormant" : "held";
+    const who =
+      state === "mine"
+        ? `your tile, ${label}`
+        : state === "dormant"
+          ? `held by ${label}, away over a day, open to settle`
+          : `held by ${label}`;
+    return {
+      id: tile.id,
+      state,
+      height: h,
+      hue: hue(tile.claimerId),
+      label,
+      initials: initials(label),
+      aria: `${where}, ${who}, height ${h}`,
+    };
+  });
 
-  const cells = tiles
-    .map((tile) => {
-      const row = Math.floor(tile.id / N) + 1;
-      const col = (tile.id % N) + 1;
-      const h = hs[tile.id];
-      const where = `Row ${row}, column ${col}`;
-      if (tile.claimerId === null) {
-        return `<button class="tile" name="cellId" value="${tile.id}" data-state="free" data-height="0" style="--h:0" aria-label="${where}, free"><span class="sides" aria-hidden="true"></span></button>`;
-      }
-      const isMine = tile.claimerId === me;
-      const label = escapeHtml(tile.label ?? "");
-      const state = isMine ? "mine" : "held";
-      const who = isMine ? `your tile, ${label}` : `held by ${label}`;
-      return `<button class="tile" name="cellId" value="${tile.id}" data-state="${state}" data-height="${h}" style="--h:${h};--hue:${hue(tile.claimerId)}" aria-label="${where}, ${who}, height ${h}" title="${label}"><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(initials(tile.label ?? ""))}</span></button>`;
-    })
-    .join("\n        ");
-
+  const mine = views.find((t) => t.state === "mine");
   const status = mine
-    ? `You hold row ${Math.floor(mine.id / N) + 1}, column ${(mine.id % N) + 1}, at height ${hs[mine.id]}. Pick a free tile to move.`
-    : "You don't hold a tile yet. Type a name, then pick a free tile.";
+    ? `You hold ${place(mine.id)}, at height ${mine.height}. Pick another tile to move.`
+    : "You don't hold a tile yet. Type a name, then pick a free or faded tile.";
 
-  const noticeHtml = notice
-    ? `<p class="notice" data-notice="${notice}" role="status">${NOTICES[notice]}</p>`
-    : "";
+  return { tiles: views, claimed: views.filter((t) => t.state !== "free").length, status };
+}
+
+function tileButton(t: TileView): string {
+  const style = t.hue === null ? `--h:${t.height}` : `--h:${t.height};--hue:${t.hue}`;
+  const title = t.label === null ? "" : ` title="${escapeHtml(t.label)}"`;
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}" style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span></button>`;
+}
+
+export function renderBoard(
+  view: BoardView,
+  myLabel: string,
+  { notice = null, displaced = false }: { notice?: Notice | null; displaced?: boolean } = {},
+): string {
+  const notices = [
+    displaced ? `<p class="notice" data-notice="displaced" role="status">${DISPLACED}</p>` : "",
+    notice ? `<p class="notice" data-notice="${notice}" role="status">${NOTICES[notice]}</p>` : "",
+  ].join("");
 
   return page({
     title: "Skyline",
@@ -78,21 +124,21 @@ export function renderBoard(tiles: Tile[], me: string, notice: Notice | null): s
     body: `
     <header class="top">
       <h1>Skyline</h1>
-      <p class="lede">Everyone here holds one tile. A tile rises for every claimed neighbour, so standing alone keeps you flat and settling beside strangers builds a skyline.</p>
-      <p class="meta">${claimedCount} of ${tiles.length} tiles claimed · <a href="/readme/">About</a></p>
+      <p class="lede">Everyone here holds one tile. A tile rises for every claimed neighbour, so standing alone keeps you flat and settling beside strangers builds a skyline. A tile whose holder stays away for a day fades, and anyone may settle there.</p>
+      <p class="meta"><span data-claimed>${view.claimed}</span> of ${view.tiles.length} tiles claimed · <a href="/readme/">About</a></p>
     </header>
     <main>
       <form class="claim" method="post" action="/claim">
         <button type="submit" disabled hidden aria-hidden="true" tabindex="-1"></button>
         <div class="controls">
           <label for="label">Your name</label>
-          <input id="label" name="label" maxlength="24" required autocomplete="nickname" value="${escapeHtml(mine?.label ?? "")}">
-          <p class="status" id="status">${status}</p>
-          ${noticeHtml}
+          <input id="label" name="label" maxlength="24" required autocomplete="nickname" value="${escapeHtml(myLabel)}">
+          <p class="status" id="status">${escapeHtml(view.status)}</p>
+          <div class="notices" data-notices>${notices}</div>
         </div>
         <div class="stage" data-stage>
           <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status">
-        ${cells}
+        ${view.tiles.map(tileButton).join("\n        ")}
           </div>
         </div>
       </form>
