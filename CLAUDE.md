@@ -200,6 +200,33 @@ whole point. So:
   is worked out by comparing the board before and after, the same rule as
   the page's +1/−1.
 
+### Seeing a claim before and while you make it
+
+- **A placement preview, never a change.** Hover, keyboard focus or a phone
+  tap on a free or faded tile previews its resulting height and marks the
+  neighbours it would lift (`data-preview="lift"`) and, on a move, the old
+  ones it would drop (`"drop"`). It's computed by `preview()` in
+  `public/diff.js`, and `spec/diff.test.ts` holds it equal to the server's
+  `heights(tiles, now)` on random boards with faded tiles in them, so the
+  preview and the real claim can't disagree.
+- **"Claimed" only once the server says so.** A claim in flight marks its
+  tile `data-pending` and ignores every further claim until it answers. The
+  stream may show the new board first; success is still announced only from
+  the reply. A network failure says nothing was claimed, rather than falling
+  back to a full form post. Each refusal (`403`, `409`, `400`, network) has
+  its own message, sent through the `[data-announce]` live region.
+- **Any tile can be inspected,** by hover, focus or tap: holder, height,
+  claimed neighbours, and protection left, counted down on the page from the
+  server's `safeUntil` (a time, not a countdown). The inspector is
+  server-rendered and follows the latest input.
+- **Others' claims are marked, never announced.** A tile someone else just
+  claimed gets `data-fresh` for about two seconds; focus never moves.
+- **The first board after a reconnect is accepted even with a lower
+  version,** since a restarted server seeds its version from the clock.
+  Within one stream, a lower version is still stale and dropped.
+- **The connection line says live, reconnecting or offline,** by shape as
+  well as colour, and is hidden without JS.
+
 ### The look
 
 - **Styled after a GTA title screen.** A framed sunset header over a
@@ -216,6 +243,20 @@ whole point. So:
   Pricedown file ever enters the repo, and new words in it are new
   artwork, not new text. Live text uses Passion One under the SIL OFL,
   with its licence beside it in `public/fonts/`.
+- **Every tile state reads in greyscale.** Free is a flat lot with a kerb,
+  taken a lit tower, yours a gold ring with a gold marker, faded hatched
+  grey with its lights out. Focus is one gold outline, selected a double
+  cream one, pending moving stripes, a preview a dashed ghost at the
+  resulting height, a fresh claim a spreading ring. Ghosts are drawn in each
+  tile's `.beacon`, which never takes a click.
+- **The board takes the page.** On wide screens the name, map key and
+  inspector sit in a narrow column beside it; on phones the board follows
+  the name, with the camera buttons under it at thumb height. A small map
+  key names each state, instead of any tutorial.
+- **One type scale, held in tokens,** with AA contrast measured on the
+  rendered pixels over the gradient. Every animation and transition is off
+  under `prefers-reduced-motion`, and a style test fails if one is added
+  outside that block.
 - **The skyline is drawn by a script.** `scripts/draw-skyline.ts` writes
   `public/art/city.svg` from a fixed seed, so it's redrawn, never
   hand-edited. The page shows it as a mask, so its colour is in the CSS.
@@ -526,6 +567,15 @@ these tools, not tied to any one prototype's content.
   meant to hold a bidi override or line separator may end up holding the
   invisible character itself. Grep new files for non-ASCII after writing
   escapes.
+- **A server that only broadcasts on "big" changes leaves pages counting
+  down to a stale time.** If the page derives anything from a field
+  (`safeUntil`), every change to that field has to broadcast, including a
+  quiet one like a visit.
+- **`server.close()` waits for idle keep-alive sockets.** On `SIGTERM` call
+  `closeAllConnections()` too, or exit takes seconds and the platform may
+  kill the process before the database closes.
+- **A keyboard step-and-back that "returns to the same tile" fails at a
+  board edge,** where the first step can't move. Try both orders.
 - **A recorded "source" field is not necessarily a bare URL.** Notes get
   appended to it. Anything that turns data into an `href` extracts and tests
   the URL shape, or the link checker finds it after the deploy.
