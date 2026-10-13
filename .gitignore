@@ -23,3 +23,6 @@ mise.local.toml
 
 # local SQLite database (production lives on the /data volume)
 .data/
+
+# browser-check screenshots
+.shots/

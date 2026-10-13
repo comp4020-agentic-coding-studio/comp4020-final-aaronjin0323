@@ -94,8 +94,15 @@ Settled; change them here first, then in the code.
   pushes the board to every open page after any change. SSE fits bare
   `node:http` with no library, reconnects by itself, and only the server ever
   needs to push. WebSockets would earn their keep only for streaming input
-  from clients (live cursors), which this game doesn't have. A comment
-  heartbeat every 25 s keeps Fly's proxy from closing idle streams.
+  from clients (live cursors), which this game doesn't have.
+- **Streams are expected to drop, so every event carries the whole board.**
+  Fly's proxy closes a connection after about 60 s with nothing sent (one
+  recent report says about 30 s for a stalled stream), so a comment
+  heartbeat goes out every 15 s. Fly can also stop the machine with streams
+  open. The client reconnects on its own (`retry: 2000`), and since each
+  `board` event is the full state, not a diff, reconnecting resyncs with no
+  replay logic. On `SIGTERM` the server ends every stream and closes the
+  database before exiting, so clients reconnect at once rather than hanging.
 - **Each stream gets its own payload.** "Mine" depends on who's asking, and a
   `pid` is the only thing that proves identity, so it never leaves the
   server: each connection is sent the board with its own tile marked, and
@@ -110,6 +117,13 @@ Settled; change them here first, then in the code.
   greyed. Recorded as an ADR in `docs/adr/0001-dormant-tiles.md` with the
   options turned down. The cost to own: someone who comes back after a day
   may find their tile taken.
+- **Being displaced is told, not hidden.** When a dormant tile is claimed,
+  the previous holder is recorded, and their next visit shows once: "Your
+  tile went quiet after a day away, and someone else settled there." A rule
+  that takes something from you has to be readable off the screen.
+- **An open page counts as a visit.** While a holder's stream is open, their
+  `last_seen_at` is bumped on connect and once a minute, so nobody playing
+  goes dormant.
 - **Dormant tiles still count toward heights.** They're still standing, so
   the skyline doesn't drop when people go home; they just stop being safe.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
@@ -129,11 +143,24 @@ Schema, one table:
     CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id)
       WHERE claimer_id IS NOT NULL;
 
-Migration 2 (crit 9) adds `last_seen_at TEXT`, backfilled from `claimed_at`.
-It's bumped whenever the holder loads the page or holds an open stream. A
-tile is dormant when `last_seen_at` is more than 24 hours old, computed at
-read time, never stored. A claim succeeds on a free tile *or* a dormant one.
-Claim functions take `now` as a parameter so tests can move the clock.
+Migration 2 (crit 9) adds `last_seen_at TEXT`, backfilled from `claimed_at`,
+and a table `displaced (claimer_id TEXT PRIMARY KEY, label TEXT, cell_id
+INTEGER, displaced_at TEXT)`, read once and deleted. A tile is dormant when
+`last_seen_at` is more than 24 hours old, computed at read time, never
+stored. A claim succeeds on a free tile *or* a dormant one, as one
+`UPDATE ... WHERE claimer_id IS NULL OR last_seen_at < ?`, so "did I win?"
+is still its change count.
+
+**Production consequence, on purpose:** the 4 tiles claimed at crit 8 are
+about 6 days old, so they go dormant the moment migration 2 runs. They stay
+on the board, greyed, until someone settles there.
+
+**The store takes its database and its clock as arguments.**
+`openStore(path)` returns the claim/read/touch functions, and each takes
+`now`. The server opens `DB_PATH`; tests open `:memory:`. That's how
+dormancy (25 hours later) and the migration (a crit-8-shaped database
+upgraded with its rows intact) get tested without waiting a day or touching
+the volume.
 
 All 144 rows are created at startup (`INSERT OR IGNORE`), so a claim is always
 an `UPDATE ... WHERE claimer_id IS NULL` and "did I win?" is its change count.
@@ -150,9 +177,10 @@ Routes for crit 8's slice:
 - Notices are picked by key from a fixed table in `src/board.ts`; nothing
   from the query string is echoed into the page
 - `GET /events`: SSE. On connect, and after every change, it sends a `board`
-  event: per tile `{ state: free|held|mine|dormant, label, hue, height }`.
-  Dormancy crossing the threshold with no claim also triggers a send, checked
-  once a minute
+  event: per tile `{ state: free|held|mine|dormant, label, hue, height }`,
+  plus the claimed count and, for the connection's own person, their status
+  line. A tile crossing into dormancy, or waking, also triggers a send;
+  dormancy is checked once a minute
 - `GET /readme/`: `README.md` rendered to HTML (headings intact), replacing
   the placeholder's verbatim copy. `docs/` is served beneath it so the README's
   relative image links resolve there as they do on GitHub
@@ -189,12 +217,14 @@ and delete the line when one is settled.
   each piece works are the process record the marker reads against
   `PROCESS.md`, so don't batch them. Pushing and deploying are the
   outward-facing steps: ask each time, and one yes doesn't cover the next.
-- **Look at it at both sizes before calling a UI change done.** Screenshot
-  1440x900 and 390x844 (mobile emulation) with the Playwright script in
-  `/tmp/pw-shot` or equivalent, read the images, and check
-  `scrollWidth` equals the viewport width. Then do a keyboard pass: type a
-  name, focus a tile, press Enter, and confirm a second browser context sees
-  the claim.
+- **Look at it at both sizes before calling a UI change done.** Run
+  `node scripts/browser-check.ts` against the running app (`APP_URL`; it
+  drives your installed Chrome through `playwright-core`). It screenshots
+  1440x900 and 390x844 into `.shots/` (gitignored), checks `scrollWidth`,
+  does the keyboard pass, and opens two browsers to time a claim in one
+  appearing in the other. Read the screenshots; the script can't judge them.
+  It isn't in CI, which has no Chrome; it's the hands-on check before a
+  commit that changes the page.
 - **After a deploy, fetch the URL and read the status.** The deploy command
   finishing is not the site answering.
 - **Model the slice, not the system.** Build the one flow the current crit
@@ -217,6 +247,12 @@ and delete the line when one is settled.
   run won't find it empty.
 
 ## The checks
+
+- **Real-time is a test, not a claim.** A spec test opens two `/events`
+  streams as different people, claims from a third, and fails unless both
+  receive the change within 1000 ms. It runs in CI against the built image.
+- **Dormancy and migrations are unit tests over `openStore(":memory:")`**
+  with an injected clock, in `spec/` alongside the HTTP tests.
 
 `spec/invariants.test.ts` ships with the template: `/` answers, and `/readme/`
 carries every README heading in order. Keep it. Everything else in `spec/` is
