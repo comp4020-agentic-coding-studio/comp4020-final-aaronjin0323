@@ -7,14 +7,15 @@ together.
 
 ## What good means here
 
-Skyline is good if it makes the people in the room matter to each other. A
-board that only remembers what you clicked is a form with a database behind
-it; this one should be more interesting with twenty people on it than with
-one. From that, four commitments:
+Skyline is good if it makes the people in the room matter to each other: more
+interesting with twenty people on it than with one. From that, four
+commitments:
 
-1. **Where you stand depends on who else is there.** Your height comes only
-   from your neighbours, and every claim reaches every open screen within a
-   second, so you watch the skyline grow around you as it happens.
+1. **Where you stand depends on who else is there, and you can see it.**
+   Your height comes only from your neighbours, and every claim reaches every
+   open screen within a second. When you settle, the tiles you lift show +1
+   and you're told whose they were; when someone settles beside you, you're
+   told who.
 2. **Your mark stays while you're part of the room.** A claim survives
    closing the tab, a restart and a redeploy. After a day away your tile
    fades but keeps standing, and a newcomer may settle there; you're told if
@@ -38,9 +39,8 @@ one. From that, four commitments:
 - **Clay Shirky, "Situated Software" (2004)** argues for software built for a
   specific group at a specific time rather than for everyone. Skyline is built
   for one room at the showcase, not for scale.
-- **Robin Sloan, "An app can be a home-cooked meal" (2020)** frames small,
-  personal software as worth making for its own sake, which is the scale this
-  project aims for.
+- **Robin Sloan, "An app can be a home-cooked meal" (2020)** argues small,
+  personal software is worth making for its own sake.
 
 ## What's tested and what's judged
 
@@ -48,8 +48,9 @@ Checked by `spec/` on every run, against the running app: a claim reaches two
 other open sessions within one second; it persists; the first claim wins;
 one person holds one tile; a tile is safe for 24 hours and claimable after,
 with its holder told once (on a simulated clock); upgrading the database
-loses no claim; heights match claimed neighbours; names render as text; no
-one's identity cookie is ever sent to anyone else.
+loses no claim; heights match claimed neighbours; the page names exactly the
+neighbours a claim lifted or dropped; names render as text; no one's identity
+cookie is ever sent to anyone else.
 
 Judged by people, not tests: whether rising beside strangers actually feels
 rewarding, whether a newcomer understands the rules without reading this page,

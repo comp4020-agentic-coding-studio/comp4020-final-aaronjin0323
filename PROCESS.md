@@ -3,7 +3,7 @@
 How Skyline got from the brief to a live, real-time board, as of crit 9.
 Every linked commit is in this repo; the tag `crit-8` marks the state my
 first crit saw, and the range
-[`3add18f...cd2ddb3`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/compare/3add18f...cd2ddb3)
+[`3add18f...616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/compare/3add18f...616eaa6)
 is this week's work.
 
 ## Harness before code
@@ -68,6 +68,20 @@ cost, which the ADR owns, is that someone returning after a day may find
 their tile taken. The README's second commitment was rewritten to say so,
 because a promise the rules don't keep is worse than a smaller promise.
 
+## Reviewing the whole interaction
+
+With real-time working, I stopped and asked what the main interaction
+actually was. The honest answer: the game was one decision deep. You claim,
+and the page never shows that your position lifts or drops strangers, which
+is the whole point of the README. So I had the agent show it: a tile whose
+height changes floats +1 or −1 on every screen, and your own claim says
+whom you lifted
+([`616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/616eaa6)).
+It's worked out on the page by comparing consecutive boards, so the server
+changed by one field: a version, so a claim isn't narrated twice. A warning
+before moving, a room score and "since you left" are recorded for weeks
+11--12.
+
 ## Directing, grounding and correcting
 
 **Tests that move the clock.** Dormancy needs a day to pass, so the store
@@ -82,10 +96,9 @@ streams as different people, claims as a third, and fails unless both see
 it within 1000 ms. It runs in CI against the built image.
 
 **Breaking things on purpose.** A test written after the code has never been
-seen to fail. I had the agent remove the broadcast, delay it by 1.5 seconds,
-and leak identity cookies into the stream, one at a time; each turned a test
-red. The same for the dormancy rule, a lost claim, and the migration's
-backfill.
+seen to fail, so each rule was broken once to watch its test go red:
+removing or delaying the broadcast, leaking identity cookies, the dormancy
+rule, the migration's backfill.
 
 **A real browser, kept in the repo.** The browser checks are now a committed
 script ([`7036cc5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7036cc5)):
@@ -98,12 +111,18 @@ attribute
 ([`586b139`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/586b139)).
 Both became general lessons in `CLAUDE.md`.
 
+**A bug hiding since crit 8.** Building a check that clicks tiles the way a
+player does exposed that about a third of empty tiles couldn't be clicked at
+the default angle: a flat tile lies in the board's own 3D plane and the
+board was taking the click. The check now measures every free tile, and
+failed listing them with the fix removed
+([`3157737`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/3157737)).
+
 **Correcting from use.** At crit 8, playing it myself found that keyboard
 play meant tabbing through 144 tiles. I rejected the agent's first fix and
 described what a player should do instead, which led to page-wide WASD and
 exposed a bug where Enter in the name field claimed the top-left tile
 ([`2ae2576`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2ae2576)).
 
-**Keeping production clean.** The browser script refuses a `fly.dev` URL,
-and claim tests never run against production, since every claim there
-stays on the showcase board.
+**Keeping production clean.** The browser script refuses a `fly.dev` URL;
+every claim there stays on the showcase board.
