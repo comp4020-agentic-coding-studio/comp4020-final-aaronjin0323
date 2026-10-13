@@ -41,7 +41,9 @@ Settled; change them here first, then in the code.
   same transaction.
 - **First claim wins.** Claiming a tile someone else holds fails: the form
   path redirects back with a visible "someone got there first" notice, and a
-  script client gets `409`. Nobody can take a held tile.
+  script client gets `409`. Nobody can take a held tile. With JS, clicking a
+  tile the page already shows as held never posts: it says who holds it ("Ari
+  holds row 5, column 6"), so "got there first" only ever means a real race.
 - **Grid is 12×12 (144 tiles).** `N = 12` is a constant in code, not a config
   table.
 - **Height = number of claimed neighbours**, counting the 8 surrounding tiles

@@ -83,11 +83,12 @@ async function realtime(browser: Browser): Promise<void> {
   check((await a.getAttribute(`button.tile[value="${cell}"]`, "data-state")) === "mine", "A sees it as theirs");
   check((await b.getAttribute(`button.tile[value="${cell}"]`, "title")) === "Ana", "B sees A's name on it");
 
-  // A refused claim says so in place.
+  // B already sees the tile as Ana's, so clicking it names her, not a race.
   await b.fill("#label", "Ben");
   await clickTile(b, cell);
-  const notice = await b.waitForSelector('[data-notice="taken"]', { timeout: 3000 }).catch(() => null);
-  check(notice !== null, "B's claim on A's tile is refused with a notice");
+  const notice = await b.waitForSelector('[data-notice="held"]', { timeout: 3000 }).catch(() => null);
+  const said = (await notice?.textContent()) ?? "";
+  check(said.startsWith("Ana holds"), "B clicking A's tile is told it's Ana's", said);
 
   // The claimed count follows along.
   const countA = await a.textContent("[data-claimed]");

@@ -376,6 +376,13 @@ if (board && stage) {
       nameField.focus();
       return;
     }
+    // Already held as shown: name the holder rather than post a claim that can
+    // only lose, whose reply ("someone got there first") would read as a race.
+    const target = describeTile(shown, Number(submitter.value));
+    if (!target.open) {
+      showNotice("held", `${target.title}. Pick a free or faded tile.`);
+      return;
+    }
     posting = true;
     try {
       const res = await fetch("/claim", {
