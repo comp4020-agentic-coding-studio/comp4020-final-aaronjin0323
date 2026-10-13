@@ -311,6 +311,55 @@ body.is-offline .meta::after {
   white-space: nowrap;
 }
 
+/* The "+1" / "−1" app.js floats off a tile whose height changed, removed
+   when it's done. It sits inside the tile, so it starts on the block's roof;
+   `translate` lifts it off the roof, and `transform` undoes the board's turn
+   and tilt (inherited from .board) so it faces the viewer at any angle. */
+.rise {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+  font-size: clamp(0.7rem, 1.5vw, 0.95rem);
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  color: #fff;
+  pointer-events: none;
+  translate: -50% -50% 2px;
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+  animation: rise 1.3s ease-out forwards;
+}
+
+.rise[data-delta="up"] {
+  background: #15803d;
+}
+
+.rise[data-delta="down"] {
+  background: #b91c1c;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+  }
+  15%,
+  70% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    translate: -50% -50% calc(var(--unit) * 8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
+}
+
 /* Phones: a gentler tilt than desktop, with enough twist that blocks show a
    side face and heights read as a skyline. At no twist they face away and the
    board looks flat. The twist swings the corners outwards, so the board is
@@ -405,11 +454,11 @@ body.is-offline .meta::after {
   box-shadow: 0 -4px 16px rgb(0 0 0 / 0.12);
 }
 
-.confirm span:empty {
+.confirm-text:empty {
   display: none;
 }
 
-.confirm span {
+.confirm-text {
   flex-basis: 100%;
   color: var(--muted);
 }
