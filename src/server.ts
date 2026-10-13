@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
 import { isDormant, openStore, TILES } from "./db.ts";
-import { renderReadme } from "./readme.ts";
+import { renderDoc, renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PRODUCTION = process.env.NODE_ENV === "production";
@@ -223,6 +223,16 @@ async function serveFile(res: ServerResponse, root: string, rel: string): Promis
   }
 }
 
+// Markdown under docs/, rendered: only a fixed shape of path, never outside.
+async function serveDoc(res: ServerResponse, rel: string): Promise<void> {
+  if (!/^docs\/[a-z0-9/-]+\.md$/.test(rel) || rel.includes("..")) return notFound(res);
+  try {
+    send(res, 200, "text/html; charset=utf-8", renderDoc(rel, "Skyline: decision record"));
+  } catch {
+    notFound(res);
+  }
+}
+
 const notFound = (res: ServerResponse): void => send(res, 404, "text/plain; charset=utf-8", "Not found");
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -251,6 +261,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {
     return send(res, 200, "text/html; charset=utf-8", renderReadme());
   }
+  if (path.startsWith("/readme/docs/") && path.endsWith(".md")) return serveDoc(res, path.slice("/readme/".length));
   if (path.startsWith("/readme/docs/")) return serveFile(res, "docs", path.slice("/readme/docs/".length));
   if (path === "/style.css") return serveFile(res, "public", "style.css");
   if (path === "/app.js") return serveFile(res, "public", "app.js");

@@ -208,3 +208,17 @@ describe("heights", () => {
     expect(tiles[pair!].height).toBeGreaterThan(0);
   });
 });
+
+describe("/readme/ links", () => {
+  it("resolves every relative link in README.md on the served page", async () => {
+    const page = await (await fetch(new URL("/readme/", baseUrl))).text();
+    const links = [...new JSDOM(page).window.document.querySelectorAll("main a[href]")]
+      .map((a) => a.getAttribute("href")!)
+      .filter((href) => !/^(https?:|mailto:|#|\/)/.test(href));
+    expect(links.length, "README.md links nothing relative; nothing to check").toBeGreaterThan(0);
+    for (const href of links) {
+      const res = await fetch(new URL(href, new URL("/readme/", baseUrl)));
+      expect(res.status, `/readme/ links ${href}, which doesn't load`).toBe(200);
+    }
+  });
+});

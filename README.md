@@ -13,16 +13,19 @@ it; this one should be more interesting with twenty people on it than with
 one. From that, four commitments:
 
 1. **Where you stand depends on who else is there.** Your height comes only
-   from your neighbours, so the only way to rise is to be near other people.
-2. **Your mark stays.** A claim survives closing the tab, a server restart and
-   a redeploy. Come back tomorrow and your tile is still yours.
+   from your neighbours, and every claim reaches every open screen within a
+   second, so you watch the skyline grow around you as it happens.
+2. **Your mark stays while you're part of the room.** A claim survives
+   closing the tab, a restart and a redeploy. After a day away your tile
+   fades but keeps standing, and a newcomer may settle there; you're told if
+   they do. [Why a day, and what it costs](docs/adr/0001-dormant-tiles.md).
 3. **Anyone can join in seconds.** No account and no install: type a name,
    pick a tile. Drag the board to turn it, or play from the keyboard (WASD or
-   arrows to move, Enter to claim). It works on a phone, and without
-   JavaScript.
+   arrows to move, Enter to claim). On a phone, tap a tile, then confirm.
+   It works without JavaScript too.
 4. **The board is fair and legible.** One tile each, first claim wins, and
-   nobody can take a tile someone else holds. Every rule can be read off the
-   screen.
+   nobody can take a tile from someone who's still around. Every rule can be
+   read off the screen.
 
 ## Where this came from
 
@@ -41,11 +44,12 @@ one. From that, four commitments:
 
 ## What's tested and what's judged
 
-Checked by `spec/` on every run, against the running app: a claim persists
-and is shown to everyone; the first claim wins and a second one is refused;
-one person holds one tile and claiming again moves it; bad input is refused;
-names are shown as text, never markup; every tile's height equals its claimed
-neighbours; pressing Enter in the name field can't claim a tile by accident.
+Checked by `spec/` on every run, against the running app: a claim reaches two
+other open sessions within one second; it persists; the first claim wins;
+one person holds one tile; a tile is safe for 24 hours and claimable after,
+with its holder told once (on a simulated clock); upgrading the database
+loses no claim; heights match claimed neighbours; names render as text; no
+one's identity cookie is ever sent to anyone else.
 
 Judged by people, not tests: whether rising beside strangers actually feels
 rewarding, whether a newcomer understands the rules without reading this page,
@@ -55,9 +59,7 @@ and whether the board looks good at a glance.
 
 - **Accounts.** They'd stop a stranger joining in seconds. A cookie tells
   people apart well enough for one room.
-- **Stealing tiles.** It would make the game about aggression rather than
-  proximity, and a refused claim is easier to read than a lost one.
-- **Chat.** The board is the conversation; adding chat would turn it into a
-  chat room with a grid attached.
-- **Live updates, for now.** Other people's claims appear when you reload.
-  Real-time updates arrive at crit 9.
+- **Taking tiles from people who are here.** It would make the game about
+  aggression rather than proximity. Only a faded tile is open.
+- **Chat and live cursors.** The board is the conversation; chat would turn
+  it into a chat room with a grid attached.
