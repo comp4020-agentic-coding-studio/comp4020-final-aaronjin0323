@@ -1,6 +1,7 @@
-// The camera. Without this script the board sits at a fixed angle and every
-// claim still works; with it, a drag turns and tilts the board, and buttons
-// do the same for keyboard users. The view is remembered per browser.
+// Everything the board does beyond plain HTML. Without this script the board
+// sits at a fixed angle, every claim is a form post and a reload, and other
+// people's claims show on the next load. With it: a camera you can turn,
+// keyboard play, and a live board that updates in place.
 
 const board = document.querySelector(".board");
 const stage = document.querySelector("[data-stage]");
@@ -194,6 +195,111 @@ if (board && stage) {
     } else if (key === "q" || key === "e") {
       (key === "q" ? controls[0][1] : controls[1][1])();
       e.preventDefault();
+    }
+  });
+
+  // --- live board ---
+  // The server sends the whole board as this visitor sees it, after every
+  // change anywhere. Patching only what differs keeps focus, the camera and
+  // any running transition where they are.
+  const form = board.closest("form");
+  const status = document.querySelector("#status");
+  const claimedCount = document.querySelector("[data-claimed]");
+  const notices = document.querySelector("[data-notices]");
+
+  const patchTile = (el, t) => {
+    if (el.dataset.state !== t.state) el.dataset.state = t.state;
+    if (el.dataset.height !== String(t.height)) {
+      el.dataset.height = String(t.height);
+      el.style.setProperty("--h", String(t.height));
+    }
+    if (t.hue === null) el.style.removeProperty("--hue");
+    else el.style.setProperty("--hue", String(t.hue));
+    if (el.getAttribute("aria-label") !== t.aria) el.setAttribute("aria-label", t.aria);
+    if (t.label === null) el.removeAttribute("title");
+    else el.title = t.label;
+    const initials = el.querySelector(".initials");
+    if (initials && initials.textContent !== t.initials) initials.textContent = t.initials;
+  };
+
+  const applyBoard = (view) => {
+    view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t));
+    if (claimedCount) claimedCount.textContent = String(view.claimed);
+    if (status) status.textContent = view.status;
+    // The tile in the tab order follows yours when you get one.
+    const mine = view.tiles.findIndex((t) => t.state === "mine");
+    if (mine >= 0 && !tiles.includes(document.activeElement)) moveTo(mine, false);
+  };
+
+  const showNotice = (key, text) => {
+    if (!notices) return;
+    const p = document.createElement("p");
+    p.className = "notice";
+    p.dataset.notice = key;
+    p.setAttribute("role", "status");
+    p.textContent = text;
+    notices.replaceChildren(p);
+  };
+
+  // A notice that arrived in the URL (?notice=claimed after a no-JS-style
+  // post) is shown once; drop it from the address so a reload doesn't repeat it.
+  if (location.search.includes("notice=")) history.replaceState(null, "", location.pathname);
+
+  if ("EventSource" in window) {
+    const events = new EventSource("/events");
+    events.addEventListener("board", (e) => applyBoard(JSON.parse(e.data)));
+    // On a drop the browser reconnects by itself (the server sets retry), and
+    // the first event after reconnecting is the full board, so nothing is
+    // missed. The marker below only says whether we're currently live.
+    events.addEventListener("open", () => document.body.classList.remove("is-offline"));
+    events.addEventListener("error", () => document.body.classList.add("is-offline"));
+  }
+
+  // --- claiming in place ---
+  // With script the form posts through fetch: no reload, so the camera and
+  // focus stay put. The server answers with the board as you now see it. Any
+  // failure to reach it falls back to a real form post.
+  const MESSAGES = {
+    claimed: "Claimed. Your tile rises for every neighbour who settles next to you.",
+    taken: "Someone got there first. Pick another tile.",
+    label: "Names are 1 to 24 characters.",
+    cell: "That tile doesn't exist.",
+  };
+  let posting = false;
+  let fallback = false; // set just before handing a post back to the browser
+
+  form?.addEventListener("submit", async (e) => {
+    const submitter = e.submitter;
+    if (!(submitter instanceof HTMLButtonElement) || !submitter.classList.contains("tile")) return;
+    if (fallback) return; // the real form post: let it through
+    e.preventDefault();
+    if (posting) return;
+    if (!nameField.value.trim()) {
+      showNotice("label", "Type a name first, then pick a tile.");
+      nameField.focus();
+      return;
+    }
+    posting = true;
+    try {
+      const res = await fetch("/claim", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({ cellId: submitter.value, label: nameField.value }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        applyBoard(body.board);
+        showNotice("claimed", MESSAGES.claimed);
+      } else {
+        showNotice(body.error, MESSAGES[body.error] ?? "That didn't work. Try again.");
+      }
+    } catch {
+      // Offline or the server is restarting: hand it to the browser as a real
+      // form post, which reloads into whatever the server says.
+      fallback = true;
+      form.requestSubmit(submitter);
+    } finally {
+      posting = false;
     }
   });
 }
