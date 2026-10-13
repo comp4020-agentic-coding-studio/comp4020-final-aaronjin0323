@@ -128,7 +128,40 @@ Settled; change them here first, then in the code.
   the skyline doesn't drop when people go home; they just stop being safe.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
   on a tile selects it and shows a full-width "Claim row R, column C" bar;
-  that button claims. Mouse and keyboard claim directly, as before.
+  that button claims. Mouse and keyboard claim directly, as before. The bar
+  names whoever holds the tile, and for an open tile says how many
+  neighbours settling there would lift: on a phone it's the only way to
+  learn who you'd stand beside.
+
+### Showing what your choice does to other people
+
+A project review found the game was one decision deep: you claim, and the
+page never shows that your position lifts or drops strangers, which is the
+whole point. So:
+
+- **Every height change is visible to everyone.** A tile whose height
+  changes *while keeping its holder* shows a floating "+1" or "−1" on every
+  open screen. A tile that changes hands, or becomes claimed, doesn't: that's
+  a new arrival, not a rise.
+- **Your own neighbourhood is narrated, and only yours.** Claiming says who
+  you lifted ("Claimed row 4, column 7. You lifted Mia and Kai.") and who
+  dropped when you left. Someone settling beside you or moving away says so,
+  with your new height ("Mia settled beside you. You're up to height 3.").
+  Limiting messages to your own tile keeps a busy room from flooding anyone's
+  screen or screen reader. Settling on a faded neighbour counts as arriving;
+  a change of holder shows as a change of hue, which comes from the holder.
+- **It's all worked out on the page.** Each `board` event is the full board,
+  so `public/diff.js` compares consecutive boards; the server sends nothing
+  new. The first board to compare against is read from the server-rendered
+  HTML, so a claim made before the stream connects still gets its message.
+  Your claim's result can arrive by the stream or by the claim's response,
+  whichever is first; both go through the same comparison, so the message
+  shows exactly once. `diff.js` is a pure module unit-tested in
+  `spec/diff.test.ts`.
+- **Scripts are ES modules, served `no-cache`,** so an `app.js` and a
+  `diff.js` from different deploys can never run together.
+- **The lede is three short sentences.** The rules people need while playing
+  are on the tiles, the status line and the confirm bar, not in a paragraph.
 
 ## Build sketch
 
@@ -202,8 +235,12 @@ and delete the line when one is settled.
   are tested and which are judged.
 - **Visual direction**: the current warm-paper palette with per-person hues
   is a default, not a decision.
-- **Presence ("N here now")**: a count of open streams is cheap. Not part of
-  crit 9's decision; add only if the slice is done early.
+- **The rest of the roadmap (weeks 11--12)**, from the same review:
+  "N here now" (a count of open streams); a warning before a move ("moving
+  will drop 3 neighbours"); a shared room score ("room skyline: 46 floors"),
+  which rises only when people cluster; and "since you left, 4 people
+  settled near you" on return, which needs the server to remember the board
+  at your last visit.
 
 ## How to work in here
 
