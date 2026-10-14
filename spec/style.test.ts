@@ -95,17 +95,27 @@ describe("the stylesheet's hooks", () => {
     expect(unset, "data attributes style.css selects that nothing sets").toEqual([]);
   });
 
-  // The goal, the room's moments and the economy's states are all data-*
-  // hooks the script sets and the stylesheet draws: each one has a rule.
-  it("styles every goal, landmark, building and dashboard hook the script sets", () => {
+  // The goal, the room's moments, the economy's states and the board's
+  // teaching cues are all data-* hooks the script sets and the stylesheet
+  // draws: each one has a rule. (invite: free plots glow before a first
+  // claim; want/wanted: a plot picked before a name, and the name field
+  // pulsing; gain: the +N/min over a ghost; at/gone: a line placed by its
+  // subject, then fading.)
+  it("styles every goal, landmark, building, wallet and teaching hook the script sets", () => {
+    const hooks = ["helps", "landmark", "raised", "bump", "built", "fresh", "lease", "invite", "want", "wanted", "selected", "gain", "at", "gone", "pending"];
     const set = [
-      ...app.matchAll(/dataset\.(helps|landmark|raised|bump|built|relocating)\b\s*=/g),
-      ...app.matchAll(/setData\([\w.]+, "(level|lease|land)"/g),
+      ...app.matchAll(new RegExp(`dataset\\.(${hooks.join("|")})\\b\\s*=`, "g")),
+      ...app.matchAll(new RegExp(`setData\\([\\w.\\[\\]]+, "(${hooks.join("|")})"`, "g")),
     ].map((m) => m[1]);
-    const hooks = ["helps", "landmark", "raised", "bump", "built", "relocating", "level", "lease", "land"];
     expect([...new Set(set)].sort(), "app.js no longer sets one of these hooks").toEqual([...hooks].sort());
     const kebab = (n: string): string => `data-${n.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
     expect(hooks.filter((h) => !new RegExp(`\\[${kebab(h)}[\\]=]`).test(css)), "hooks app.js sets that style.css never selects").toEqual([]);
+  });
+
+  // The wallet's controls are shown and hidden by [hidden], so a rule
+  // setting display on one must never beat it.
+  it("keeps [hidden] stronger than any display rule", () => {
+    expect(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/.test(css), "no global [hidden] { display: none !important }").toBe(true);
   });
 
   // Every value the script writes for these is styled: a preview kind or a
@@ -193,17 +203,15 @@ describe("contrast", () => {
   // [text, background, where it's used]
   const pairs: [string, string, string][] = [
     ["ink", "night", "body text"],
-    ["muted", "night", "claimed count, connection, key, camera hint"],
-    ["muted", "panel", "status line, inspector labels, confirm text"],
-    ["ink", "panel", "inspector values"],
-    ["accent", "panel", "notices"],
-    ["night", "cream", "name field, camera buttons"],
-    ["night", "accent", "the confirm bar's claim button"],
+    ["muted", "night", "connection words"],
+    ["muted", "panel", "tool panels, inspector labels"],
+    ["ink", "panel", "inspector values, income"],
+    ["accent", "panel", "the one-line notice"],
+    ["night", "cream", "name field, camera buttons, Collect's words"],
+    ["night", "accent", "the Build here, Move and Renew buttons"],
     ["money", "night", "the claimed count's digits"],
-    ["money", "panel", "the dashboard's coins and uncollected count"],
-    ["night", "muted", "a disabled action's label"],
-    ["night", "money", "the Collect button"],
-    ["accent", "panel", "a lease ending soon in the dashboard"],
+    ["money", "panel", "the wallet's coins, a plot's +N/min"],
+    ["night", "money", "the Collect and Help buttons"],
   ];
   it.each(pairs)("--%s on --%s meets AA (%s)", (fg, bg) => {
     expect(ratio(token(fg), token(bg))).toBeGreaterThanOrEqual(4.5);

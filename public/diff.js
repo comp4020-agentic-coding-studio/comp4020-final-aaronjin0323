@@ -80,8 +80,6 @@ export function perMinute(cents) {
   return Number.isInteger(coins) ? String(coins) : coins.toFixed(1).replace(/\.0$/, "");
 }
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
 // "23 h 12 m", "12 m", "under a minute"; "ended" once past; null for no time.
 export function timeLeft(iso, now) {
   if (!iso) return null;
@@ -123,24 +121,25 @@ export function pendingNow(me, since, now) {
 // Whole coins a collect would pay.
 export const collectable = (cents) => Math.floor(cents / 100);
 
-// --- what each action would do, and why it can't ---
+// --- what each action would do ---
+// Each returns `ok` and, when it isn't, a `reason` code. Nothing here says
+// why in words: a control that can't be used isn't shown (CLAUDE.md, "Show,
+// don't tell").
 
-// The Upgrade button: from what level to what, its cost, income before and
-// after, and the one reason it's refused, in words, when it is.
-export function upgradeInfo(board, { busy = false } = {}) {
+// Upgrading: from what level to what, its cost, and income before and after.
+export function upgradeInfo(board) {
   const mine = mineOf(board);
   const coins = meOf(board)?.coins ?? 0;
-  if (!mine) return { ok: false, reason: "no-land", why: "Claim a plot first, then upgrade its building." };
+  if (!mine) return { ok: false, reason: "no-land" };
   const level = levelOf(mine);
   const n = neighboursOf(board, mine);
   const base = { level, name: buildingName(level), rate: rateOf(level, n) };
-  if (level >= MAX_LEVEL) return { ...base, ok: false, reason: "max-level", why: "A Skyscraper is the top level." };
+  if (level >= MAX_LEVEL) return { ...base, ok: false, reason: "max-level" };
   const next = level + 1;
   const cost = ECONOMY.upgradeCosts[level - 1];
   const info = { ...base, next, nextName: buildingName(next), cost, nextRate: rateOf(next, n) };
-  if (busy) return { ...info, ok: false, reason: "busy", why: "Upgrading…" };
-  if (coins < cost) return { ...info, ok: false, reason: "coins", why: `You need ${cost - coins} more coins.` };
-  return { ...info, ok: true, reason: null, why: "" };
+  if (coins < cost) return { ...info, ok: false, reason: "coins" };
+  return { ...info, ok: true, reason: null };
 }
 
 // The renewal options: each one's cost, and whether it would take the lease
@@ -154,18 +153,16 @@ export function renewOptions(board, now) {
   const cap = since + ECONOMY.leaseCapHours * HOUR;
   return ECONOMY.renewals.map(({ hours, cost }) => {
     const option = { hours, cost };
-    if (!mine) return { ...option, ok: false, reason: "no-land", why: "Claim a plot first." };
-    if (Number.isFinite(cap) && ends + hours * HOUR > cap) {
-      return { ...option, ok: false, reason: "max-lease", why: `Past the ${ECONOMY.leaseCapHours} h limit` };
-    }
-    if (coins < cost) return { ...option, ok: false, reason: "coins", why: `Need ${cost - coins} more` };
-    return { ...option, ok: true, reason: null, why: "" };
+    if (!mine) return { ...option, ok: false, reason: "no-land" };
+    if (Number.isFinite(cap) && ends + hours * HOUR > cap) return { ...option, ok: false, reason: "max-lease" };
+    if (coins < cost) return { ...option, ok: false, reason: "coins" };
+    return { ...option, ok: true, reason: null };
   });
 }
 
 // Moving your building to free plot `id`: where from and to, its cost, your
-// income before and after, the lease you keep, and the reason it's refused.
-// Null unless you hold land and the plot is free.
+// income before and after, and whether it's possible now. Null unless you
+// hold land and the plot is free.
 export function relocateInfo(board, id, now) {
   const mine = mineOf(board);
   const t = board.tiles[id];
@@ -182,18 +179,10 @@ export function relocateInfo(board, id, now) {
     rate: rateOf(levelOf(mine), neighboursOf(board, mine)),
     nextRate: p.rate,
     neighbours: p.neighbours,
-    lease: timeLeft(me?.leaseEndsAt ?? mine.leaseEndsAt, now),
   };
-  if (wait > 0) return { ...info, ok: false, reason: "cooldown", why: `You can move again in ${timeLeft(me.relocateAt, now)}.` };
-  if (coins < cost) return { ...info, ok: false, reason: "coins", why: `Moving costs ${cost} coins; you need ${cost - coins} more.` };
-  return { ...info, ok: true, reason: null, why: "" };
-}
-
-// "Move from row 4, column 5 to row 7, column 2 for 50 coins. Income 14 →
-// 18 coins/min. Your lease keeps its 5 h 12 m."
-export function relocateText(r) {
-  const lease = r.lease && r.lease !== "ended" ? ` Lease left: ${r.lease}.` : "";
-  return `Move from ${place(r.from)} to ${place(r.to)} for ${r.cost} coins. Income ${perMinute(r.rate)} → ${perMinute(r.nextRate)} coins/min.${lease}`;
+  if (wait > 0) return { ...info, ok: false, reason: "cooldown" };
+  if (coins < cost) return { ...info, ok: false, reason: "coins" };
+  return { ...info, ok: true, reason: null };
 }
 
 // Whether I can help the building on tile `id`: it's someone else's, right
@@ -204,8 +193,7 @@ export function canHelp(board, id, now) {
   const t = board.tiles[id];
   if (!mine || !t || t.state !== "held" || !neighbours(mine.id).includes(id)) return null;
   const helpAt = meOf(board)?.helpAt ?? null;
-  const wait = msUntil(helpAt, now);
-  return { id, label: t.label, ok: wait <= 0, wait: wait > 0 ? timeLeft(helpAt, now) : null };
+  return { id, label: t.label, ok: msUntil(helpAt, now) <= 0 };
 }
 
 // --- the placement preview ---
@@ -256,27 +244,39 @@ function names(list) {
   return `${list[0]}, ${list[1]} and ${list.length - 2} others`;
 }
 
-// "Earns 14 coins/min here, with 2 neighbours. Raises Mia's and Kai's income."
-function effect(board, p) {
-  let text = `Earns ${perMinute(p.rate)} coins/min here, with ${plural(p.neighbours, "neighbour")}.`;
-  if (p.lifted.length) text += ` Raises ${names(p.lifted.map((i) => board.tiles[i].label))}'s income.`;
-  if (p.dropped.length) text += ` ${names(p.dropped.map((i) => board.tiles[i].label))} would earn less.`;
-  return text;
-}
+const MINUS = "−";
+const PCT = Math.round(ECONOMY.neighbourBonus * 100); // 20: what one neighbour adds
+const coinsAMinute = (cents) => `${perMinute(cents)} coin${cents === 100 ? "" : "s"} a minute`;
 
-// --- narration: what changed, said only about your own building ---
+// --- narration: one short line, about your own building only ---
+// Each message is { key, text, said }: `text` is the line shown on the
+// board, a few words and numbers; `said` is the sentence the live region
+// speaks, since "+14/min" read aloud means little.
 
-export const CLAIMED_TEXT = "Land claimed! Your building is now generating income.";
-export const EXPIRED_TEXT = "Your land lease has expired. Choose a new plot to continue building.";
+export const EXPIRED_TEXT = "Your lease ended. Pick a new plot.";
 
 export function welcomeText(me) {
   const w = me?.welcome;
   if (w === undefined || w === null || w === false) return null;
   const coins = typeof w === "number" ? w : typeof w === "object" ? Number(w.coins ?? collectable(w.cents ?? 0)) : NaN;
   if (!Number.isFinite(coins)) return null;
-  return `Welcome back! Your building earned ${coins} coins while you were away.`;
+  return `Welcome back! +${coins} earned`;
+}
+export function welcomeSaid(me) {
+  const text = welcomeText(me);
+  return text === null ? null : `Welcome back! Your building earned ${text.match(/\d+/)[0]} coins while you were away.`;
 }
 export const expiredText = (me) => (me?.expired ? EXPIRED_TEXT : null);
+
+// What claiming or moving says: "Your building is up! +14/min · Mia and
+// Kai +20%".
+export function builtMessage({ moved, rate, raised = [], where = null }) {
+  const lift = raised.length ? ` · ${names(raised)} +${PCT}%` : "";
+  const liftSaid = raised.length ? ` ${names(raised)} now earn${raised.length === 1 ? "s" : ""} more.` : "";
+  return moved
+    ? { key: "claimed", text: `Moved! +${perMinute(rate)}/min${lift}`, said: `Moved${where === null ? "" : ` to ${place(where)}`}. You earn ${coinsAMinute(rate)}.${liftSaid}` }
+    : { key: "claimed", text: `Your building is up! +${perMinute(rate)}/min${lift}`, said: `Your building is up, earning ${coinsAMinute(rate)}.${liftSaid}` };
+}
 
 export function diffBoards(prev, next) {
   // Buildings whose height changed while keeping the same holder: everyone
@@ -294,46 +294,56 @@ export function diffBoards(prev, next) {
   const messages = [];
 
   if (nextMine && (!prevMine || prevMine.id !== nextMine.id)) {
-    // I just claimed, or moved: whose income my arrival raised and my
-    // leaving lowered (a neighbour of both plots is neither).
+    // I just claimed, or moved: whose income my arrival raised (a
+    // neighbour of both plots is neither).
     const counted = (b, t) => neighboursOf(b, t);
     const raised = neighbours(nextMine.id)
       .filter((id) => sameHolder(prev.tiles[id], next.tiles[id]) && counted(next, next.tiles[id]) > counted(prev, prev.tiles[id]))
       .map((id) => next.tiles[id].label);
-    let text = prevMine
-      ? `Moved to ${place(nextMine.id)}. Your income is now ${perMinute(nextMine.rate ?? rateOf(levelOf(nextMine), counted(next, nextMine)))} coins/min.`
-      : CLAIMED_TEXT;
-    if (raised.length) text += ` ${names(raised)} now earn${raised.length === 1 ? "s" : ""} more.`;
-    messages.push({ key: "claimed", text });
+    const rate = Number.isFinite(nextMine.rate) && nextMine.rate > 0 ? nextMine.rate : rateOf(levelOf(nextMine), counted(next, nextMine));
+    messages.push(builtMessage({ moved: Boolean(prevMine), rate, raised, where: nextMine.id }));
   } else if (prevMine && !nextMine) {
-    messages.push({ key: "expired", text: EXPIRED_TEXT });
+    messages.push({ key: "expired", text: EXPIRED_TEXT, said: EXPIRED_TEXT });
   } else if (nextMine && prevMine) {
-    // I stayed put: who built beside me, who left, and what it did to me.
-    // Someone gone from beside me who still holds land elsewhere relocated;
-    // otherwise their lease ended.
+    // I stayed put: who built beside me, who left, and what it did to my
+    // income. Someone gone from beside me who still holds land elsewhere
+    // moved; otherwise their lease ended.
     const arrived = [];
-    let relocated = 0;
-    let ended = 0;
+    const moved = [];
+    const ended = [];
     for (const id of neighbours(nextMine.id)) {
       const before = prev.tiles[id];
       const after = next.tiles[id];
       if (claimed(after) && !sameHolder(before, after)) arrived.push(after.label);
       if (claimed(before) && !sameHolder(before, after)) {
-        if (next.tiles.some((t) => sameHolder(before, t))) relocated++;
-        else ended++;
+        if (next.tiles.some((t) => sameHolder(before, t))) moved.push(before.label);
+        else ended.push(before.label);
       }
     }
-    const nBefore = neighboursOf(prev, prevMine);
-    const nAfter = neighboursOf(next, nextMine);
-    if (arrived.length || relocated || ended) {
+    const change = (neighboursOf(next, nextMine) - neighboursOf(prev, prevMine)) * PCT;
+    if (arrived.length || moved.length || ended.length) {
+      const parts = [];
       const said = [];
-      if (arrived.length) said.push(`${names(arrived)} built next to you.`);
-      if (relocated) said.push(relocated === 1 ? "Your neighbour relocated." : `${relocated} neighbours relocated.`);
-      if (ended) said.push(ended === 1 ? "Your neighbour's lease ended." : `${ended} neighbours' leases ended.`);
-      if (nAfter > nBefore) said.push("Your income increased!");
-      else if (nAfter < nBefore) said.push("Your income has changed.");
-      if (nAfter !== nBefore) said.push(`Your building now has ${plural(nAfter, "neighbour")}.`);
-      messages.push({ key: arrived.length && !relocated && !ended ? "arrived" : "left", text: said.join(" ") });
+      if (arrived.length) {
+        parts.push(`${names(arrived)} built beside you`);
+        said.push(`${names(arrived)} built beside you.`);
+      }
+      if (moved.length) {
+        parts.push(`${names(moved)} moved away`);
+        said.push(`${names(moved)} moved away.`);
+      }
+      if (ended.length) {
+        parts.push(ended.length === 1 ? `${ended[0]}'s lease ended` : `${ended.length} leases ended`);
+        said.push(ended.length === 1 ? `${ended[0]}'s lease ended.` : `${ended.length} neighbours' leases ended.`);
+      }
+      if (change > 0) {
+        parts.push(`+${change}%`);
+        said.push(`Your income is up ${change}%.`);
+      } else if (change < 0) {
+        parts.push(`${MINUS}${-change}%`);
+        said.push(`Your income is down ${-change}%.`);
+      }
+      messages.push({ key: arrived.length && !moved.length && !ended.length ? "arrived" : "left", text: parts.join(" · "), said: said.join(" ") });
     }
   }
 
@@ -374,6 +384,10 @@ export function accepts(shownVersion, nextVersion, streamVersion = null) {
 // raisers } } }`; a board without it counts as none raised.
 
 export const LANDMARK_AT = 8;
+// The goal line stays off the page until some building has this many
+// neighbours: before then it's a target nobody is near.
+export const GOAL_SHOWN_AT = 5;
+export const goalShown = (g) => g.count > 0 || (g.closest !== null && g.closest.neighbours >= GOAL_SHOWN_AT);
 
 const landmarksOf = (board) => board.landmarks ?? { count: 0, cells: {} };
 export const landmarkAt = (board, id) => {
@@ -414,12 +428,6 @@ export function helpsWith(board, id) {
     if (!best || after > best.neighbours) best = { id: x.id, label: x.label, neighbours: after, landmark: after >= LANDMARK_AT, name: buildingOf(x) };
   }
   return best;
-}
-
-// "brings Mia's building to 7 of 8 neighbours", "completes a landmark!"
-export function helpText(h) {
-  if (!h) return null;
-  return h.landmark ? "completes a landmark!" : `brings ${h.name} to ${h.neighbours} of ${LANDMARK_AT} neighbours`;
 }
 
 // The goal line and the glowing plots. `closest` is the contender with the
@@ -517,139 +525,172 @@ export function tileWords(t, now = new Date()) {
   return `${where}, ${who}, height ${t.height}${soon}`;
 }
 
-// The status line under the name.
+// The status line: never on screen, but it describes the board to a screen
+// reader (the board's aria-describedby), so it stays a sentence.
 export function statusText(board) {
   const mine = mineOf(board);
   if (!mine) return "You have no land. Type a name, then pick a free plot to build on.";
   return `You own a ${buildingName(levelOf(mine))} at ${place(mine.id)}. Pick a free plot to move there.`;
 }
 
-// Every slot of the dashboard as text, so src/board.ts (no script) and
-// app.js (live) say the same words. `pending` is the uncollected income to
-// show, in hundredths, already counted up to `now`. Each action has a main
-// line, a short sub line (on a phone it's the only detail under the thumb)
-// and `why`: the reason it's disabled, or what it would do.
-export function dashParts(board, now, pending = meOf(board)?.pending ?? 0, { busy = null } = {}) {
+// Renewal shows once the lease has less than this left.
+export const RENEW_SHOWN_MS = 6 * HOUR;
+
+// The wallet: everything it shows, and only what you can act on now. Null
+// without land, since there is then no wallet to show. `pending` is the
+// uncollected income in hundredths, already counted up to `now`. Collect,
+// Upgrade and the renewal options are each null (or empty) when they can't
+// be used: the page leaves them out rather than drawing them disabled.
+export function hudParts(board, now, pending = meOf(board)?.pending ?? 0) {
   const mine = mineOf(board);
+  if (!mine) return null;
   const me = meOf(board);
   const coins = me?.coins ?? 0;
   const owed = collectable(pending);
-  const n = mine ? neighboursOf(board, mine) : 0;
-  const rate = mine ? (Number.isFinite(mine.rate) ? mine.rate : rateOf(levelOf(mine), n)) : 0;
-  const leaseIso = me?.leaseEndsAt ?? mine?.leaseEndsAt ?? null;
-  const lease = mine ? timeLeft(leaseIso, now) : null;
-  const wait = msUntil(me?.relocateAt, now);
-  const up = upgradeInfo(board, { busy: busy === "upgrade" });
-  const renew = renewOptions(board, now).map((o) => ({ ...o, label: `+${o.hours} h · ${o.cost} coins` }));
-
-  const collect =
-    busy === "collect"
-      ? { ok: false, sub: "…", why: "Collecting…" }
-      : owed >= 1
-        ? { ok: true, sub: `+${owed}`, why: `Adds ${owed} coins to your ${coins}.` }
-        : { ok: false, sub: "none yet", why: mine ? "Nothing to collect yet: income arrives every minute." : "Claim a plot to start earning." };
-
-  const upgrade = up.next
-    ? {
-        ok: up.ok,
-        sub: up.ok ? `${up.cost} · Lv ${up.next}` : up.reason === "coins" ? `need ${up.cost - coins}` : "…",
-        why: `${up.name} → ${up.nextName} (level ${up.level} → ${up.next}) for ${up.cost} coins. Income ${perMinute(up.rate)} → ${perMinute(up.nextRate)} coins/min.${up.ok ? "" : ` ${up.why}`}`,
-      }
-    : { ok: false, sub: up.reason === "max-level" ? "top level" : "no land", why: up.why };
-
-  const anyRenew = renew.some((o) => o.ok);
-  const renewAct = !mine
-    ? { ok: false, sub: "no land", why: "Claim a plot first." }
-    : { ok: anyRenew, sub: lease && lease !== "ended" ? lease : "—", why: anyRenew ? "Extend your lease." : renew.every((o) => o.reason === "max-lease") ? `Your lease is at the ${ECONOMY.leaseCapHours} h limit.` : "Not enough coins to renew." };
-
-  const relocate = !mine
-    ? { ok: false, sub: "no land", why: "Claim a plot first." }
-    : busy === "relocate"
-      ? { ok: false, sub: "…", why: "Moving…" }
-      : wait > 0
-        ? { ok: false, sub: `in ${timeLeft(me.relocateAt, now)}`, why: `You can move again in ${timeLeft(me.relocateAt, now)}.` }
-        : coins < ECONOMY.relocateCost
-          ? { ok: false, sub: `need ${ECONOMY.relocateCost - coins}`, why: `Moving costs ${ECONOMY.relocateCost} coins; you have ${coins}.` }
-          : { ok: true, sub: `${ECONOMY.relocateCost} coins`, why: `Pick a free plot on the map to move there for ${ECONOMY.relocateCost} coins.` };
-
+  const n = neighboursOf(board, mine);
+  const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n);
+  const leaseIso = me?.leaseEndsAt ?? mine.leaseEndsAt ?? null;
+  const left = Math.max(0, msUntil(leaseIso, now));
+  const since = me?.ownedSince ? new Date(me.ownedSince).getTime() : NaN;
+  const total = Number.isFinite(since) && leaseIso ? new Date(leaseIso).getTime() - since : ECONOMY.leaseHours * HOUR;
+  const leaseText = timeLeft(leaseIso, now) ?? "unknown";
+  const up = upgradeInfo(board);
   return {
     coins: String(coins),
-    building: mine ? `${buildingName(levelOf(mine))} · Lv ${levelOf(mine)}` : "No building yet",
-    level: mine ? levelOf(mine) : 0,
-    rate: mine ? `${perMinute(rate)} coins/min` : "—",
-    neighbours: mine ? `${n} of ${neighbours(mine.id).length}` : "—",
-    pending: String(owed),
-    lease: lease ?? "—",
-    leaseSoon: mine ? msUntil(leaseIso, now) < SOON_MS : false,
-    move: !mine ? "—" : wait > 0 ? `in ${timeLeft(me.relocateAt, now)}` : "ready",
-    collect,
-    upgrade,
-    renew: renewAct,
-    renewOptions: renew,
-    relocate,
+    coinsSaid: `${coins} coins`,
+    rate: `+${perMinute(rate)}/min`,
+    rateSaid: `Income ${coinsAMinute(rate)}`,
+    level: levelOf(mine),
+    collect: owed >= 1 ? { owed, text: `+${owed}`, said: `Collect ${owed} coins` } : null,
+    upgrade: up.ok
+      ? { next: up.next, name: up.nextName, cost: up.cost, said: `Upgrade to ${up.nextName} for ${up.cost} coins` }
+      : null,
+    lease: {
+      left: leaseText,
+      frac: total > 0 ? Math.min(1, left / total) : 0,
+      soon: left > 0 && left < SOON_MS,
+      said: leaseText === "ended" ? "Lease ended" : `Lease: ${leaseText} left`,
+    },
+    renew:
+      left > 0 && left < RENEW_SHOWN_MS
+        ? renewOptions(board, now)
+            .filter((o) => o.ok)
+            .map((o) => ({ ...o, text: `+${o.hours} h`, said: `Renew lease ${o.hours} hours for ${o.cost} coins` }))
+        : [],
   };
 }
 
-// --- the confirm bar and the inspector ---
+// --- the picked plot: the confirm bar and the inspector ---
 
-// The confirm bar's wording for a selected plot: a claim (no land yet), a
-// move (you hold land), or someone's building, with what it would do.
+// The bar for a selected plot: a claim (no land yet), a move (you hold
+// land), or someone's building. `title` is a short line of numbers;
+// `action` the button's words, or null when there's nothing to do there.
 export function describeTile(board, id, now = new Date()) {
   const t = board.tiles[id];
   const where = place(id);
-  if (t.state === "mine") return { title: `Your ${buildingName(levelOf(t))}, ${where}`, action: null, open: false, kind: "mine" };
-  if (t.state === "held") {
-    const lease = timeLeft(t.leaseEndsAt, now);
-    return {
-      title: `${t.label}'s ${buildingName(levelOf(t))}, ${where}${lease && lease !== "ended" ? `. Lease ${lease} left.` : ""}`,
-      action: null,
-      open: false,
-      kind: "held",
-    };
-  }
-  const help = helpText(helpsWith(board, id));
-  const goalPart = help ? ` Building here ${help}` : "";
-  const end = goalPart && !goalPart.endsWith("!") ? "." : "";
+  if (t.state === "mine") return { title: `Your ${buildingName(levelOf(t))}`, action: null, open: false, kind: "mine" };
+  if (t.state === "held") return { title: `${t.label}'s ${buildingName(levelOf(t))}`, action: null, open: false, kind: "held" };
+  const p = preview(board, id);
+  const gain = `+${perMinute(p.rate)}/min`;
+  const lift = p.lifted.length ? ` · ${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%` : "";
   const move = relocateInfo(board, id, now);
   if (move) {
-    return {
-      title: `${relocateText(move)}${move.ok ? "" : ` ${move.why}`}${goalPart}${end}`,
-      action: `Move here · ${move.cost} coins`,
-      open: move.ok,
-      kind: "move",
-      move,
-    };
+    const wait = move.reason === "cooldown" ? ` · move in ${timeLeft(meOf(board).relocateAt, now)}` : move.reason === "coins" ? ` · moving costs ${move.cost}` : "";
+    return { title: `${gain}${lift}${wait}`, action: move.ok ? `Move here · ${move.cost}` : null, open: move.ok, kind: "move", move };
   }
-  return { title: `${effect(board, preview(board, id))}${goalPart}${end}`, action: `Claim ${where}`, open: true, kind: "claim" };
+  return { title: `${gain}${lift}`, action: "Build here", open: true, kind: "claim", where };
 }
 
-// Everything the inspector shows about one plot: a heading and term/value
-// pairs. A free plot also says what building there would do.
+// What the inspector shows about one plot: a heading and a few short
+// term/value pairs, numbers first.
 export function inspect(board, id, now) {
   const t = board.tiles[id];
   if (!t) return null;
-  const where = place(id);
-  const around = neighboursOf(board, t.state === "free" ? { ...t, neighbours: undefined } : t);
   const facts = [];
   let title;
   if (t.state === "free") {
-    title = `Free plot: ${where}`;
-    facts.push(["Occupied neighbours", `${around} of ${neighbours(id).length}`]);
+    const p = preview(board, id);
+    title = "Free plot";
+    facts.push(["Earns", `+${perMinute(p.rate)}/min`]);
+    if (p.lifted.length) facts.push(["Lifts", `${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%`]);
+    if (p.dropped.length) facts.push(["Drops", `${names(p.dropped.map((i) => board.tiles[i].label))} ${MINUS}${PCT}%`]);
+    const h = goalShown(goal(board)) ? helpsWith(board, id) : null;
+    if (h) facts.push(["Landmark", h.landmark ? "completes one!" : `${h.name} → ${h.neighbours} of ${LANDMARK_AT}`]);
   } else {
     const level = levelOf(t);
-    title = `${t.state === "mine" ? "You" : t.label}: ${where}`;
-    facts.push(["Owner", t.state === "mine" ? `${t.label} (you)` : t.label]);
-    facts.push(["Building", `${buildingName(level)}, level ${level}`]);
+    const around = neighboursOf(board, t);
+    title = t.state === "mine" ? `Your ${buildingName(level)}` : `${t.label}'s ${buildingName(level)}`;
+    facts.push(["Earns", `+${perMinute(Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(level, around))}/min`]);
     facts.push(["Neighbours", `${around} of ${neighbours(id).length}`]);
-    facts.push(["Income", `${perMinute(Number.isFinite(t.rate) ? t.rate : rateOf(level, around))} coins/min`]);
     const lease = timeLeft(t.leaseEndsAt, now);
-    if (lease) facts.push(["Lease", lease === "ended" ? "ended" : `${lease} left${leaseSoon(t, now) ? ", ending soon" : ""}`]);
+    if (lease) facts.push(["Lease", lease === "ended" ? "ended" : `${lease} left`]);
   }
-  const p = preview(board, id);
-  if (p) facts.push([p.from === null ? "If you build here" : "If you move here", effect(board, p)]);
-  const help = helpText(helpsWith(board, id));
-  if (help) facts.push(["Goal", `Building here ${help}`]);
   const mark = landmarkAt(board, id);
   if (mark) facts.unshift(["Landmark", `raised by ${allNames(mark.raisers)}`]);
   return { title, facts };
+}
+
+// --- what an action's answer says: one short line, and a sentence to speak ---
+
+// A successful action, by the server's notice key. `body` is the JSON reply,
+// `view` the board that came with it.
+export function doneText(notice, body = {}, view = { tiles: [], me: null }, now = new Date()) {
+  const me = view?.me ?? null;
+  switch (notice) {
+    case "collected": {
+      const paid = Number(body.paid) || 0;
+      return { text: `+${paid} collected`, said: `Collected ${paid} coins.` };
+    }
+    case "nothing-to-collect":
+      return { text: "Nothing to collect yet", said: "Nothing to collect yet." };
+    case "upgraded": {
+      const name = buildingName(body.level ?? me?.level ?? 1);
+      const rate = me?.rate ?? 0;
+      return { text: `${name}! +${perMinute(rate)}/min`, said: `Upgraded to a ${name}, earning ${coinsAMinute(rate)}.` };
+    }
+    case "renewed": {
+      const left = timeLeft(body.leaseEndsAt ?? me?.leaseEndsAt, now) ?? "extended";
+      return { text: `Lease renewed · ${left.replace(/ \d+ m$/, "")} left`, said: `Lease renewed: ${left} left.` };
+    }
+    case "helped":
+      return {
+        text: `Helped! +${ECONOMY.helpGift} to them, +${ECONOMY.helpReward} to you`,
+        said: `You helped your neighbour: ${ECONOMY.helpGift} coins to them, ${ECONOMY.helpReward} to you.`,
+      };
+    case "renamed": {
+      const label = String(body.label ?? "");
+      return { text: `You're ${label}`, said: `Name saved: you're ${label}.` };
+    }
+    default:
+      return { text: "Done", said: "Done." };
+  }
+}
+
+// A refusal, by the server's error key, else its status, else a network
+// failure. `claim` is true for a claim, which says nothing was claimed.
+const REFUSALS = Object.freeze({
+  taken: "Someone got there first",
+  coins: "Not enough coins",
+  cooldown: "Not yet: cooling down",
+  "max-level": "Already a Skyscraper",
+  "max-lease": `Lease is at the ${ECONOMY.leaseCapHours} h limit`,
+  "not-neighbour": "Only buildings next to yours",
+  "no-land": "Pick a plot first",
+  hours: `Renew ${ECONOMY.renewals.map((r) => r.hours).join(", ").replace(/, (\d+)$/, " or $1")} h`,
+  label: "Name: 1 to 24 characters",
+  cell: "No such plot",
+});
+const BY_STATUS = Object.freeze({ 403: "Refused: reload and try again", 409: REFUSALS.taken, 402: REFUSALS.coins, 429: REFUSALS.cooldown, 413: "Too large to send" });
+export function refusalText({ network = false, status = 0, error = null } = {}, { claim = false } = {}) {
+  const text = network
+    ? `Can't reach the server: nothing ${claim ? "claimed" : "changed"}`
+    : ((error !== null && Object.hasOwn(REFUSALS, error) ? REFUSALS[error] : null) ?? BY_STATUS[status] ?? `That didn't work (error ${status})`);
+  return { text, said: `${text}.` };
+}
+
+// Clicking a building that isn't yours: whose it is.
+export function heldText(board, id) {
+  const t = board.tiles[id];
+  const name = `${t.label}'s ${buildingName(levelOf(t))}`;
+  return { text: name, said: `${name}, ${place(id)}. Pick a free plot.` };
 }

@@ -701,6 +701,19 @@ these tools, not tied to any one prototype's content.
   kill the process before the database closes.
 - **A keyboard step-and-back that "returns to the same tile" fails at a
   board edge,** where the first step can't move. Try both orders.
+- **`clip-path` on a 3D-rotated element costs a mask layer about 1000 px
+  bigger than the element on every side.** Seventy clipped roofs came to
+  1.1 GB of compositor memory; the GPU dropped layers and buildings drew as
+  hollow shells. Draw shapes on 3D faces with gradients or borders, never
+  `clip-path`, and check the layer bill (`LayerTree` over CDP), because every
+  DOM box still measures right while it's broken.
+- **Headless Chrome hides GPU failures.** A screenshot with pieces missing
+  is a bug until a headed, GPU-on run (`HEADED=1`) shows otherwise; never
+  write it off as a capture artefact.
+- **A reach check followed by a hover races other players' claims.** A
+  building can rise between the two. Give the hover a short timeout and
+  turn the camera again, rather than waiting out the default on a blocked
+  angle.
 - **A recorded "source" field is not necessarily a bare URL.** Notes get
   appended to it. Anything that turns data into an `href` extracts and tests
   the URL shape, or the link checker finds it after the deploy.

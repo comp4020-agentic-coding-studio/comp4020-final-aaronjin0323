@@ -1,32 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { JSDOM } from "jsdom";
-import { boardView, heights, neighbourCounts, renderBoard } from "../src/board.ts";
+import { boardView, heights, NOTICES, neighbourCounts, renderBoard } from "../src/board.ts";
 import { type Landmark, type Me, openStore, type Store, type Tile } from "../src/db.ts";
 import { ECONOMY as SERVER_ECONOMY, rate as serverRate } from "../src/economy.ts";
 import {
   accepts,
   arrivals,
   canHelp,
-  dashParts,
   describeTile,
   diffBoards,
+  doneText,
   ECONOMY,
   eventText,
   goal,
   goalParts,
+  goalShown,
+  heldText,
   helpsWith,
+  hudParts,
   inspect,
   leaseSoon,
   pendingNow,
   preview,
   raisedText,
   rateOf,
+  refusalText,
   relocateInfo,
   renewOptions,
   tileAria,
   timeLeft,
   upgradeInfo,
   upgrades,
+  welcomeSaid,
   welcomeText,
   // @ts-expect-error: a plain browser module with no type declarations
 } from "../public/diff.js";
@@ -67,45 +72,46 @@ describe("the game's numbers", () => {
   });
 });
 
-describe("narration: my own building only", () => {
-  it("says the land is claimed, and whose income my arrival raised", () => {
+describe("narration: one short line about my own building, and a sentence to speak", () => {
+  it("says my building is up, its income, and whose income my arrival raised", () => {
     const { store, view } = scene();
     store.claim(at(3, 3), MIA, "Mia", NOW);
     store.claim(at(3, 5), KAI, "Kai", NOW);
     const before = view();
     store.claim(at(3, 4), ME, "Me", NOW);
-    const [msg] = diffBoards(before, view()).messages;
-    expect(msg).toEqual({ key: "claimed", text: "Land claimed! Your building is now generating income. Mia and Kai now earn more." });
-  });
-
-  it("says exactly the claim line when I settle alone", () => {
-    const { store, view } = scene();
-    const before = view();
-    store.claim(at(0, 0), ME, "Me", NOW);
-    expect(diffBoards(before, view()).messages).toEqual([{ key: "claimed", text: "Land claimed! Your building is now generating income." }]);
-  });
-
-  it("tells me who built next to me, that my income rose, and my neighbour count", () => {
-    const { store, view } = scene();
-    store.claim(at(5, 5), ME, "Me", NOW);
-    store.claim(at(5, 6), KAI, "Kai", NOW);
-    store.claim(at(5, 4), ZOE, "Zoe", NOW);
-    store.claim(at(4, 4), "x", "X", NOW);
-    const before = view();
-    store.claim(at(6, 6), MIA, "Alex", NOW);
     expect(diffBoards(before, view()).messages).toEqual([
-      { key: "arrived", text: "Alex built next to you. Your income increased! Your building now has 4 neighbours." },
+      { key: "claimed", text: "Your building is up! +14/min · Mia and Kai +20%", said: "Your building is up, earning 14 coins a minute. Mia and Kai now earn more." },
     ]);
   });
 
-  it("tells me a neighbour relocated and my income changed", () => {
+  it("says exactly the short line when I settle alone", () => {
+    const { store, view } = scene();
+    const before = view();
+    store.claim(at(0, 0), ME, "Me", NOW);
+    expect(diffBoards(before, view()).messages).toEqual([
+      { key: "claimed", text: "Your building is up! +10/min", said: "Your building is up, earning 10 coins a minute." },
+    ]);
+  });
+
+  it("tells me who built beside me and what it did to my income", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 6), KAI, "Kai", NOW);
+    const before = view();
+    store.claim(at(6, 6), MIA, "Alex", NOW);
+    expect(diffBoards(before, view()).messages).toEqual([
+      { key: "arrived", text: "Alex built beside you · +20%", said: "Alex built beside you. Your income is up 20%." },
+    ]);
+  });
+
+  it("tells me a neighbour moved away, and my income fell", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
     store.claim(at(5, 6), MIA, "Mia", NOW);
     const before = view();
     expect(store.claim(at(0, 0), MIA, "Mia", NOW)).toBe("moved");
     expect(diffBoards(before, view()).messages).toEqual([
-      { key: "left", text: "Your neighbour relocated. Your income has changed. Your building now has 0 neighbours." },
+      { key: "left", text: "Mia moved away · \u221220%", said: "Mia moved away. Your income is down 20%." },
     ]);
   });
 
@@ -115,8 +121,8 @@ describe("narration: my own building only", () => {
     store.claim(at(5, 5), ME, "Me", NOW);
     const before = view();
     const later = new Date(NOW.getTime() + 2 * HOUR); // Mia's 24 h lease ended
-    expect(diffBoards(before, view(ME, later)).messages.map((m: { text: string }) => m.text)).toEqual([
-      "Your neighbour's lease ended. Your income has changed. Your building now has 0 neighbours.",
+    expect(diffBoards(before, view(ME, later)).messages).toEqual([
+      { key: "left", text: "Mia's lease ended · \u221220%", said: "Mia's lease ended. Your income is down 20%." },
     ]);
   });
 
@@ -132,12 +138,21 @@ describe("narration: my own building only", () => {
   it("says my move and my new income", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
-    const before = view();
     store.claim(at(1, 1), KAI, "Kai", NOW);
     const mid = view();
     store.claim(at(1, 2), ME, "Me", NOW);
-    expect(diffBoards(mid, view()).messages[0]).toEqual({ key: "claimed", text: "Moved to row 2, column 3. Your income is now 12 coins/min. Kai now earns more." });
-    expect(before).toBeTruthy();
+    expect(diffBoards(mid, view()).messages).toEqual([
+      { key: "claimed", text: "Moved! +12/min · Kai +20%", said: "Moved to row 2, column 3. You earn 12 coins a minute. Kai now earns more." },
+    ]);
+  });
+
+  it("says my lease ended, once, in a few words", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    const before = view();
+    expect(diffBoards(before, view(ME, new Date(NOW.getTime() + 25 * HOUR))).messages).toEqual([
+      { key: "expired", text: "Your lease ended. Pick a new plot.", said: "Your lease ended. Pick a new plot." },
+    ]);
   });
 
   it("floats +1/−1 on buildings that kept their holder, never on a new one", () => {
@@ -154,31 +169,88 @@ describe("narration: my own building only", () => {
   });
 });
 
+describe("what each action's answer says", () => {
+  it("is one short line, with a full sentence for the live region", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    const v = withMe(view(), { rate: 2000, level: 2, leaseEndsAt: new Date(NOW.getTime() + 30 * HOUR + 5 * MIN).toISOString() });
+    expect(doneText("collected", { paid: 34 }, v, NOW)).toEqual({ text: "+34 collected", said: "Collected 34 coins." });
+    expect(doneText("nothing-to-collect", {}, v, NOW)).toEqual({ text: "Nothing to collect yet", said: "Nothing to collect yet." });
+    expect(doneText("upgraded", { level: 2 }, v, NOW)).toEqual({ text: "Townhouse! +20/min", said: "Upgraded to a Townhouse, earning 20 coins a minute." });
+    expect(doneText("renewed", {}, v, NOW)).toEqual({ text: "Lease renewed · 30 h left", said: "Lease renewed: 30 h 5 m left." });
+    expect(doneText("helped")).toEqual({ text: "Helped! +50 to them, +20 to you", said: "You helped your neighbour: 50 coins to them, 20 to you." });
+    expect(doneText("renamed", { label: "Mo" })).toEqual({ text: "You're Mo", said: "Name saved: you're Mo." });
+  });
+
+  it("names each refusal in a few words", () => {
+    expect(refusalText({ error: "coins", status: 402 })).toEqual({ text: "Not enough coins", said: "Not enough coins." });
+    expect(refusalText({ status: 409 })).toEqual({ text: "Someone got there first", said: "Someone got there first." });
+    expect(refusalText({ status: 403 })).toEqual({ text: "Refused: reload and try again", said: "Refused: reload and try again." });
+    expect(refusalText({ error: "cooldown" }).text).toBe("Not yet: cooling down");
+    expect(refusalText({ error: "label" }).text).toBe("Name: 1 to 24 characters");
+    expect(refusalText({ error: "hours" }).text).toBe("Renew 6, 12 or 24 h");
+    expect(refusalText({ network: true }, { claim: true }).text).toBe("Can't reach the server: nothing claimed");
+    expect(refusalText({ network: true }).text).toBe("Can't reach the server: nothing changed");
+    expect(refusalText({ status: 500 }).text).toBe("That didn't work (error 500)");
+    expect(refusalText({ error: "constructor", status: 400 }).text).toBe("That didn't work (error 400)");
+  });
+
+  it("says whose a building is when it's clicked", () => {
+    const { store, view } = scene();
+    store.claim(at(2, 2), MIA, "Mia", NOW);
+    expect(heldText(view(), at(2, 2))).toEqual({ text: "Mia's Small House", said: "Mia's Small House, row 3, column 3. Pick a free plot." });
+  });
+
+  it("keeps the server's notices to a short line each", () => {
+    expect(NOTICES).toEqual({
+      claimed: "Your building is up!",
+      taken: "Someone got there first.",
+      label: "Name: 1 to 24 characters.",
+      cell: "No such plot.",
+      moved: "Moved!",
+      renamed: "Renamed.",
+      collected: "Collected!",
+      "nothing-to-collect": "Nothing to collect yet.",
+      upgraded: "Upgraded!",
+      renewed: "Lease renewed!",
+      helped: "Helped! +50 to them, +20 to you",
+      coins: "Not enough coins.",
+      cooldown: "Not yet: cooling down.",
+      "max-level": "Already a Skyscraper.",
+      "max-lease": "Lease is at the 48 h limit.",
+      "no-land": "Pick a plot first.",
+      "not-neighbour": "Only buildings next to yours.",
+      hours: "Renew 6, 12 or 24 h.",
+    });
+    for (const text of Object.values(NOTICES)) expect(text.split(/\s+/).length, text).toBeLessThanOrEqual(8);
+  });
+});
+
 describe("the returning player's notices", () => {
-  it("say what was earned away, and that a lease ended", () => {
-    expect(welcomeText({ welcome: 340 })).toBe("Welcome back! Your building earned 340 coins while you were away.");
+  it("say what was earned away, and that a lease ended, in a line", () => {
+    expect(welcomeText({ welcome: 340 })).toBe("Welcome back! +340 earned");
+    expect(welcomeSaid({ welcome: 340 })).toBe("Welcome back! Your building earned 340 coins while you were away.");
     expect(welcomeText({})).toBeNull();
     const doc = (me: object) => new JSDOM(renderBoard(withMe(scene().view(), me), "")).window.document;
-    expect(doc({ welcome: 12 }).querySelector('[data-notice="welcome"]')?.textContent).toBe("Welcome back! Your building earned 12 coins while you were away.");
-    expect(doc({ expired: true }).querySelector('[data-notice="expired"]')?.textContent).toBe(
-      "Your land lease has expired. Choose a new plot to continue building.",
-    );
+    expect(doc({ welcome: 12 }).querySelector('[data-notice="welcome"]')?.textContent).toBe("Welcome back! +12 earned");
+    expect(doc({ expired: true }).querySelector('[data-notice="expired"]')?.textContent).toBe("Your lease ended. Pick a new plot.");
+    // one line at a time: a lease that ended wins over a welcome
+    expect(doc({ welcome: 12, expired: true }).querySelectorAll("[data-notice]")).toHaveLength(1);
     expect(doc({}).querySelectorAll("[data-notice]")).toHaveLength(0);
   });
 });
 
 describe("upgrading", () => {
-  it("shows level, next level, cost and both incomes, and why it's refused", () => {
+  it("knows the next building, its cost and both incomes, and when it's out of reach", () => {
     const { store, view } = scene();
-    expect(upgradeInfo(view())).toMatchObject({ ok: false, reason: "no-land" });
+    expect(upgradeInfo(view())).toEqual({ ok: false, reason: "no-land" });
     store.claim(at(5, 5), ME, "Me", NOW);
     store.claim(at(5, 6), MIA, "Mia", NOW);
     const v = view();
-    expect(upgradeInfo(v)).toMatchObject({ ok: false, reason: "coins", level: 1, next: 2, nextName: "Townhouse", cost: 150, rate: 1200, nextRate: 2400, why: "You need 50 more coins." });
+    expect(upgradeInfo(v)).toEqual({ ok: false, reason: "coins", level: 1, name: "Small House", rate: 1200, next: 2, nextName: "Townhouse", cost: 150, nextRate: 2400 });
     expect(upgradeInfo(withMe(v, { coins: 150 }))).toMatchObject({ ok: true, reason: null });
-    expect(upgradeInfo(withMe(v, { coins: 150 }), { busy: true })).toMatchObject({ ok: false, reason: "busy" });
     const top = { ...v, tiles: v.tiles.map((t) => (t.state === "mine" ? { ...t, level: 5 } : t)) };
-    expect(upgradeInfo(withMe(top, { coins: 9999 }))).toMatchObject({ ok: false, reason: "max-level", why: "A Skyscraper is the top level." });
+    expect(upgradeInfo(withMe(top, { coins: 9999 }))).toMatchObject({ ok: false, reason: "max-level" });
   });
 
   it("notices a building going up a level", () => {
@@ -192,7 +264,7 @@ describe("upgrading", () => {
 });
 
 describe("renewing", () => {
-  it("offers 6, 12 and 24 hours, refusing any past 48 h from the claim", () => {
+  it("knows 6, 12 and 24 hours, refusing any past 48 h from the claim", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
     const rich = withMe(view(), { coins: 1000 });
@@ -200,40 +272,49 @@ describe("renewing", () => {
     // 40 h of lease from a claim: 24 h would pass 48, 6 wouldn't
     const late = withMe(rich, { leaseEndsAt: new Date(NOW.getTime() + 40 * HOUR).toISOString() });
     expect(renewOptions(late, NOW).map((o: { reason: string | null }) => o.reason)).toEqual([null, "max-lease", "max-lease"]);
-    expect(renewOptions(late, NOW)[2].why).toBe("Past the 48 h limit");
     expect(renewOptions(view(), NOW).map((o: { reason: string | null }) => o.reason)).toEqual([null, "coins", "coins"]);
   });
 });
 
 describe("relocating", () => {
-  it("shows from, to, cost, both incomes and the lease kept, or the cooldown", () => {
+  it("knows from, to, cost and both incomes, or that it's cooling down", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
     store.claim(at(5, 6), MIA, "Mia", NOW);
     store.claim(at(1, 1), KAI, "Kai", NOW);
     const v = view();
-    expect(relocateInfo(v, at(1, 2), NOW)).toMatchObject({ ok: true, from: at(5, 5), to: at(1, 2), cost: 50, rate: 1200, nextRate: 1200, lease: "24 h 0 m" });
+    expect(relocateInfo(v, at(1, 2), NOW)).toEqual({ ok: true, reason: null, from: at(5, 5), to: at(1, 2), cost: 50, rate: 1200, nextRate: 1200, neighbours: 1 });
     expect(relocateInfo(v, at(1, 1), NOW)).toBeNull(); // someone's building
     const cooling = withMe(v, { relocateAt: new Date(NOW.getTime() + 12 * MIN).toISOString() });
-    expect(relocateInfo(cooling, at(1, 2), NOW)).toMatchObject({ ok: false, reason: "cooldown", why: "You can move again in 12 m." });
+    expect(relocateInfo(cooling, at(1, 2), NOW)).toMatchObject({ ok: false, reason: "cooldown" });
     expect(relocateInfo(withMe(v, { coins: 10 }), at(1, 2), NOW)).toMatchObject({ ok: false, reason: "coins" });
-    expect(describeTile(v, at(1, 2), NOW)).toMatchObject({ kind: "move", action: "Move here · 50 coins", open: true });
+  });
+
+  it("offers the move only when it can be made", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(1, 1), KAI, "Kai", NOW);
+    const v = view();
+    expect(describeTile(v, at(1, 2), NOW)).toMatchObject({ kind: "move", title: "+12/min · Kai +20%", action: "Move here · 50", open: true });
+    const cooling = withMe(v, { relocateAt: new Date(NOW.getTime() + 12 * MIN).toISOString() });
+    expect(describeTile(cooling, at(1, 2), NOW)).toMatchObject({ title: "+12/min · Kai +20% · move in 12 m", action: null, open: false });
+    expect(describeTile(withMe(v, { coins: 10 }), at(1, 2), NOW)).toMatchObject({ title: "+12/min · Kai +20% · moving costs 50", action: null });
   });
 });
 
 describe("helping", () => {
-  it("is offered only at someone else's building beside mine, and says when it cools down", () => {
+  it("is possible only at someone else's building beside mine, and not while cooling down", () => {
     const { store, view } = scene();
     store.claim(at(5, 6), MIA, "Mia", NOW);
     store.claim(at(5, 8), KAI, "Kai", NOW);
     expect(canHelp(view(), at(5, 6), NOW)).toBeNull(); // I hold nothing yet
     store.claim(at(5, 5), ME, "Me", NOW);
-    expect(canHelp(view(), at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: true, wait: null });
+    expect(canHelp(view(), at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: true });
     expect(canHelp(view(), at(5, 8), NOW)).toBeNull();
     expect(canHelp(view(), at(5, 5), NOW)).toBeNull();
     expect(canHelp(view(), at(6, 6), NOW)).toBeNull();
     const cooling = withMe(view(), { helpAt: new Date(NOW.getTime() + 40 * MIN).toISOString() });
-    expect(canHelp(cooling, at(5, 6), NOW)).toMatchObject({ ok: false, wait: "40 m" });
+    expect(canHelp(cooling, at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: false });
   });
 });
 
@@ -255,6 +336,60 @@ describe("money on the page", () => {
     expect(leaseSoon(t(59 * MIN), NOW)).toBe(true);
     expect(leaseSoon(t(61 * MIN), NOW)).toBe(false);
     expect(leaseSoon(t(-1), NOW)).toBe(false);
+  });
+});
+
+describe("the wallet: only what you can act on now", () => {
+  const owner = () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    return view();
+  };
+
+  it("doesn't exist without land", () => {
+    expect(hudParts(scene().view(), NOW)).toBeNull();
+    expect(hudParts({ ...scene().view(), me: undefined }, NOW)).toBeNull();
+  });
+
+  it("shows coins, income as +N/min, and the lease as a full ring for a new owner", () => {
+    expect(hudParts(owner(), NOW)).toEqual({
+      coins: "100",
+      coinsSaid: "100 coins",
+      rate: "+10/min",
+      rateSaid: "Income 10 coins a minute",
+      level: 1,
+      collect: null,
+      upgrade: null,
+      lease: { left: "24 h 0 m", frac: 1, soon: false, said: "Lease: 24 h 0 m left" },
+      renew: [],
+    });
+  });
+
+  it("has no Collect while nothing waits, and one when a coin does", () => {
+    expect(hudParts(owner(), NOW, 99)!.collect).toBeNull();
+    expect(hudParts(owner(), NOW, 1234)!.collect).toEqual({ owed: 12, text: "+12", said: "Collect 12 coins" });
+  });
+
+  it("has no Upgrade until you can afford it, then names the next building and its cost", () => {
+    expect(hudParts(withMe(owner(), { coins: 149 }), NOW)!.upgrade).toBeNull();
+    expect(hudParts(withMe(owner(), { coins: 150 }), NOW)!.upgrade).toEqual({ next: 2, name: "Townhouse", cost: 150, said: "Upgrade to Townhouse for 150 coins" });
+    const v = owner();
+    const top = withMe({ ...v, tiles: v.tiles.map((t) => (t.state === "mine" ? { ...t, level: 5 } : t)) }, { coins: 99_999 });
+    expect(hudParts(top, NOW)!.upgrade).toBeNull();
+  });
+
+  it("has no Renew above 6 h of lease, and only the options you can afford under it", () => {
+    const v = withMe(owner(), { coins: 200 });
+    const at = (h: number) => new Date(NOW.getTime() + h * HOUR);
+    expect(hudParts(v, at(18 - 0.01))!.renew).toEqual([]); // 6 h 0.6 m left
+    const under = hudParts(v, at(19))!; // 5 h left
+    expect(under.renew.map((o: { hours: number; text: string; said: string }) => [o.hours, o.text, o.said])).toEqual([
+      [6, "+6 h", "Renew lease 6 hours for 100 coins"],
+      [12, "+12 h", "Renew lease 12 hours for 180 coins"],
+    ]);
+    expect(under.lease).toMatchObject({ left: "5 h 0 m", soon: false });
+    expect(hudParts(v, at(23.5))!.lease).toMatchObject({ left: "30 m", soon: true, said: "Lease: 30 m left" });
+    expect(hudParts(v, at(23.5))!.lease.frac).toBeCloseTo(0.5 / 24, 5);
   });
 });
 
@@ -343,14 +478,13 @@ describe("the placement preview", () => {
     expect(expiredSeen).toBeGreaterThan(20);
   }, 30_000);
 
-  it("says what building there would earn and whose income it raises", () => {
+  it("says what building there would earn and whose income it raises, in numbers", () => {
     const { store, view } = scene();
     store.claim(at(1, 1), MIA, "Mia", NOW);
     store.claim(at(1, 3), KAI, "Kai", NOW);
-    expect(describeTile(view(), at(1, 2), NOW).title).toBe(
-      "Earns 14 coins/min here, with 2 neighbours. Raises Mia and Kai's income. Building here brings Mia's building to 1 of 8 neighbours.",
-    );
-    expect(describeTile(view(), at(9, 9), NOW).title).toBe("Earns 10 coins/min here, with 0 neighbours.");
+    expect(describeTile(view(), at(1, 2), NOW)).toMatchObject({ kind: "claim", title: "+14/min · Mia and Kai +20%", action: "Build here" });
+    expect(describeTile(view(), at(9, 9), NOW).title).toBe("+10/min");
+    expect(describeTile(view(), at(1, 1), NOW)).toMatchObject({ kind: "held", title: "Mia's Small House", action: null });
   });
 
   it("doesn't change the board it's given", () => {
@@ -365,21 +499,25 @@ describe("the placement preview", () => {
 });
 
 describe("the inspector", () => {
-  it("shows owner, building, neighbours, income and lease", () => {
+  it("shows a building's owner, income, neighbours and lease, in short facts", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), MIA, "Mia", NOW);
     store.claim(at(5, 6), KAI, "Kai", NOW);
     expect(inspect(view(), at(5, 5), new Date(NOW.getTime() + 90 * MIN))).toEqual({
-      title: "Mia: row 6, column 6",
+      title: "Mia's Small House",
       facts: [
-        ["Owner", "Mia"],
-        ["Building", "Small House, level 1"],
+        ["Earns", "+12/min"],
         ["Neighbours", "1 of 8"],
-        ["Income", "12 coins/min"],
         ["Lease", "22 h 30 m left"],
       ],
     });
-    expect(inspect(view(), at(5, 5), new Date(NOW.getTime() + 23.5 * HOUR)).facts).toContainEqual(["Lease", "30 m left, ending soon"]);
+  });
+
+  it("shows what a free plot would earn and whom it would lift", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    expect(inspect(view(), at(5, 6), NOW)).toEqual({ title: "Free plot", facts: [["Earns", "+12/min"], ["Lifts", "Mia +20%"]] });
+    expect(inspect(view(), at(0, 11), NOW)).toEqual({ title: "Free plot", facts: [["Earns", "+10/min"]] });
   });
 });
 
@@ -442,7 +580,28 @@ describe("the goal line", () => {
     for (const id of [at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6), at(6, 4), at(6, 5)]) store.claim(id, `n${n}`, `N${n++}`, NOW);
     expect(helpsWith(view(), at(6, 6))).toMatchObject({ id: at(5, 5), landmark: true });
     expect(goal(view()).helps).toContain(at(6, 6));
-    expect(describeTile(view(), at(6, 6), NOW).title).toMatch(/ Building here completes a landmark!$/);
+    expect(inspect(view(), at(6, 6), NOW).facts).toContainEqual(["Landmark", "completes one!"]);
+  });
+});
+
+describe("the goal line", () => {
+  it("stays hidden until some building has 5 neighbours, or a landmark stands", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    const ring = [at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6)];
+    ring.slice(0, 4).forEach((id, i) => store.claim(id, `r${i}`, `R${i}`, NOW));
+    expect(goalShown(goal(view()))).toBe(false);
+    const hiddenDoc = new JSDOM(renderBoard(view(), "")).window.document;
+    expect(hiddenDoc.querySelector("[data-goal]")!.hasAttribute("hidden")).toBe(true);
+    store.claim(ring[4], "r4", "R4", NOW);
+    expect(goalShown(goal(view()))).toBe(true);
+    const shownDoc = new JSDOM(renderBoard(view(), "")).window.document;
+    expect(shownDoc.querySelector("[data-goal]")!.hasAttribute("hidden")).toBe(false);
+    // an inspector says nothing about landmarks while the goal is hidden
+    const early = scene();
+    early.store.claim(at(5, 5), MIA, "Mia", NOW);
+    expect(inspect(early.view(), at(5, 6), NOW).facts.map((f: string[]) => f[0])).not.toContain("Landmark");
+    expect(goalShown({ count: 1, closest: null, helps: [] })).toBe(true);
   });
 });
 
@@ -464,62 +623,92 @@ describe("the page the server renders", () => {
     expect(tileAria("x", null)).toBe("x");
   });
 
-  // Each state the dashboard can be in renders, with every action a real
-  // form button posting to its route, enabled or disabled with its reason.
-  const dashOf = (v: View) => {
-    const doc = new JSDOM(renderBoard(v, "Me", { now: NOW })).window.document;
-    const button = (act: string) => doc.querySelector<HTMLButtonElement>(`[data-act="${act}"]`)!;
-    const why = (act: string) => doc.querySelector(`[data-why="${act}"]`)!.textContent;
-    return { doc, button, why, text: (k: string) => doc.querySelector(`[data-dash-${k}]`)!.textContent };
+  // What the page renders, and what it leaves out: a control that can't be
+  // used isn't drawn disabled with a reason, it isn't there. Every action
+  // that is there is a real form button posting to its route.
+  const pageOf = (v: View, now = NOW) => {
+    const doc = new JSDOM(renderBoard(v, "Me", { now })).window.document;
+    // shown: present, and neither it nor an ancestor is [hidden]
+    const shown = (sel: string): boolean => {
+      const el = doc.querySelector(sel);
+      return el !== null && el.closest("[hidden]") === null;
+    };
+    return { doc, shown, text: (sel: string) => doc.querySelector(sel)?.textContent ?? null };
   };
 
-  it("renders the dashboard for someone with no land", () => {
-    const { button, why, text } = dashOf(scene().view());
-    expect(text("coins")).toBe("100");
-    expect(text("building")).toBe("No building yet");
-    for (const act of ["collect", "upgrade", "renew", "relocate"]) expect(button(act).disabled, act).toBe(true);
-    expect(why("upgrade")).toBe("Claim a plot first, then upgrade its building.");
+  it("shows the first screen as one step: tagline, name field, board, and nothing else", () => {
+    const { doc, shown, text } = pageOf(scene().view());
+    expect(text(".lede")).toBe("Build next to people. Earn more together.");
+    expect(doc.querySelector<HTMLInputElement>("#label")!.placeholder).toBe("Your name");
+    expect(shown("[data-wallet]"), "no wallet without land").toBe(false);
+    for (const act of ["collect", "upgrade"]) expect(shown(`[data-act="${act}"]`), act).toBe(false);
+    expect(doc.querySelectorAll("[data-renew-hours]:not([hidden])")).toHaveLength(0);
+    expect(shown("[data-goal]"), "no goal line before anyone is near one").toBe(false);
+    // the key and the city's activity are behind closed icon buttons
+    for (const name of ["key", "log"]) {
+      const tool = doc.querySelector<HTMLDetailsElement>(`details[data-tool="${name}"]`)!;
+      expect(tool.open, name).toBe(false);
+      expect(tool.querySelector("summary .sr-only")!.textContent!.length, `${name} has a name`).toBeGreaterThan(0);
+    }
+    expect(doc.querySelector(".legend")!.closest("details")).not.toBeNull();
+    expect(doc.querySelector("[data-events]")!.closest("details")).not.toBeNull();
+    // the disabled-with-a-reason pattern is gone entirely
+    expect(doc.querySelectorAll("[data-why], .act-why, button:disabled:not([hidden])")).toHaveLength(0);
+    expect(doc.querySelector(".board")!.hasAttribute("data-invite")).toBe(true);
   });
 
-  it("renders it for a level-1 owner short of coins, with the upgrade's reason", () => {
+  it("shows a new owner coins, income and the lease ring, with no Collect and no Upgrade", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
-    const { doc, button, why, text } = dashOf(view());
-    expect(text("building")).toBe("Small House · Lv 1");
-    expect(text("rate")).toBe("10 coins/min");
-    expect(button("upgrade").disabled).toBe(true);
-    expect(button("upgrade").getAttribute("formaction")).toBe("/upgrade");
-    expect(button("collect").getAttribute("formaction")).toBe("/collect");
-    expect(why("upgrade")).toBe("Small House → Townhouse (level 1 → 2) for 150 coins. Income 10 → 20 coins/min. You need 50 more coins.");
-    expect(doc.querySelector('[data-act-sub="upgrade"]')!.textContent).toBe("need 50");
-    expect(button("relocate").disabled).toBe(false);
-    // the renewals are form buttons too: 6 h affordable, 12 and 24 not
-    const renew = [...doc.querySelectorAll<HTMLButtonElement>('button[formaction="/renew"]')];
-    expect(renew.map((b) => [b.value, b.disabled])).toEqual([["6", false], ["12", true], ["24", true]]);
+    const { doc, shown, text } = pageOf(view());
+    expect(shown("[data-wallet]")).toBe(true);
+    expect(text("[data-hud-coins]")).toBe("100");
+    expect(text("[data-hud-coins-said]")).toBe("100 coins");
+    expect(text("[data-hud-rate]")).toBe("+10/min");
+    const ring = doc.querySelector("[data-hud-lease]")!;
+    expect([ring.getAttribute("role"), ring.getAttribute("aria-label"), ring.getAttribute("title")]).toEqual(["img", "Lease: 24 h 0 m left", "Lease: 24 h 0 m left"]);
+    expect(shown('[data-act="collect"]'), "nothing waits: no Collect").toBe(false);
+    expect(shown('[data-act="upgrade"]'), "100 coins: no Upgrade").toBe(false);
+    expect(doc.querySelectorAll("[data-renew-hours]:not([hidden])"), "24 h left: no Renew").toHaveLength(0);
+    expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("style")).toMatch(/--lease:1\.000/);
+    expect(doc.querySelector(".board")!.hasAttribute("data-invite")).toBe(false);
   });
 
-  it("renders it for an owner who can afford the upgrade, and with something to collect", () => {
+  it("shows Collect once income waits, and Upgrade once it's affordable, as form posts", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
-    const { button, text } = dashOf(withMe(view(), { coins: 400, pending: 1234 }));
-    expect(button("upgrade").disabled).toBe(false);
-    expect(button("collect").disabled).toBe(false);
-    expect(text("pending")).toBe("12");
+    const { doc, shown, text } = pageOf(withMe(view(), { coins: 400, pending: 1234 }));
+    expect(shown('[data-act="collect"]')).toBe(true);
+    expect(doc.querySelector('[data-act="collect"]')!.getAttribute("formaction")).toBe("/collect");
+    expect(doc.querySelector('[data-act="collect"]')!.getAttribute("aria-label")).toBe("Collect 12 coins");
+    expect(text("[data-hud-owed]")).toBe("+12");
+    expect(shown('[data-act="upgrade"]')).toBe(true);
+    expect(doc.querySelector('[data-act="upgrade"]')!.getAttribute("formaction")).toBe("/upgrade");
+    expect(doc.querySelector('[data-act="upgrade"]')!.getAttribute("aria-label")).toBe("Upgrade to Townhouse for 150 coins");
+    expect(text("[data-hud-next]")).toBe("Townhouse");
+    expect(text("[data-hud-cost]")).toBe("150");
   });
 
-  it("renders it for a Skyscraper owner: upgrade disabled at the top level", () => {
+  it("shows Renew only under 6 h, and only the renewals you can afford", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    const late = new Date(NOW.getTime() + 20 * HOUR); // 4 h left, 100 coins
+    const { doc } = pageOf(view(ME, late), late);
+    const open = [...doc.querySelectorAll<HTMLButtonElement>("[data-renew-hours]:not([hidden])")];
+    expect(open.map((b) => [b.value, b.getAttribute("formaction"), b.getAttribute("aria-label")])).toEqual([["6", "/renew", "Renew lease 6 hours for 100 coins"]]);
+  });
+
+  it("shows no Upgrade for a Skyscraper, however rich", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), ME, "Me", NOW);
     const v = view();
     const top = withMe({ ...v, tiles: v.tiles.map((t) => (t.state === "mine" ? { ...t, level: 5, height: 5, rate: 5000 } : t)) }, { coins: 5000, level: 5 });
-    const { doc, button, why, text } = dashOf(top);
-    expect(text("building")).toBe("Skyscraper · Lv 5");
-    expect(button("upgrade").disabled).toBe(true);
-    expect(why("upgrade")).toBe("A Skyscraper is the top level.");
+    const { doc, shown } = pageOf(top);
+    expect(shown('[data-act="upgrade"]')).toBe(false);
     expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("data-level")).toBe("5");
   });
 
-  it("lists the city log, short", () => {
+  it("lists the city log, short, behind its icon", () => {
     const { store, view } = scene();
     for (let i = 0; i < 12; i++) store.claim(i, `p${i}`, `P${i}`, NOW);
     const doc = new JSDOM(renderBoard(view(), "")).window.document;
@@ -538,8 +727,13 @@ describe("the page the server renders", () => {
     expect(tile.getAttribute("aria-label")).toMatch(/lease ending soon$/);
   });
 
-  it("dashParts never throws on a board with no `me`", () => {
-    const v = scene().view();
-    expect(() => dashParts({ ...v, me: undefined }, NOW)).not.toThrow();
+  it("gives every icon button a name", () => {
+    const doc = new JSDOM(renderBoard(scene().view(), "")).window.document;
+    const icons = [...doc.querySelectorAll("summary, a.about")];
+    expect(icons.length).toBeGreaterThanOrEqual(5);
+    for (const el of icons) {
+      expect(el.querySelector("svg")!.getAttribute("aria-hidden"), el.outerHTML.slice(0, 60)).toBe("true");
+      expect((el.querySelector(".sr-only")?.textContent ?? "").trim().length, el.outerHTML.slice(0, 60)).toBeGreaterThan(0);
+    }
   });
 });

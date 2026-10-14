@@ -107,18 +107,16 @@ main {
   white-space: nowrap;
   border: 0;
 }
-
 /* --- the header: a framed sunset, like a panel of cover art --- */
 
 /* The sky's colours are pinned to the skyline's height, measured up from the
-   bottom, and the text always sits just above the skyline. So whatever the
-   header's height, the text lands on the same dark band of sky. */
+   bottom, and the text always sits just above the skyline. */
 .top {
   position: relative;
   isolation: isolate; /* keeps the skyline (z-index -1) inside the panel */
   overflow: clip;
   margin-top: 1rem;
-  padding: 1.25rem 1.5rem calc(var(--city-h) + 0.75rem);
+  padding: 1rem 1.5rem calc(var(--city-h) * 0.55);
   border: 3px solid var(--line);
   border-radius: 0.6rem;
   box-shadow: 5px 5px 0 var(--line);
@@ -150,7 +148,7 @@ main {
    tab title; on screen it's drawn by the wordmark instead. */
 .top h1 {
   margin: 0;
-  width: clamp(13rem, 30vw, 21rem);
+  width: clamp(12rem, 24vw, 17rem);
   aspect-ratio: 3197 / 986; /* logo.svg's viewBox */
   background: url("/art/logo.svg") left center / contain no-repeat;
   color: transparent;
@@ -160,8 +158,6 @@ main {
   rotate: -3deg;
 }
 
-/* Where backgrounds are switched off, the wordmark goes with them: show the
-   heading as text. */
 @media (forced-colors: active) {
   .top h1 {
     width: auto;
@@ -173,60 +169,62 @@ main {
   }
 }
 
-.lede,
-.meta {
-  max-width: 38rem;
-  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
-}
-
+/* The one line of words: mission text over the sunset. */
 .lede {
-  margin: 0.75rem 0 0;
-  font-size: 1.05rem;
-  font-weight: 600;
+  margin: 0.6rem 0 0;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.35rem;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
 }
 
-.meta {
-  margin: 0.25rem 0 0;
-  font-size: var(--fs-small);
+/* About: a small round icon in the corner. */
+.about {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--ink);
+  filter: drop-shadow(1px 1px 0 var(--line));
 }
 
-/* Wide screens: wordmark on the left, text beside it, and the wordmark
-   hangs down over the skyline like a title card, which keeps the header
-   short enough for the whole board to fit on a laptop screen. */
+.ico {
+  display: block;
+  flex: none;
+}
+
 @media (min-width: 52rem) {
   .top {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: 1fr auto auto 1fr;
-    column-gap: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 2rem;
   }
 
   .top h1 {
-    grid-row: 1 / -1;
-    align-self: center;
-    margin-bottom: calc(var(--city-h) * -0.5);
+    margin-bottom: calc(var(--city-h) * -0.35);
   }
 
   .lede {
-    grid-column: 2;
-    grid-row: 2;
     margin: 0;
-  }
-
-  .meta {
-    grid-column: 2;
-    grid-row: 3;
+    font-size: 1.6rem;
   }
 }
 
+/* --- layout: the board takes the page --- */
 
-/* --- layout: name and key on the left, the board taking the rest --- */
-
-/* One column on narrow screens, in reading order: name, map, your city,
-   the plot inspector, the key and the city log. From 64rem the map gets
-   its own column and everything else stacks beside it, so the map is the
-   biggest thing on the page and sits in its centre. Absolutely placed
-   children (the announcer, the phone's bars) take no grid cell. */
+/* One column: the name, then the board. Once you hold land the wallet sits
+   above the board; the inspector beside it on a wide screen, under it on a
+   phone. Absolutely placed children (the announcer, the bars) take no
+   cell. */
 .claim {
   display: grid;
   gap: 0.75rem;
@@ -235,17 +233,15 @@ main {
 
 @media (min-width: 64rem) {
   .claim {
-    grid-template-columns: minmax(17rem, 21rem) minmax(0, 1fr);
-    grid-template-rows: auto auto auto auto auto 1fr;
+    grid-template-columns: minmax(16rem, 19rem) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
     column-gap: 1.25rem;
     align-items: start;
   }
 
   .controls,
-  .dash,
-  .legend,
-  .inspect,
-  .city-log {
+  .wallet,
+  .inspect {
     grid-column: 1;
   }
 
@@ -255,165 +251,147 @@ main {
   }
 }
 
-/* --- controls: a HUD panel --- */
-
-.controls,
-.inspect {
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-}
+/* --- the name field: the one thing to fill in --- */
 
 .controls {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-  padding: 0.75rem 1rem;
-}
-
-/* Display labels: uppercase Passion One, a thin outline and a hard shadow.
-   Regular weight, since Black's counters close up at this size. */
-.controls label,
-.inspect h2 {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: var(--fs-label);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
 }
 
 .controls input {
-  flex: 1 1 10rem;
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 44px;
-  font: inherit;
-  font-weight: 600;
-  padding: 0.4rem 0.6rem;
+  min-height: 52px;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+  padding: 0.4rem 0.8rem;
   border: 3px solid var(--line);
-  border-radius: 0.4rem;
+  border-radius: 0.5rem;
   background: var(--cream);
   color: var(--night);
-  box-shadow: inset 0 2px 0 rgb(0 0 0 / 0.15);
+  box-shadow: 4px 4px 0 var(--line);
 }
 
-.status,
+.controls input::placeholder {
+  color: #5d5070;
+  opacity: 1;
+}
+
+/* A plot was picked before a name: the field pulses gold until one's typed. */
+.controls input[data-want] {
+  border-color: var(--accent);
+  box-shadow:
+    4px 4px 0 var(--line),
+    0 0 0 4px var(--accent);
+  animation: want 0.9s ease-out 3;
+}
+
+@keyframes want {
+  0% {
+    box-shadow:
+      4px 4px 0 var(--line),
+      0 0 0 0 rgb(255 176 0 / 0.95);
+  }
+  100% {
+    box-shadow:
+      4px 4px 0 var(--line),
+      0 0 0 14px rgb(255 176 0 / 0);
+  }
+}
+
+/* --- one short line at a time, floating near what it's about --- */
+
 .notices {
-  flex-basis: 100%;
-  margin: 0;
-}
-
-.status {
-  color: var(--muted);
-  font-size: var(--fs-body);
-  line-height: 1.4;
+  position: relative;
+  height: 0;
+  z-index: 6;
 }
 
 .notices:empty {
   display: none;
 }
 
-/* Notices are mission text: big, outlined, in the game's gold, with a gold
-   bar down the side so they read as a message even without the colour. */
 .notice {
+  position: absolute;
+  left: 50%;
+  top: 0.25rem;
+  translate: -50% 0;
+  width: max-content;
+  max-width: min(26rem, 100%);
   margin: 0;
-  padding-left: 0.6rem;
-  border-left: 4px solid var(--accent);
+  padding: 0.35rem 0.75rem 0.3rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.5rem;
+  box-shadow:
+    4px 4px 0 var(--line),
+    inset 0 0 0 2px var(--accent);
   font-family: var(--display);
   font-weight: 400;
   font-size: var(--fs-notice);
   line-height: 1.15;
+  text-align: center;
   letter-spacing: 0.01em;
   color: var(--accent);
   -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
   text-shadow: 2px 2px 0 var(--line);
+  pointer-events: none;
   animation: notice-in 240ms ease-out;
+  transition: opacity 400ms;
 }
 
-/* a visitor back after being displaced can arrive with a second notice */
-.notice + .notice {
-  margin-top: 0.4rem;
+/* Placed over a plot by app.js (left/top in the .play box): it sits above
+   the plot with a small pointer down to it. */
+.notice[data-at] {
+  translate: -50% calc(-100% - 3.5rem);
+}
+
+.notice[data-at]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 0.9rem;
+  height: 0.6rem;
+  translate: -50% 0;
+  background: var(--line);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.notice[data-gone] {
+  opacity: 0;
 }
 
 @keyframes notice-in {
   from {
     opacity: 0;
-    translate: 0 -0.3rem;
+    scale: 0.9;
   }
 }
 
-/* --- the map key --- */
-
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
-  margin: 0;
-  padding: 0 0.25rem;
-  list-style: none;
-  color: var(--muted);
-  font-size: var(--fs-small);
-}
-
-.legend li {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-/* Each swatch is a roof seen from above, drawn the way the board draws
-   that state: so the key and the map can't drift apart in meaning. */
-.swatch {
-  flex: none;
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 2px;
-  background: var(--lot);
-  box-shadow: inset 0 0 0 1px var(--lot-edge);
-}
-
-.swatch[data-swatch="held"] {
-  background: hsl(200 78% 60%);
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
-}
-
-.swatch[data-swatch="mine"] {
-  background: hsl(320 78% 62%);
-  box-shadow:
-    inset 0 0 0 2px var(--line),
-    inset 0 0 0 4px var(--accent),
-    0 0 6px 1px rgb(255 176 0 / 0.7);
-}
-
-.swatch[data-swatch="soon"] {
-  background: var(--hatch), hsl(200 78% 60%);
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
-  outline: 2px dashed var(--cream);
-  outline-offset: -2px;
-}
-
-/* --- the board's HUD: claimed count and connection --- */
+/* --- the board's HUD: the goal line, connection and the tucked panels --- */
 
 .play {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.4rem;
   min-width: 0;
 }
 
+/* Above the stage: the tilted board's box reaches up over the HUD (its
+   negative margin), and would take the icons' clicks. */
 .hud {
+  position: relative;
+  z-index: 7;
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.25rem 1rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem 0.75rem;
+  min-height: 44px;
   padding-inline: 0.25rem;
 }
 
@@ -421,28 +399,9 @@ main {
   margin: 0;
 }
 
-.count {
-  color: var(--muted);
-  font-size: var(--fs-small);
-}
-
-/* The claimed count is the HUD's cash counter. Small outlined type takes a
-   thin outline and a hard shadow: a thick outline fills the digits' holes. */
-[data-claimed] {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.6rem;
-  line-height: 1;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-  margin-right: 0.15em;
-}
-
-/* Connection: understated, and told by the dot's shape as well as its
-   colour: a filled dot when live, a dashed ring while trying, a hollow
-   square when the line is down. */
+/* Connection: a dot by shape as well as colour (filled live, dashed ring
+   while trying, hollow square when down); its words show only when it
+   isn't live. */
 .conn {
   display: inline-flex;
   align-items: center;
@@ -458,6 +417,15 @@ main {
   height: 0.7rem;
   border: 2px dashed var(--muted);
   border-radius: 50%;
+}
+
+.conn[data-conn="live"] .conn-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .conn[data-conn="live"]::before {
@@ -487,15 +455,197 @@ main {
   }
 }
 
-/* The goal line: the room's score and its next target, one line across the
-   HUD under the count. The count is a gold counter like the cash one; the
-   closest tower's name is cut short on a phone so "6 of 8" always shows. */
+/* The tucked-away panels: a row of small round icon buttons, each opening
+   a little card under it. */
+.tools {
+  display: flex;
+  gap: 0.4rem;
+  position: relative;
+}
+
+.tool > summary {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 3px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: 3px 3px 0 var(--line);
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool > summary::-webkit-details-marker {
+  display: none;
+}
+
+@media (hover: hover) {
+  .tool > summary:hover {
+    color: var(--ink);
+    background: var(--lot-hover);
+  }
+}
+
+.tool[open] > summary {
+  background: var(--accent);
+  color: var(--night);
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.tool-body {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  width: min(20rem, calc(100vw - 2rem));
+  padding: 0.7rem 0.9rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 1.35;
+}
+
+.legend {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Each swatch is a roof seen from above, drawn the way the board draws
+   that state, so the key and the map can't drift apart in meaning. */
+.swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 2px;
+  background: var(--lot);
+  box-shadow: inset 0 0 0 1px var(--lot-edge);
+}
+
+.swatch[data-swatch="held"] {
+  background: hsl(200 78% 60%);
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+}
+
+.swatch[data-swatch="mine"] {
+  background: hsl(320 78% 62%);
+  box-shadow:
+    inset 0 0 0 2px var(--line),
+    inset 0 0 0 4px var(--accent),
+    0 0 6px 1px rgb(255 176 0 / 0.7);
+}
+
+.swatch[data-swatch="soon"] {
+  background: var(--hatch), hsl(200 78% 60%);
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+  outline: 2px dashed var(--cream);
+  outline-offset: -2px;
+}
+
+.count {
+  margin: 0 0 0.4rem;
+}
+
+/* The claimed count is a cash counter. */
+[data-claimed] {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--money);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+  margin-right: 0.15em;
+}
+
+.city-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.city-log:empty::before {
+  content: "Nothing yet.";
+}
+
+.city-log li {
+  overflow-wrap: anywhere;
+}
+
+.city-log li:first-child {
+  color: var(--ink);
+}
+
+/* camera buttons inside their panel */
+.camera {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.4rem;
+}
+
+.camera button {
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 0.95rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  min-height: 44px;
+  padding: 0.4rem 0.6rem 0.35rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+
+.camera button:last-child {
+  grid-column: 1 / -1;
+}
+
+@media (hover: hover) {
+  .camera button:hover {
+    background: var(--accent);
+  }
+}
+
+.camera button:active {
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.keys-hint {
+  margin: 0;
+}
+
+/* The goal line, shown once some building has 5+ neighbours: a crown and
+   the room's count, and the building closest to the next landmark. */
 .landmarks {
-  flex-basis: 100%;
+  order: 2;
+  flex: 1 1 100%;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  white-space: pre; /* one line, and the spaces between the parts kept */
+  align-items: center;
+  white-space: pre;
   color: var(--muted);
   font-size: var(--fs-small);
   line-height: 1.3;
@@ -503,6 +653,14 @@ main {
 
 .landmarks > * {
   flex: none;
+}
+
+.crown-icon {
+  width: 1.3rem;
+  height: 1rem;
+  margin-right: 0.3rem;
+  background: var(--accent);
+  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
 }
 
 .landmarks > .goal-next {
@@ -517,8 +675,6 @@ main {
   flex: none;
 }
 
-/* the name gives way first, down to a letter or two and an ellipsis; the
-   hint shown before any tower stands can give way too */
 .goal-next > [data-goal-lead]:has(+ :empty) {
   flex: 0 1 auto;
   min-width: 0;
@@ -528,7 +684,7 @@ main {
 
 .goal-next > .goal-who {
   flex: 0 1 auto;
-  min-width: 0; /* a minimum wider than a short name ("Cy") left a gap */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -545,7 +701,7 @@ main {
   display: inline-block;
   font-family: var(--display);
   font-weight: 400;
-  font-size: 1.6rem;
+  font-size: 1.4rem;
   line-height: 1;
   color: var(--accent);
   -webkit-text-stroke: 2px var(--line);
@@ -554,35 +710,241 @@ main {
   margin-right: 0.15em;
 }
 
-/* the count going up when a landmark is raised */
 [data-landmarks][data-bump] {
   transform-origin: right bottom;
   animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
 }
 
-/* Grows from its right-bottom corner, toward empty space, so the bump never
-   covers the word after the number. */
 @keyframes bump {
   30% {
     scale: 1.35;
   }
 }
 
+/* a touch-only screen has no keyboard to describe */
+@media (hover: none) and (pointer: coarse) {
+  .tool[data-tool="board-keys"] {
+    display: none;
+  }
+}
+
+/* --- the wallet: coins, income, the lease, and only the actions you can
+   take now --- */
+
+.wallet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
+}
+
+.wallet p {
+  margin: 0;
+}
+
+.purse,
+.income {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* the wallet is the HUD's cash counter */
+[data-hud-coins],
+[data-hud-rate] {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.9rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--money);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+}
+
+[data-hud-rate] {
+  font-size: 1.3rem;
+  color: var(--ink);
+}
+
+[data-hud-coins][data-bump] {
+  display: inline-block;
+  transform-origin: left bottom;
+  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+
+/* a gold coin with a black rim */
+.coin {
+  display: inline-block;
+  flex: none;
+  width: 0.9em;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
+  box-shadow: 0 0 0 2px var(--line);
+}
+
+.coin-big {
+  width: 1.5rem;
+}
+
+/* The lease: a ring that drains as the lease runs down, full when new. */
+.lease-ring {
+  --lease: 1;
+  flex: none;
+  width: 1.9rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, var(--panel) 58%, transparent 60%),
+    conic-gradient(var(--money) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.14) 0);
+  box-shadow: 0 0 0 2px var(--line);
+}
+
+.lease-ring[data-lease="soon"] {
+  background:
+    radial-gradient(closest-side, var(--panel) 58%, transparent 60%),
+    conic-gradient(var(--accent) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.14) 0);
+  outline: 2px dashed var(--cream);
+  outline-offset: 2px;
+}
+
+.acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  flex-basis: 100%;
+}
+
+.acts:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+/* Chunky game-menu buttons: a word and a number. */
+.act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 48px;
+  padding: 0.35rem 0.75rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  cursor: pointer;
+  font: inherit;
+  transition: background-color 120ms;
+}
+
+.act-name {
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 1.05rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.act-cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.act-cost:empty {
+  display: none;
+}
+
+/* the renewals: a lease running low, so they share the ring's gold */
+.act-renew {
+  background: var(--accent);
+}
+
+/* an arrow pointing up, before the next building's name */
+.act-up {
+  width: 0.8rem;
+  height: 0.9rem;
+  background: currentColor;
+  clip-path: polygon(50% 0, 100% 55%, 68% 55%, 68% 100%, 32% 100%, 32% 55%, 0 55%);
+}
+
+/* Collect is the action you'll take most: money green, and it grows in */
+.act-collect {
+  flex: 1 1 auto;
+  background: var(--money);
+  animation: pop-in 320ms cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+
+.act-collect .act-name {
+  font-size: 1.2rem;
+}
+
+.act-upgrade {
+  animation: pop-in 320ms cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+
+@keyframes pop-in {
+  from {
+    scale: 0.6;
+    opacity: 0;
+  }
+}
+
+@media (hover: hover) {
+  .act:hover {
+    background: var(--accent);
+  }
+}
+
+.act:active {
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.act:focus-visible {
+  outline-color: var(--ink);
+}
+
 /* --- the tile inspector, filled by app.js --- */
 
 .inspect {
-  padding: 0.75rem 1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
 }
 
 .inspect h2 {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.4rem;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: var(--fs-label);
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
 }
 
-/* Each fact is a small label over its value: the panel is narrow beside
-   the board, and a two-column list squeezed values into one word a line. */
+/* Term beside value, on one line each: the values are short now. */
 .inspect dl {
   display: grid;
-  gap: 0.1rem;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.75rem;
   margin: 0;
   font-size: var(--fs-body);
 }
@@ -592,17 +954,46 @@ main {
   font-size: var(--fs-small);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-}
-
-.inspect dt:not(:first-child) {
-  margin-top: 0.4rem;
+  align-self: baseline;
 }
 
 .inspect dd {
   margin: 0;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.35;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.inspect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.move-button,
+.help-button {
+  min-height: 44px;
+  padding: 0.4rem 0.8rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--accent);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.help-button {
+  background: var(--money);
+}
+
+.move-button:focus-visible,
+.help-button:focus-visible {
+  outline-color: var(--ink);
 }
 
 /* --- the 3D board: a city map at night --- */
@@ -884,8 +1275,10 @@ main {
   height: 65.27%;
   transform-origin: top;
   transform: rotateX(40deg);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-  background: var(--r1);
+  --paint: var(--r1);
+  background:
+    linear-gradient(to top right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
+    linear-gradient(to top left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
 }
 
 .tile[data-level="1"] .roof::after {
@@ -895,8 +1288,10 @@ main {
   height: 65.27%;
   transform-origin: bottom;
   transform: rotateX(-40deg);
-  clip-path: polygon(0 100%, 100% 100%, 50% 0);
-  background: var(--r3);
+  --paint: var(--r3);
+  background:
+    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
+    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
 }
 
 .tile[data-level="1"] .gable::before {
@@ -906,8 +1301,10 @@ main {
   height: 100%;
   transform-origin: left;
   transform: rotateY(-40deg);
-  clip-path: polygon(0 0, 0 100%, 100% 50%);
-  background: var(--r2);
+  --paint: var(--r2);
+  background:
+    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) top / 100% 50% no-repeat,
+    linear-gradient(to top left, transparent 50%, var(--paint) 50%) bottom / 100% 50% no-repeat;
 }
 
 .tile[data-level="1"] .gable::after {
@@ -917,8 +1314,10 @@ main {
   height: 100%;
   transform-origin: right;
   transform: rotateY(40deg);
-  clip-path: polygon(100% 0, 100% 100%, 0 50%);
-  background: var(--r4);
+  --paint: var(--r4);
+  background:
+    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) top / 100% 50% no-repeat,
+    linear-gradient(to top right, transparent 50%, var(--paint) 50%) bottom / 100% 50% no-repeat;
 }
 
 /* 2. Townhouse: a pitched roof, two slopes tilted 35° from the side edges
@@ -966,15 +1365,20 @@ main {
   bottom: 100%;
   transform-origin: bottom;
   transform: rotateX(-90deg);
-  clip-path: polygon(0 100%, 50% 0, 100% 100%);
+  --paint: var(--r1);
+  background:
+    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
+    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
 }
 
 .tile[data-level="2"] .gable::after {
   top: 100%;
   transform-origin: top;
   transform: rotateX(90deg);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-  background: var(--r3);
+  --paint: var(--r3);
+  background:
+    linear-gradient(to top right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
+    linear-gradient(to top left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
 }
 
 /* 3. Apartment: a flat roof behind a thick parapet, with a water tank on
@@ -1135,19 +1539,6 @@ main {
   transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
 }
 
-/* Relocating: every free plot is a possible destination, so each gets a
-   gold dashed kerb; the one picked is the preview's target, ringed. */
-.board[data-relocating] .tile[data-state="free"] {
-  outline: 2px dashed var(--accent);
-  outline-offset: -3px;
-}
-
-.board[data-relocating] .tile[data-preview="target"] {
-  outline: 3px solid var(--accent);
-  outline-offset: 1px;
-  z-index: 1;
-}
-
 /* Keyboard focus: the gold ring, standing off the roof. */
 .tile:focus-visible {
   outline: 3px solid var(--accent);
@@ -1155,11 +1546,12 @@ main {
   z-index: 1;
 }
 
-/* Selected (a phone's first tap): a double white ring and a small lift, so
+/* Selected (a phone's first tap), or wanted (picked before a name was
+   typed): a double white ring and a small lift, so
    it differs from focus (single gold) and from a preview ghost (dashed) by
    shape, not only colour. */
-.tile.is-selected,
-.tile[data-selected] {
+.tile[data-selected],
+.tile[data-wanted] {
   --lift: 4px;
   outline: 5px double var(--cream);
   outline-offset: 2px;
@@ -1257,28 +1649,47 @@ main {
   font-size: clamp(0.75rem, 1.4vw, 1rem);
 }
 
-/* The target's number comes straight from data-preview-height: typed
-   attr() reads it as a number to float the ghost by, and a counter prints
-   it. Where typed attr() isn't supported the ghost stays on the roof,
-   dashed, with no number; the inspector still says the height. */
+/* The target's ghost floats at the height it would stand: typed attr()
+   reads data-preview-height as a number. Where that isn't supported the
+   ghost stays on the roof; the income label shows either way. */
 @supports (x: attr(x type(*))) {
   .tile[data-preview="target"] {
     --ph: attr(data-preview-height type(<integer>), 0);
-    counter-reset: ph var(--ph);
   }
 
   .tile[data-preview="target"] .beacon {
     --gz: calc(var(--ph) - var(--h));
   }
+}
 
-  .tile[data-preview="target"] .beacon::after {
-    content: counter(ph);
-  }
+/* Over the ghost, facing the camera: what building there would earn. */
+.tile[data-preview="target"] .beacon[data-gain]::after {
+  content: attr(data-gain);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  padding: 0.15em 0.4em 0.1em;
+  border-radius: 0.3em;
+  background: rgb(18 10 31 / 0.85);
+  color: var(--money);
+  font-size: clamp(0.85rem, 1.6vw, 1.15rem);
+  white-space: nowrap;
+  -webkit-text-stroke: 2px var(--line);
+  translate: -50% -50% calc(var(--unit) * 2 + 26px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+  animation: gain-in 260ms cubic-bezier(0.3, 1.5, 0.6, 1);
+}
 
-  /* the ghost carries the number, so the initials make way */
-  .tile[data-preview="target"] .initials {
-    visibility: hidden;
+@keyframes gain-in {
+  from {
+    opacity: 0;
+    scale: 0.6;
   }
+}
+
+/* the ghost carries the label, so the initials make way */
+.tile[data-preview="target"] .initials {
+  visibility: hidden;
 }
 
 /* a neighbour's mark sits in the ghost's corner, clear of its initials */
@@ -1370,7 +1781,7 @@ main {
 
 /* A landmark's roof keeps a gold edge, so the cell reads as one even
    when the crown is behind a taller tower. */
-.tile[data-landmark]:not(:focus-visible, .is-selected, [data-raised]) {
+.tile[data-landmark]:not(:focus-visible, [data-selected], [data-raised]) {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
@@ -1470,54 +1881,117 @@ main {
   }
 }
 
-/* --- camera controls (added by app.js, just above the board) --- */
+/* --- the board teaching: what's open, what you'd earn, what you earn --- */
 
-.camera {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  position: relative;
-  z-index: 2;
+/* No land yet: every free plot breathes a soft gold, the one invitation on
+   the first screen. Under reduced motion it holds a steady glow. */
+.board[data-invite] .tile[data-state="free"] {
+  outline-color: rgb(255 176 0 / 0.6);
 }
 
-/* Chunky game-menu buttons, on a hard shadow they press down into. */
-.camera button {
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 0.95rem;
-  line-height: 1;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  min-height: 36px;
-  padding: 0.4rem 0.6rem 0.35rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-  transition: background-color 120ms;
+.board[data-invite] .tile[data-state="free"]:not([data-helps]) {
+  animation: invite 2.8s ease-in-out infinite;
 }
 
-@media (hover: hover) {
-  .camera button:hover {
-    background: var(--accent);
+@keyframes invite {
+  50% {
+    background-color: #4a3c5c;
+    box-shadow:
+      inset 0 0 0 2px rgb(255 176 0 / 0.7),
+      0 0 10px rgb(255 176 0 / 0.45);
   }
 }
 
-.camera button:active {
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
+/* Your lease, as a ring round the foot of your building that drains as it
+   runs down: green when there's time, gold and dashed in the last hour. */
+.ring {
+  display: none;
 }
 
-.camera-hint {
-  color: var(--muted);
-  font-size: var(--fs-small);
+.tile[data-state="mine"] .ring {
+  --lease: 1;
+  display: block;
+  position: absolute;
+  inset: -5px;
+  padding: 3px;
+  border-radius: 4px;
+  pointer-events: none;
+  background: conic-gradient(var(--money) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.18) 0);
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  transform: translateZ(calc(-1 * var(--h) * var(--unit) + 1px));
 }
 
-/* --- phones: the bar that confirms a tapped tile --- */
+.tile[data-state="mine"][data-lease="soon"] .ring {
+  background: conic-gradient(var(--accent) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.18) 0);
+}
+
+/* Income waiting over your own building: "+12", in cash green, facing the
+   camera above the marker. */
+.owed {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--money);
+  -webkit-text-stroke: 4px var(--line);
+  paint-order: stroke fill;
+  pointer-events: none;
+  translate: -50% -50% calc(var(--unit) * 4 + 64px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+}
+
+/* A building going up: a short burst of coins off its roof. */
+.coin-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-style: preserve-3d;
+}
+
+.coin-bit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
+  box-shadow: 0 0 0 1.5px var(--line);
+  translate: -50% -50% 6px;
+  transform: rotateZ(var(--a)) translateY(0);
+  animation: coin-bit 900ms cubic-bezier(0.2, 0.8, 0.4, 1) forwards;
+}
+
+@keyframes coin-bit {
+  to {
+    transform: rotateZ(var(--a)) translateY(-260%);
+    translate: -50% -50% calc(var(--unit) * 6 + 20px);
+    opacity: 0;
+  }
+}
+
+/* Coins flying from your building to your wallet on a collect: placed by
+   app.js and moved by the Web Animations API, skipped under reduced
+   motion (the wallet still bumps). */
+.flying-coin {
+  position: fixed;
+  z-index: 20;
+  width: 1.1rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
+  box-shadow: 0 0 0 2px var(--line);
+  pointer-events: none;
+  translate: -50% -50%;
+}
+
+/* --- touch screens: the bar that confirms a tapped plot --- */
 
 .confirm {
   position: fixed;
@@ -1542,8 +2016,13 @@ main {
 
 .confirm-text {
   flex-basis: 100%;
-  color: var(--muted);
-  font-weight: 600;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.3rem;
+  line-height: 1.1;
+  color: var(--money);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
 }
 
 .confirm button {
@@ -1552,7 +2031,8 @@ main {
   font-size: 1.2rem;
   line-height: 1;
   letter-spacing: 0.02em;
-  min-height: 48px; /* a comfortable thumb */
+  min-height: 48px;
+  min-width: 48px;
   padding: 0.6rem 1rem;
   border: 3px solid var(--line);
   border-radius: 0.5rem;
@@ -1566,17 +2046,26 @@ main {
   background: var(--accent);
 }
 
-.confirm button:disabled {
-  cursor: not-allowed;
-  background: var(--muted);
-  box-shadow: none;
-  border-style: dashed;
+.confirm-move {
+  background: var(--accent);
 }
 
-/* on a wide screen the bar is a card at the bottom centre, not full width */
+.confirm-help {
+  flex: 1;
+  background: var(--money);
+}
+
+.confirm-cancel {
+  margin-left: auto;
+  background: var(--cream);
+}
+
+.confirm button:focus-visible {
+  outline-color: var(--ink);
+}
+
 @media (min-width: 64rem) {
   .confirm {
-    /* over the map's column, clear of the side column's inspector */
     inset-inline: auto;
     right: max(1rem, calc((100% - 72rem) / 2 + 1rem));
     width: min(36rem, calc(100% - 26rem));
@@ -1589,27 +2078,12 @@ main {
   }
 }
 
-.confirm-cancel {
-  background: var(--cream);
-}
-
-/* gold on a gold button would vanish */
-.confirm button:focus-visible {
-  outline-color: var(--ink);
-}
-
-/* leave room so the bar never covers the bottom rows of the board, or the
-   inspector under it */
 body:has(.confirm:not([hidden])) main {
   padding-bottom: 8rem;
 }
 
-/* --- the message that floats over the page: a landmark raised --- */
+/* --- the room-wide message: a landmark raised --- */
 
-/* Pinned to the top of the screen so they're seen wherever the page is
-   scrolled, and taking no room, so the board never moves under a pointer.
-   Neither is modal: nothing behind them is blocked but what they cover,
-   and they go by themselves. */
 .toasts {
   position: fixed;
   z-index: 11;
@@ -1632,12 +2106,6 @@ body:has(.confirm:not([hidden])) main {
   box-shadow:
     5px 5px 0 var(--line),
     inset 0 0 0 2px var(--accent);
-  animation: toast-in 280ms cubic-bezier(0.3, 1.4, 0.6, 1);
-}
-
-/* "Mission passed": the one message the whole room sees, in the gold mission
-   type, with a crown in front so it reads without the colour. */
-.cheer {
   font-family: var(--display);
   font-weight: 400;
   font-size: var(--fs-notice);
@@ -1646,6 +2114,7 @@ body:has(.confirm:not([hidden])) main {
   -webkit-text-stroke: 2px var(--line);
   paint-order: stroke fill;
   text-shadow: 2px 2px 0 var(--line);
+  animation: toast-in 280ms cubic-bezier(0.3, 1.4, 0.6, 1);
 }
 
 .cheer::before {
@@ -1666,425 +2135,33 @@ body:has(.confirm:not([hidden])) main {
   }
 }
 
-/* --- your city: the dashboard --- */
-
-/* Compact and secondary to the map: a HUD panel with the wallet as a gold
-   counter, six small facts, and four chunky action buttons. */
-.dash,
-.city-log {
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-}
-
-.dash {
-  display: grid;
-  gap: 0.6rem;
-  padding: 0.75rem 1rem 0.85rem;
-}
-
-.dash-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.dash h2,
-.city-log h2,
-.renew-options legend {
-  margin: 0;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: var(--fs-label);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-}
-
-.dash-coins {
-  margin: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 0.3rem;
-  color: var(--muted);
-  font-size: var(--fs-small);
-}
-
-/* the wallet is the HUD's cash counter */
-[data-dash-coins] {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.8rem;
-  line-height: 1;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-}
-
-/* a gold coin with a black rim, before the count */
-.coin {
-  align-self: center;
-  width: 0.95rem;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
-  box-shadow: 0 0 0 2px var(--line);
-}
-
-/* coins going up when a collect or a help lands */
-[data-dash-coins][data-bump] {
-  display: inline-block;
-  transform-origin: left bottom;
-  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
-}
-
-.dash-stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.45rem 0.75rem;
-  margin: 0;
-}
-
-.fact {
-  min-width: 0;
-}
-
-.fact dt {
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.2;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.fact dd {
-  margin: 0;
-  font-weight: 700;
-  font-size: var(--fs-small);
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-/* the uncollected count ticks up: tabular, so it doesn't jiggle */
-[data-dash-pending] {
-  font-variant-numeric: tabular-nums;
-  color: var(--money);
-}
-
-/* a lease ending within the hour: the hatched swatch before it, and bold */
-.fact[data-lease="soon"] dd::before {
-  content: "";
-  display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  margin-right: 0.3em;
-  vertical-align: -0.05em;
-  background: var(--hatch), var(--accent);
-  outline: 1.5px dashed var(--cream);
-}
-
-.fact[data-lease="soon"] dd {
-  color: var(--accent);
-}
-
-/* two by two in the side column; four across on a phone's bar */
-.dash-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.45rem;
-}
-
-/* Chunky game-menu buttons, like the camera's, two lines: the action and a
-   short cost or reason. */
-.act {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 0.15rem;
-  min-width: 0;
-  min-height: 48px;
-  padding: 0.4rem 0.3rem 0.35rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-  font: inherit;
-  transition: background-color 120ms;
-}
-
-.act-name {
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1rem;
-  line-height: 1;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.act-sub {
-  max-width: 100%;
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.act-sub:empty {
-  display: none;
-}
-
-/* Collect is the action you'll take most: money green */
-.act[data-act="collect"]:not(:disabled) {
-  background: var(--money);
-}
-
-@media (hover: hover) {
-  .act:not(:disabled):hover {
-    background: var(--accent);
-  }
-}
-
-.act:not(:disabled):active {
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
-}
-
-.act:focus-visible {
-  outline-color: var(--ink);
-}
-
-/* Disabled reads by shape as well as colour: flat (no shadow), hatched,
-   and its reason written under the name. */
-.act:disabled {
-  cursor: not-allowed;
-  background: repeating-linear-gradient(-45deg, rgb(0 0 0 / 0.1) 0 3px, transparent 3px 7px), var(--muted);
-  color: var(--night);
-  box-shadow: none;
-  border-style: dashed;
-}
-
-/* the open toggles (Renew's options, Relocate picking a plot) press in */
-.act[aria-expanded="true"],
-.act[aria-pressed="true"] {
-  translate: 2px 2px;
-  box-shadow: inset 0 0 0 2px var(--accent), 1px 1px 0 var(--line);
-  background: var(--accent);
-}
-
-/* Why each action is as it is: one at a time, for the action last
-   hovered, focused or tapped (Upgrade's until then), so a disabled button
-   is explained in words without a wall of text. */
-.act-whys {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.act-why:not([data-active]) {
-  display: none;
-}
-
-.act-why {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: 1.35;
-}
-
-.act-why:empty {
-  display: none;
-}
-
-/* Renewal: three options. Open without script; app.js folds them behind
-   the Renew button. An option past the 48 h cap says so beside it. */
-.renew-options {
-  display: grid;
-  gap: 0.4rem;
-  margin: 0;
-  padding: 0.6rem 0.7rem 0.7rem;
-  border: 2px solid var(--line);
-  border-radius: 0.45rem;
-  background: rgb(0 0 0 / 0.2);
-}
-
-.renew-options legend {
-  padding-inline: 0.3rem;
-  font-size: var(--fs-body);
-}
-
-.renew-option {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.6rem;
-}
-
-.act-small {
-  min-height: 44px;
-  padding: 0.35rem 0.7rem;
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 0.95rem;
-  letter-spacing: 0.02em;
-}
-
-.renew-why {
-  color: var(--muted);
-  font-size: var(--fs-small);
-}
-
-.renew-why:empty {
-  display: none;
-}
-
-/* --- the city log: a short list, below everything that matters more --- */
-
-.city-log {
-  padding: 0.6rem 0.9rem 0.7rem;
-}
-
-.city-log h2 {
-  font-size: var(--fs-body);
-}
-
-.city-log ol {
-  margin: 0.4rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.15rem;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: 1.35;
-}
-
-.city-log ol:empty::before {
-  content: "Nothing has happened yet.";
-}
-
-.city-log li {
-  overflow-wrap: anywhere;
-}
-
-/* the newest line, in full ink */
-.city-log li:first-child {
-  color: var(--ink);
-}
-
-/* --- Help: a neighbourly button in the inspector, secondary --- */
-
-.inspect-actions {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 0.75rem;
-}
-
-.help-button {
-  justify-self: start;
-  min-height: 44px;
-  padding: 0.4rem 0.8rem;
-  border: 2px solid var(--cream);
-  border-radius: 0.45rem;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-@media (hover: hover) {
-  .help-button:not(:disabled):hover {
-    background: rgb(255 247 236 / 0.12);
-  }
-}
-
-.help-button:disabled {
-  cursor: not-allowed;
-  border-style: dashed;
-  color: var(--muted);
-}
-
-.help-said {
-  margin: 0;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.help-said:empty {
-  display: none;
-}
-
-/* The relocation bar: where from and to, the cost, the income change and
-   the lease you keep. On a phone it's the confirm bar; on a wide screen it
-   sits in the same place, pinned to the bottom of the screen. */
-.confirm-move {
-  background: var(--accent);
-}
-
-.confirm-help {
-  background: var(--cream);
-}
-
-/* "Your city" and "coins" are plain labels beside the counters */
-.dash-title {
-  flex: none;
-}
-
-.dash-unit {
-  margin-left: 0.15rem;
-  text-transform: lowercase;
-}
-
-/* a touch-only screen has no keyboard to describe */
-@media (hover: none) and (pointer: coarse) {
-  .keys-hint {
-    display: none;
-  }
-}
-
 /* --- phones --- */
 
 /* A gentler tilt than desktop, with enough twist that blocks show a side
-   face and heights read as a skyline. At no twist they face away and the
-   board looks flat. The twist swings the corners outwards, so the board is
-   narrower than the screen: 80% keeps them in at 360px, with tiles the same
-   size as the untwisted full width. */
+   face. The twist swings the corners outwards, so the board is narrower
+   than the screen: 80% keeps them in at 360px. */
 @media (max-width: 40rem) {
   :root {
     --board: 80%;
     --unit: 4px;
     --city-h: 52px;
-    --fs-notice: 1.2rem;
+    --fs-notice: 1.15rem;
   }
 
   .top {
     margin-top: 0.75rem;
-    padding: 1rem 1rem calc(var(--city-h) + 0.5rem);
+    padding: 0.8rem 1rem calc(var(--city-h) + 0.3rem);
   }
 
   .top h1 {
-    width: 11rem;
+    width: 10rem;
   }
 
   .lede {
-    margin-top: 0.5rem;
-    font-size: 0.95rem;
-    line-height: 1.4;
+    margin-top: 0.4rem;
+    font-size: 1.15rem;
   }
 
-  /* The board comes straight after the name, so it's on the first screen;
-     the key follows it. The camera buttons go under the board, where a
-     thumb reaches them. */
   .claim {
     margin-top: 0.75rem;
     gap: 0.6rem;
@@ -2094,68 +2171,44 @@ body:has(.confirm:not([hidden])) main {
     order: 1;
   }
 
-  .dash {
+  .inspect {
     order: 2;
   }
 
-  .inspect,
-  .legend,
-  .city-log {
-    order: 3;
-  }
-
-  /* Your four actions sit under the thumb: a bar pinned to the bottom of
-     the screen while you hold land. The facts stay in the panel above. */
-  .dash-actions {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .dash[data-land] .dash-actions {
+  /* holding land, the wallet is a bar pinned to the bottom, under the thumb */
+  .wallet {
     position: fixed;
     z-index: 9;
     inset-inline: 0;
     bottom: 0;
-    gap: 0.35rem;
-    padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
-    background: var(--panel);
-    border-top: 3px solid var(--line);
+    border-radius: 0;
+    border-width: 3px 0 0;
     box-shadow: 0 -8px 24px rgb(0 0 0 / 0.45);
+    padding: 0.5rem 0.75rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    gap: 0.4rem 0.7rem;
+  }
+
+  [data-hud-coins] {
+    font-size: 1.6rem;
+  }
+
+  .acts {
+    flex-basis: auto;
+    flex: 1 1 100%;
   }
 
   .act {
-    padding-inline: 0.15rem;
+    flex: 1 1 auto;
+    padding-inline: 0.5rem;
   }
 
-  .act-name {
-    font-size: 0.8rem;
-    letter-spacing: 0;
+  body:has(.wallet:not([hidden])) main {
+    padding-bottom: 9rem;
   }
 
-  .act-sub {
-    font-size: 0.7rem;
-  }
-
-  /* the page leaves room for that bar, so it never covers the last line */
-  body:has(.dash[data-land]) main {
-    padding-bottom: 5.5rem;
-  }
-
-  .dash-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.35rem 0.5rem;
-  }
-
-  /* the confirm bar takes the bottom when it's open, over the actions */
-  body:has(.confirm:not([hidden])) .dash[data-land] .dash-actions {
+  /* the confirm bar takes the bottom when it's open, over the wallet */
+  body:has(.confirm:not([hidden])) .wallet {
     display: none;
-  }
-
-  .camera {
-    order: 1;
-  }
-
-  .controls {
-    padding: 0.6rem 0.75rem;
   }
 
   .stage {
@@ -2169,26 +2222,14 @@ body:has(.confirm:not([hidden])) main {
     padding: 4px;
   }
 
-  /* Five buttons in one row of thumb-sized targets; a long label wraps
-     inside its own button instead of pushing the row onto two lines. */
-  .camera {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 0.4rem;
+  .crown-icon {
+    width: 1rem;
+    height: 0.8rem;
+    margin-right: 0.2rem;
   }
 
-  .camera button {
-    min-height: 44px;
-    padding: 0.3rem 0.2rem;
-    font-size: 0.8rem;
-  }
-
-  .camera-hint {
-    grid-column: 1 / -1;
-    text-align: center;
-  }
-  /* "raised" and "neighbours" are still read out, but make room for the
-     building's name */
+  /* the crown says "landmarks"; the words are still read out */
+  [data-goal-noun],
   .goal-raised,
   .goal-unit {
     position: absolute;
@@ -2202,7 +2243,8 @@ body:has(.confirm:not([hidden])) main {
 /* --- reduced motion: nothing moves that doesn't have to --- */
 
 /* Changes still happen, instantly: a block jumps to its new height, a
-   claim's stripes stand still, the fresh ring just shows and goes. */
+   claim's stripes stand still, the fresh ring just shows and goes, and every
+   moving cue becomes a static highlight. */
 @media (prefers-reduced-motion: reduce) {
   .board,
   .tile,
@@ -2211,7 +2253,8 @@ body:has(.confirm:not([hidden])) main {
   .sides::before,
   .sides::after,
   .camera button,
-  .act {
+  .act,
+  .notice {
     transition: none;
   }
 
@@ -2221,13 +2264,31 @@ body:has(.confirm:not([hidden])) main {
   [data-landmarks][data-bump],
   .cheer,
   .tile[data-built] .roof,
-  [data-dash-coins][data-bump],
+  [data-hud-coins][data-bump],
   .tile[data-pending],
   .tile[aria-busy="true"],
   .tile[data-state="mine"]:not([data-preview]) .beacon::after,
   .conn::before,
-  .conn[data-conn="reconnecting"]::before {
+  .conn[data-conn="reconnecting"]::before,
+  .tile[data-preview="target"] .beacon[data-gain]::after,
+  .act-collect,
+  .act-upgrade,
+  .coin-bit {
     animation: none;
+  }
+
+  /* the free plots hold a steady gold edge instead of breathing */
+  .board[data-invite] .tile[data-state="free"]:not([data-helps]) {
+    animation: none;
+    box-shadow: inset 0 0 0 1px rgb(255 176 0 / 0.55);
+  }
+
+  /* the name field: a steady gold ring instead of a pulse */
+  .controls input[data-want] {
+    animation: none;
+    box-shadow:
+      4px 4px 0 var(--line),
+      0 0 0 5px var(--accent);
   }
 
   .tile[data-fresh] {
@@ -2236,15 +2297,13 @@ body:has(.confirm:not([hidden])) main {
     outline-offset: 2px;
   }
 
-  /* A raised landmark is still marked on every screen, standing still: the
-     rays at full strength until they go, and the count in cream. */
   .burst {
     animation: none;
     opacity: 0.9;
   }
 
   [data-landmarks][data-bump],
-  [data-dash-coins][data-bump] {
+  [data-hud-coins][data-bump] {
     color: var(--cream);
   }
 }
