@@ -42,9 +42,9 @@
   --lot: #272137;
   --lot-hover: #40385a;
   --lot-edge: rgb(255 255 255 / 0.08); /* the kerb round an empty lot */
-  /* the faded tile's roof: hatched, so it reads apart from a taken one in
-     greyscale too */
-  --hatch: repeating-linear-gradient(45deg, rgb(0 0 0 / 0.28) 0 2px, transparent 2px 6px);
+  /* a roof whose lease ends within the hour: hatched, so it reads apart
+     from the others in greyscale too */
+  --hatch: repeating-linear-gradient(45deg, rgb(0 0 0 / 0.45) 0 2px, rgb(255 247 236 / 0.35) 2px 3px, transparent 3px 6px);
   --danger: #ff5a4f; /* the wasted red: a drop, a lost connection */
   --display: "Passion One", Impact, "Arial Black", sans-serif;
   /* One type scale. Display type (Passion One) for labels, buttons and
@@ -222,11 +222,11 @@ main {
 
 /* --- layout: name and key on the left, the board taking the rest --- */
 
-/* One column on narrow screens, in reading order: name, key, board, then
-   the tile inspector. From 64rem the board gets its own column and
-   everything else stacks beside it, so the board is the biggest thing on
-   the page and sits in its centre. Absolutely placed children (the
-   announcer, the phone's confirm bar) take no grid cell. */
+/* One column on narrow screens, in reading order: name, map, your city,
+   the plot inspector, the key and the city log. From 64rem the map gets
+   its own column and everything else stacks beside it, so the map is the
+   biggest thing on the page and sits in its centre. Absolutely placed
+   children (the announcer, the phone's bars) take no grid cell. */
 .claim {
   display: grid;
   gap: 0.75rem;
@@ -235,15 +235,17 @@ main {
 
 @media (min-width: 64rem) {
   .claim {
-    grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
-    grid-template-rows: auto auto auto 1fr;
+    grid-template-columns: minmax(17rem, 21rem) minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto auto 1fr;
     column-gap: 1.25rem;
     align-items: start;
   }
 
   .controls,
+  .dash,
   .legend,
-  .inspect {
+  .inspect,
+  .city-log {
     grid-column: 1;
   }
 
@@ -390,9 +392,11 @@ main {
     0 0 6px 1px rgb(255 176 0 / 0.7);
 }
 
-.swatch[data-swatch="dormant"] {
-  background: var(--hatch), hsl(0 0% 46%);
+.swatch[data-swatch="soon"] {
+  background: var(--hatch), hsl(200 78% 60%);
   box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+  outline: 2px dashed var(--cream);
+  outline-offset: -2px;
 }
 
 /* --- the board's HUD: claimed count and connection --- */
@@ -790,8 +794,14 @@ main {
 
 /* --- tile states --- */
 
-/* Free: a dark empty lot with a faint kerb, so the grid of open places
-   reads at a glance. Hover lifts it a touch and lights the kerb. */
+/* Free: a dark empty lot with a dashed kerb, so the grid of open places
+   reads at a glance, in greyscale too. Hover lifts it a touch and lights
+   the kerb. */
+.tile[data-state="free"] {
+  outline: 1px dashed rgb(255 255 255 / 0.28);
+  outline-offset: -4px;
+}
+
 @media (hover: hover) {
   .tile[data-state="free"]:hover {
     --lift: 3px;
@@ -800,11 +810,10 @@ main {
   }
 }
 
-/* Held, yours, faded: a roof. A taller tower's roof is a little lighter,
+/* Held and yours: a roof. A taller building's roof is a little lighter,
    as if nearer the light, which helps heights read from straight above. */
 .tile[data-state="held"],
-.tile[data-state="mine"],
-.tile[data-state="dormant"] {
+.tile[data-state="mine"] {
   background: hsl(var(--hue) var(--top-s) calc(var(--top-l) + var(--h) * 1.5%));
   box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.55);
 }
@@ -818,32 +827,325 @@ main {
     0 0 14px 2px rgb(255 176 0 / 0.75);
 }
 
-/* Faded: still standing, but grey and hatched with its lights out, and open
-   to whoever settles there. */
-.tile[data-state="dormant"] {
-  --s: 6%;
-  --top-s: 6%;
-  --top-l: 44%;
-  background: var(--hatch), hsl(0 0% calc(var(--top-l) + var(--h) * 1.5%));
+/* --- buildings: five types, told apart by shape, not only floors ---
+
+   A building's level picks its type (data-level, docs/adr/0005); its height
+   is level plus neighbours, one row of windows per floor. Each type has its
+   own roofline, drawn in .roof and .gable (four planes standing on the roof,
+   all pointer-events: none, so a tall roof never takes a click), and its
+   own window pattern on the walls, so the five read apart in greyscale and
+   from any side:
+
+     1 Small House      a pyramid roof, one window a floor
+     2 Townhouse        a pitched gable roof, two windows a floor
+     3 Apartment        a flat roof with a parapet and a water tank, a grid
+     4 Office Building  a flat roof with plant, glass ribbons round each floor
+     5 Skyscraper       a crown and a spire, full-height glass strips */
+
+.roof,
+.gable {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-style: preserve-3d;
 }
 
-.tile[data-state="dormant"]::before,
-.tile[data-state="dormant"]::after,
-.tile[data-state="dormant"] .sides::before,
-.tile[data-state="dormant"] .sides::after {
-  --win: var(--wall);
+.roof::before,
+.roof::after,
+.gable::before,
+.gable::after {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
 }
 
-.tile[data-state="dormant"] .initials {
-  opacity: 0.7;
+/* the roof pieces' shades, from the holder's hue: lit, side, shade, dark */
+.tile[data-level] {
+  --r1: hsl(var(--hue) 40% 62%);
+  --r2: hsl(var(--hue) 42% 46%);
+  --r3: hsl(var(--hue) 45% 34%);
+  --r4: hsl(var(--hue) 50% 24%);
 }
 
-@media (hover: hover) {
-  .tile[data-state="dormant"]:hover {
-    --top-l: 54%;
-    --lift: 3px;
-    box-shadow: inset 0 0 0 2px var(--cream);
+/* 1. Small House: a hip roof rising to a point, from four triangles each
+   hinged on one edge of the roof and tilted 40° up to meet at the centre
+   (65.27% = 50% / cos 40°). */
+.tile[data-level="1"] .roof::before,
+.tile[data-level="1"] .roof::after,
+.tile[data-level="1"] .gable::before,
+.tile[data-level="1"] .gable::after {
+  content: "";
+}
+
+.tile[data-level="1"] .roof::before {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 65.27%;
+  transform-origin: top;
+  transform: rotateX(40deg);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  background: var(--r1);
+}
+
+.tile[data-level="1"] .roof::after {
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 65.27%;
+  transform-origin: bottom;
+  transform: rotateX(-40deg);
+  clip-path: polygon(0 100%, 100% 100%, 50% 0);
+  background: var(--r3);
+}
+
+.tile[data-level="1"] .gable::before {
+  left: 0;
+  top: 0;
+  width: 65.27%;
+  height: 100%;
+  transform-origin: left;
+  transform: rotateY(-40deg);
+  clip-path: polygon(0 0, 0 100%, 100% 50%);
+  background: var(--r2);
+}
+
+.tile[data-level="1"] .gable::after {
+  right: 0;
+  top: 0;
+  width: 65.27%;
+  height: 100%;
+  transform-origin: right;
+  transform: rotateY(40deg);
+  clip-path: polygon(100% 0, 100% 100%, 0 50%);
+  background: var(--r4);
+}
+
+/* 2. Townhouse: a pitched roof, two slopes tilted 35° from the side edges
+   to a ridge across the middle (61.04% = 50% / cos 35°), closed by a
+   triangular gable at each end (35% high = 50% × tan 35°). The slopes are
+   striped like roof tiles. */
+.tile[data-level="2"] .roof::before,
+.tile[data-level="2"] .roof::after,
+.tile[data-level="2"] .gable::before,
+.tile[data-level="2"] .gable::after {
+  content: "";
+}
+
+.tile[data-level="2"] .roof::before,
+.tile[data-level="2"] .roof::after {
+  top: 0;
+  width: 61.04%;
+  height: 100%;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.28) 0 1px, transparent 1px 4px), var(--r2);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.5);
+}
+
+.tile[data-level="2"] .roof::before {
+  left: 0;
+  transform-origin: left;
+  transform: rotateY(-35deg);
+}
+
+.tile[data-level="2"] .roof::after {
+  right: 0;
+  transform-origin: right;
+  transform: rotateY(35deg);
+  background-color: var(--r4);
+}
+
+.tile[data-level="2"] .gable::before,
+.tile[data-level="2"] .gable::after {
+  left: 0;
+  width: 100%;
+  height: 35%;
+  background: var(--r1);
+}
+
+.tile[data-level="2"] .gable::before {
+  bottom: 100%;
+  transform-origin: bottom;
+  transform: rotateX(-90deg);
+  clip-path: polygon(0 100%, 50% 0, 100% 100%);
+}
+
+.tile[data-level="2"] .gable::after {
+  top: 100%;
+  transform-origin: top;
+  transform: rotateX(90deg);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  background: var(--r3);
+}
+
+/* 3. Apartment: a flat roof behind a thick parapet, with a water tank on
+   it: two crossed panels standing on the roof, so it reads from any side. */
+.tile[data-level="3"] {
+  box-shadow:
+    inset 0 0 0 1.5px rgb(0 0 0 / 0.55),
+    inset 0 0 0 4px var(--r3);
+}
+
+.tile[data-level="3"] .roof::before,
+.tile[data-level="3"] .roof::after {
+  content: "";
+  left: 25%;
+  bottom: 50%;
+  width: 40%;
+  height: 38%;
+  transform-origin: 50% 100%;
+  background: linear-gradient(to bottom, #2b2b2b 0 22%, hsl(0 0% 58%) 22% 30%, var(--r4) 30%);
+  box-shadow: inset 0 0 0 1.5px var(--line);
+}
+
+.tile[data-level="3"] .roof::before {
+  transform: rotateX(-90deg);
+}
+
+.tile[data-level="3"] .roof::after {
+  transform: rotateZ(90deg) rotateX(-90deg);
+}
+
+/* 4. Office Building: a flat roof carrying a block of plant, a grid of
+   vents, lifted a little off the roof. */
+.tile[data-level="4"] .roof::before {
+  content: "";
+  inset: 22%;
+  transform: translateZ(2px);
+  background:
+    repeating-linear-gradient(90deg, rgb(0 0 0 / 0.55) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(0deg, rgb(0 0 0 / 0.55) 0 1px, transparent 1px 4px),
+    hsl(0 0% 72%);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+/* 5. Skyscraper: a lighter crown set back from the edge, and a spire of
+   two crossed panels standing well above the roof. */
+.tile[data-level="5"] .roof::before,
+.tile[data-level="5"] .roof::after {
+  content: "";
+  left: 45%;
+  bottom: 50%;
+  width: 10%;
+  height: calc(var(--unit) * 3 + 8px);
+  transform-origin: 50% 100%;
+  background: linear-gradient(to top, hsl(0 0% 80%), hsl(0 0% 98%));
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.tile[data-level="5"] .roof::before {
+  transform: rotateX(-90deg);
+}
+
+.tile[data-level="5"] .roof::after {
+  transform: rotateZ(90deg) rotateX(-90deg);
+}
+
+.tile[data-level="5"] .gable::before {
+  content: "";
+  inset: 18%;
+  transform: translateZ(1px);
+  background: var(--r1);
+  box-shadow:
+    0 0 0 1.5px var(--line),
+    inset 0 0 0 2px rgb(255 255 255 / 0.5);
+}
+
+/* The walls' windows, per type. --columns is the solid wall between
+   windows across a face; --floors the bands of wall and window up it, one
+   band per floor. Office and Skyscraper glass is pale blue, the rest warm
+   lamplight. */
+.tile[data-level="1"]::before,
+.tile[data-level="1"]::after,
+.tile[data-level="1"] .sides::before,
+.tile[data-level="1"] .sides::after {
+  --columns: linear-gradient(var(--across), var(--wall) 0 36%, transparent 36% 64%, var(--wall) 64%);
+}
+
+.tile[data-level="2"]::before,
+.tile[data-level="2"]::after,
+.tile[data-level="2"] .sides::before,
+.tile[data-level="2"] .sides::after {
+  --columns: linear-gradient(
+    var(--across),
+    var(--wall) 0 18%,
+    transparent 18% 40%,
+    var(--wall) 40% 60%,
+    transparent 60% 82%,
+    var(--wall) 82%
+  );
+}
+
+.tile[data-level="4"]::before,
+.tile[data-level="4"]::after,
+.tile[data-level="4"] .sides::before,
+.tile[data-level="4"] .sides::after {
+  --win: #a8e4ff;
+  --columns: repeating-linear-gradient(var(--across), var(--wall) 0 4%, transparent 4% 20%);
+  --floors: repeating-linear-gradient(
+    var(--up),
+    var(--wall) 0 calc(var(--unit) * 0.2),
+    var(--win) calc(var(--unit) * 0.2) calc(var(--unit) * 0.85),
+    var(--wall) calc(var(--unit) * 0.85) var(--unit)
+  );
+}
+
+.tile[data-level="5"]::before,
+.tile[data-level="5"]::after,
+.tile[data-level="5"] .sides::before,
+.tile[data-level="5"] .sides::after {
+  --win: #c9ecff;
+  --columns: repeating-linear-gradient(var(--across), var(--wall) 0 9%, transparent 9% 25%);
+  --floors: repeating-linear-gradient(
+    var(--up),
+    var(--win) 0 calc(var(--unit) * 0.9),
+    var(--wall) calc(var(--unit) * 0.9) var(--unit)
+  );
+}
+
+/* A building going up, or up a level: its roof settles into place from
+   above while the walls grow (their own transition). Played once by
+   app.js; under reduced motion the building is just there. */
+.tile[data-built] .roof {
+  animation: build 650ms cubic-bezier(0.3, 1.3, 0.6, 1);
+}
+
+@keyframes build {
+  from {
+    opacity: 0;
+    transform: translateZ(calc(var(--unit) * 3));
   }
+}
+
+/* A lease ending within the hour: the roof hatched, a dashed cream ring,
+   and a small hourglass over it, so it reads without the colour. */
+.tile[data-lease="soon"] {
+  background-image: var(--hatch);
+  outline: 2px dashed var(--cream);
+  outline-offset: -1px;
+}
+
+.tile[data-lease="soon"]:not([data-preview]) .beacon::before {
+  content: "";
+  width: 34%;
+  aspect-ratio: 0.7;
+  background: var(--cream);
+  clip-path: polygon(0 0, 100% 0, 58% 50%, 100% 100%, 0 100%, 42% 50%);
+  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line));
+  translate: 0 0 calc(var(--unit) * 2 + 10px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+}
+
+/* Relocating: every free plot is a possible destination, so each gets a
+   gold dashed kerb; the one picked is the preview's target, ringed. */
+.board[data-relocating] .tile[data-state="free"] {
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+}
+
+.board[data-relocating] .tile[data-preview="target"] {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+  z-index: 1;
 }
 
 /* Keyboard focus: the gold ring, standing off the roof. */
@@ -923,21 +1225,22 @@ main {
   background: var(--accent);
   clip-path: polygon(0 0, 100% 0, 50% 100%);
   filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line));
-  translate: 0 0 calc(var(--unit) * 3 + 12px);
+  translate: 0 0 calc(var(--unit) * 4 + 16px);
   transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt))) translateY(-50%);
   animation: bob 2s ease-in-out infinite;
 }
 
 @keyframes bob {
   50% {
-    translate: 0 0 calc(var(--unit) * 3 + 18px);
+    translate: 0 0 calc(var(--unit) * 4 + 22px);
   }
 }
 
-/* Preview: what claiming this tile would do. The target shows a dashed
+/* Preview: what building on this plot would do. The target shows a dashed
    ghost roof at the height it would stand, with that number on it; each
-   neighbour it would lift shows a green ghost a floor above its roof,
-   marked +1, and each it would drop a red one a floor below, marked −1.
+   neighbour whose income it would raise shows a green ghost a floor above
+   its roof, marked +20%, and each it would lower (a move) a red one a floor
+   below, marked −20%.
    --gz is how many floors above this tile's own roof the ghost floats. */
 .tile[data-preview] .beacon {
   --gz: 0;
@@ -993,7 +1296,7 @@ main {
 }
 
 .tile[data-preview="lift"] .beacon::after {
-  content: "+1";
+  content: "+20%";
   color: var(--money);
 }
 
@@ -1005,7 +1308,7 @@ main {
 }
 
 .tile[data-preview="drop"] .beacon::after {
-  content: "\2212 1";
+  content: "\2212 20%";
   color: var(--danger);
 }
 
@@ -1108,40 +1411,6 @@ main {
   z-index: 2;
   outline: 4px solid var(--cream);
   outline-offset: 3px;
-}
-
-/* A neighbour waved: a small hand over their tower, rocking, for about
-   three seconds. An outlined emoji: it reads in greyscale by shape. */
-.tile[data-waving] {
-  z-index: 2;
-}
-
-.hand {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  pointer-events: none;
-  translate: -50% -50% calc(var(--unit) * 2 + 10px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt))) translateY(-60%);
-}
-
-.hand::before {
-  content: "\1F44B";
-  display: block;
-  font-size: clamp(1.4rem, 2.6vw, 2rem);
-  line-height: 1;
-  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line)) drop-shadow(2px 2px 0 var(--line));
-  transform-origin: 70% 90%;
-  animation: hand 600ms ease-in-out 5 alternate;
-}
-
-@keyframes hand {
-  from {
-    rotate: -18deg;
-  }
-  to {
-    rotate: 18deg;
-  }
 }
 
 /* Names on the roofs are map labels: white, outlined in black, legible on
@@ -1297,6 +1566,29 @@ main {
   background: var(--accent);
 }
 
+.confirm button:disabled {
+  cursor: not-allowed;
+  background: var(--muted);
+  box-shadow: none;
+  border-style: dashed;
+}
+
+/* on a wide screen the bar is a card at the bottom centre, not full width */
+@media (min-width: 64rem) {
+  .confirm {
+    /* over the map's column, clear of the side column's inspector */
+    inset-inline: auto;
+    right: max(1rem, calc((100% - 72rem) / 2 + 1rem));
+    width: min(36rem, calc(100% - 26rem));
+    bottom: 1rem;
+    border: 3px solid var(--line);
+    border-radius: 0.6rem;
+    box-shadow:
+      5px 5px 0 var(--line),
+      inset 0 0 0 2px var(--accent);
+  }
+}
+
 .confirm-cancel {
   background: var(--cream);
 }
@@ -1312,59 +1604,7 @@ body:has(.confirm:not([hidden])) main {
   padding-bottom: 8rem;
 }
 
-.confirm-wave {
-  background: var(--cream);
-}
-
-/* --- the inspector's Wave button --- */
-
-.inspect-actions {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 0.75rem;
-}
-
-.wave-button,
-.wave-back {
-  justify-self: start;
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1.05rem;
-  line-height: 1;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  min-height: 44px;
-  padding: 0.5rem 0.9rem 0.45rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--accent);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-}
-
-.wave-button:active,
-.wave-back:active {
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
-}
-
-.wave-button:focus-visible,
-.wave-back:focus-visible {
-  outline-color: var(--ink);
-}
-
-.wave-said {
-  margin: 0;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.wave-said:empty {
-  display: none;
-}
-
-/* --- messages that float over the page: a landmark raised, a wave --- */
+/* --- the message that floats over the page: a landmark raised --- */
 
 /* Pinned to the top of the screen so they're seen wherever the page is
    scrolled, and taking no room, so the board never moves under a pointer.
@@ -1382,8 +1622,7 @@ body:has(.confirm:not([hidden])) main {
   pointer-events: none;
 }
 
-.cheer,
-.waved {
+.cheer {
   pointer-events: auto;
   margin: 0;
   padding: 0.6rem 0.9rem;
@@ -1420,33 +1659,390 @@ body:has(.confirm:not([hidden])) main {
   clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
 }
 
-.waved {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 0.75rem;
-}
-
-.waved-text {
-  font-weight: 700;
-  font-size: var(--fs-body);
-}
-
-.waved-text::before {
-  content: "\1F44B";
-  margin-right: 0.4rem;
-}
-
-.wave-back {
-  justify-self: auto;
-}
-
 @keyframes toast-in {
   from {
     opacity: 0;
     translate: 0 -0.6rem;
   }
+}
+
+/* --- your city: the dashboard --- */
+
+/* Compact and secondary to the map: a HUD panel with the wallet as a gold
+   counter, six small facts, and four chunky action buttons. */
+.dash,
+.city-log {
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow: 5px 5px 0 var(--line);
+}
+
+.dash {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem 0.85rem;
+}
+
+.dash-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dash h2,
+.city-log h2,
+.renew-options legend {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: var(--fs-label);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+}
+
+.dash-coins {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+/* the wallet is the HUD's cash counter */
+[data-dash-coins] {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.8rem;
+  line-height: 1;
+  color: var(--money);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+}
+
+/* a gold coin with a black rim, before the count */
+.coin {
+  align-self: center;
+  width: 0.95rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
+  box-shadow: 0 0 0 2px var(--line);
+}
+
+/* coins going up when a collect or a help lands */
+[data-dash-coins][data-bump] {
+  display: inline-block;
+  transform-origin: left bottom;
+  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+
+.dash-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem 0.75rem;
+  margin: 0;
+}
+
+.fact {
+  min-width: 0;
+}
+
+.fact dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.fact dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: var(--fs-small);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* the uncollected count ticks up: tabular, so it doesn't jiggle */
+[data-dash-pending] {
+  font-variant-numeric: tabular-nums;
+  color: var(--money);
+}
+
+/* a lease ending within the hour: the hatched swatch before it, and bold */
+.fact[data-lease="soon"] dd::before {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.3em;
+  vertical-align: -0.05em;
+  background: var(--hatch), var(--accent);
+  outline: 1.5px dashed var(--cream);
+}
+
+.fact[data-lease="soon"] dd {
+  color: var(--accent);
+}
+
+/* two by two in the side column; four across on a phone's bar */
+.dash-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+/* Chunky game-menu buttons, like the camera's, two lines: the action and a
+   short cost or reason. */
+.act {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.15rem;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0.4rem 0.3rem 0.35rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  cursor: pointer;
+  font: inherit;
+  transition: background-color 120ms;
+}
+
+.act-name {
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 1rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.act-sub {
+  max-width: 100%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-sub:empty {
+  display: none;
+}
+
+/* Collect is the action you'll take most: money green */
+.act[data-act="collect"]:not(:disabled) {
+  background: var(--money);
+}
+
+@media (hover: hover) {
+  .act:not(:disabled):hover {
+    background: var(--accent);
+  }
+}
+
+.act:not(:disabled):active {
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.act:focus-visible {
+  outline-color: var(--ink);
+}
+
+/* Disabled reads by shape as well as colour: flat (no shadow), hatched,
+   and its reason written under the name. */
+.act:disabled {
+  cursor: not-allowed;
+  background: repeating-linear-gradient(-45deg, rgb(0 0 0 / 0.1) 0 3px, transparent 3px 7px), var(--muted);
+  color: var(--night);
+  box-shadow: none;
+  border-style: dashed;
+}
+
+/* the open toggles (Renew's options, Relocate picking a plot) press in */
+.act[aria-expanded="true"],
+.act[aria-pressed="true"] {
+  translate: 2px 2px;
+  box-shadow: inset 0 0 0 2px var(--accent), 1px 1px 0 var(--line);
+  background: var(--accent);
+}
+
+/* Why each action is as it is: one at a time, for the action last
+   hovered, focused or tapped (Upgrade's until then), so a disabled button
+   is explained in words without a wall of text. */
+.act-whys {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.act-why:not([data-active]) {
+  display: none;
+}
+
+.act-why {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 1.35;
+}
+
+.act-why:empty {
+  display: none;
+}
+
+/* Renewal: three options. Open without script; app.js folds them behind
+   the Renew button. An option past the 48 h cap says so beside it. */
+.renew-options {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.6rem 0.7rem 0.7rem;
+  border: 2px solid var(--line);
+  border-radius: 0.45rem;
+  background: rgb(0 0 0 / 0.2);
+}
+
+.renew-options legend {
+  padding-inline: 0.3rem;
+  font-size: var(--fs-body);
+}
+
+.renew-option {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+}
+
+.act-small {
+  min-height: 44px;
+  padding: 0.35rem 0.7rem;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.renew-why {
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.renew-why:empty {
+  display: none;
+}
+
+/* --- the city log: a short list, below everything that matters more --- */
+
+.city-log {
+  padding: 0.6rem 0.9rem 0.7rem;
+}
+
+.city-log h2 {
+  font-size: var(--fs-body);
+}
+
+.city-log ol {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.15rem;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 1.35;
+}
+
+.city-log ol:empty::before {
+  content: "Nothing has happened yet.";
+}
+
+.city-log li {
+  overflow-wrap: anywhere;
+}
+
+/* the newest line, in full ink */
+.city-log li:first-child {
+  color: var(--ink);
+}
+
+/* --- Help: a neighbourly button in the inspector, secondary --- */
+
+.inspect-actions {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.help-button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0.4rem 0.8rem;
+  border: 2px solid var(--cream);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .help-button:not(:disabled):hover {
+    background: rgb(255 247 236 / 0.12);
+  }
+}
+
+.help-button:disabled {
+  cursor: not-allowed;
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.help-said {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.help-said:empty {
+  display: none;
+}
+
+/* The relocation bar: where from and to, the cost, the income change and
+   the lease you keep. On a phone it's the confirm bar; on a wide screen it
+   sits in the same place, pinned to the bottom of the screen. */
+.confirm-move {
+  background: var(--accent);
+}
+
+.confirm-help {
+  background: var(--cream);
+}
+
+/* "Your city" and "coins" are plain labels beside the counters */
+.dash-title {
+  flex: none;
+}
+
+.dash-unit {
+  margin-left: 0.15rem;
+  text-transform: lowercase;
 }
 
 /* a touch-only screen has no keyboard to describe */
@@ -1498,9 +2094,60 @@ body:has(.confirm:not([hidden])) main {
     order: 1;
   }
 
-  .legend,
-  .inspect {
+  .dash {
     order: 2;
+  }
+
+  .inspect,
+  .legend,
+  .city-log {
+    order: 3;
+  }
+
+  /* Your four actions sit under the thumb: a bar pinned to the bottom of
+     the screen while you hold land. The facts stay in the panel above. */
+  .dash-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .dash[data-land] .dash-actions {
+    position: fixed;
+    z-index: 9;
+    inset-inline: 0;
+    bottom: 0;
+    gap: 0.35rem;
+    padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    background: var(--panel);
+    border-top: 3px solid var(--line);
+    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.45);
+  }
+
+  .act {
+    padding-inline: 0.15rem;
+  }
+
+  .act-name {
+    font-size: 0.8rem;
+    letter-spacing: 0;
+  }
+
+  .act-sub {
+    font-size: 0.7rem;
+  }
+
+  /* the page leaves room for that bar, so it never covers the last line */
+  body:has(.dash[data-land]) main {
+    padding-bottom: 5.5rem;
+  }
+
+  .dash-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.35rem 0.5rem;
+  }
+
+  /* the confirm bar takes the bottom when it's open, over the actions */
+  body:has(.confirm:not([hidden])) .dash[data-land] .dash-actions {
+    display: none;
   }
 
   .camera {
@@ -1540,8 +2187,10 @@ body:has(.confirm:not([hidden])) main {
     grid-column: 1 / -1;
     text-align: center;
   }
-  /* "raised" is still read out, but makes room for the tower's name */
-  .goal-raised {
+  /* "raised" and "neighbours" are still read out, but make room for the
+     building's name */
+  .goal-raised,
+  .goal-unit {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1561,7 +2210,8 @@ body:has(.confirm:not([hidden])) main {
   .tile::after,
   .sides::before,
   .sides::after,
-  .camera button {
+  .camera button,
+  .act {
     transition: none;
   }
 
@@ -1569,9 +2219,9 @@ body:has(.confirm:not([hidden])) main {
   .notice,
   .tile[data-helps]:not([data-pending]),
   [data-landmarks][data-bump],
-  .hand::before,
   .cheer,
-  .waved,
+  .tile[data-built] .roof,
+  [data-dash-coins][data-bump],
   .tile[data-pending],
   .tile[aria-busy="true"],
   .tile[data-state="mine"]:not([data-preview]) .beacon::after,
@@ -1593,7 +2243,8 @@ body:has(.confirm:not([hidden])) main {
     opacity: 0.9;
   }
 
-  [data-landmarks][data-bump] {
+  [data-landmarks][data-bump],
+  [data-dash-coins][data-bump] {
     color: var(--cream);
   }
 }

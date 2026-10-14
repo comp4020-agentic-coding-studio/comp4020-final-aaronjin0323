@@ -106,7 +106,10 @@ it.
   Building, Skyscraper) with upgrade costs 150, 400, 900, 1800; relocation
   50 coins, 30 min cooldown; lease 24 h, renewals 6 h/100, 12 h/180,
   24 h/300, never past 48 h from the ownership start; help +50 to the
-  neighbour, +20 to the helper, once an hour.
+  neighbour, +20 to the helper, once an hour. The one exception:
+  `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
+  import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
+  single field. Change `src/economy.ts` first, then the mirror.
 - **Players are rows.** `players (pid PRIMARY KEY, label, coins INTEGER,
   created_at, last_relocated_at, last_helped_at)`, created on first sight
   with 100 coins. Coins are integers and never negative (a `CHECK`).

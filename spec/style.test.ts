@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, inject, it } from "vitest";
+import { ECONOMY } from "../src/economy.ts";
 
 // The stylesheet and the code agree on names only by convention: a class the
 // script adds, an attribute value the code writes, a file the CSS points at.
@@ -43,11 +44,25 @@ describe("the stylesheet and the code", () => {
   });
 
   it("selects only attribute values the code writes", () => {
-    const selected = [...css.matchAll(/\[data-[\w-]+="([^"]+)"\]/g)].map((m) => m[1]);
+    const selected = [...css.matchAll(/\[(data-[\w-]+)="([^"]+)"\]/g)].map((m) => ({ name: m[1], value: m[2] }));
     expect(selected.length, "style.css selects no attribute values; nothing to check").toBeGreaterThan(0);
     const quoted = (v: string): boolean => ['"', "'", "`"].some((q) => code.includes(`${q}${v}${q}`));
-    const unwritten = [...new Set(selected)].filter((v) => !quoted(v));
+    // data-level is a building's level, written as a number: the values it
+    // can take are exactly the levels src/economy.ts names.
+    const levels = ECONOMY.levels.map((_: string, i: number) => String(i + 1));
+    const written = ({ name, value }: { name: string; value: string }): boolean =>
+      name === "data-level" ? levels.includes(value) : quoted(value);
+    const unwritten = [...new Set(selected.filter((s) => !written(s)).map((s) => `${s.name}="${s.value}"`))];
     expect(unwritten, "values style.css selects that no code writes").toEqual([]);
+  });
+
+  // Each of the five building types has its own roofline: a level the CSS
+  // doesn't draw would show a flat box with no type.
+  it("draws a roofline for every building level", () => {
+    const missing = ECONOMY.levels
+      .map((_: string, i: number) => i + 1)
+      .filter((l: number) => !new RegExp(`\\.tile\\[data-level="${l}"\\] \\.(roof|gable)::(before|after)`).test(css));
+    expect(missing, "levels with no roofline in style.css").toEqual([]);
   });
 
   // A missing font or image fails silently: the page still renders, just in
@@ -69,19 +84,28 @@ describe("the stylesheet's hooks", () => {
     const names = [...css.matchAll(/\[(data-[\w-]+)[\]=]/g), ...css.matchAll(/attr\((data-[\w-]+)/g)].map((m) => m[1]);
     expect(names.length, "style.css selects no data attributes; nothing to check").toBeGreaterThan(0);
     const camel = (n: string): string => n.slice(5).replace(/-(\w)/g, (_, c: string) => c.toUpperCase());
-    const set = (n: string): boolean => code.includes(n) || new RegExp(`dataset\\.${camel(n)}\\b`).test(code);
+    // data-dash-<slot> is written from a template: `data-dash-${key}`
+    // with fact("Uncollected", "pending", …), so the slot name appears quoted.
+    const templated = (n: string): boolean => {
+      const m = n.match(/^(data-[\w]+-)([\w-]+)$/);
+      return m !== null && code.includes(`${m[1]}\${`) && code.includes(`"${m[2]}"`);
+    };
+    const set = (n: string): boolean => code.includes(n) || new RegExp(`dataset\\.${camel(n)}\\b`).test(code) || templated(n);
     const unset = [...new Set(names)].filter((n) => !set(n));
     expect(unset, "data attributes style.css selects that nothing sets").toEqual([]);
   });
 
-  // The goal and the room's moments are all data-* hooks the script sets
-  // and the stylesheet draws: each one the script writes has a rule.
-  it("styles every goal, landmark and wave hook the script sets", () => {
-    const set = [...app.matchAll(/dataset\.(helps|landmark|raised|waving|bump)\b\s*=/g)].map((m) => m[1]);
-    const hooks = ["helps", "landmark", "raised", "waving", "bump"];
+  // The goal, the room's moments and the economy's states are all data-*
+  // hooks the script sets and the stylesheet draws: each one has a rule.
+  it("styles every goal, landmark, building and dashboard hook the script sets", () => {
+    const set = [
+      ...app.matchAll(/dataset\.(helps|landmark|raised|bump|built|relocating)\b\s*=/g),
+      ...app.matchAll(/setData\([\w.]+, "(level|lease|land)"/g),
+    ].map((m) => m[1]);
+    const hooks = ["helps", "landmark", "raised", "bump", "built", "relocating", "level", "lease", "land"];
     expect([...new Set(set)].sort(), "app.js no longer sets one of these hooks").toEqual([...hooks].sort());
     const kebab = (n: string): string => `data-${n.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
-    expect(hooks.filter((h) => !css.includes(`[${kebab(h)}]`)), "hooks app.js sets that style.css never selects").toEqual([]);
+    expect(hooks.filter((h) => !new RegExp(`\\[${kebab(h)}[\\]=]`).test(css)), "hooks app.js sets that style.css never selects").toEqual([]);
   });
 
   // Every value the script writes for these is styled: a preview kind or a
@@ -105,6 +129,13 @@ describe("the stylesheet's hooks", () => {
 // Each rule that runs an animation or a transition has to be switched off
 // under prefers-reduced-motion. Checked by selector, so a new animated rule
 // added without its reduced-motion line fails here.
+describe("the old rules are gone", () => {
+  it("draws no dormant tile and no wave", () => {
+    const page = [css, code].join("\n");
+    expect(page.match(/dormant|wave/gi) ?? [], "leftovers of faded tiles or waving").toEqual([]);
+  });
+});
+
 describe("reduced motion", () => {
   const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join("\n");
   const outside = css.replace(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g, "");
@@ -169,6 +200,10 @@ describe("contrast", () => {
     ["night", "cream", "name field, camera buttons"],
     ["night", "accent", "the confirm bar's claim button"],
     ["money", "night", "the claimed count's digits"],
+    ["money", "panel", "the dashboard's coins and uncollected count"],
+    ["night", "muted", "a disabled action's label"],
+    ["night", "money", "the Collect button"],
+    ["accent", "panel", "a lease ending soon in the dashboard"],
   ];
   it.each(pairs)("--%s on --%s meets AA (%s)", (fg, bg) => {
     expect(ratio(token(fg), token(bg))).toBeGreaterThanOrEqual(4.5);
