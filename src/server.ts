@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
-import { isDormant, type Landmark, N, openStore, TILES } from "./db.ts";
-import { at, claimEffects, dormancyDrops, holder, log, people, quote, raw, who } from "./log.ts";
+import { type Expiry, isActive, type Landmark, openStore, TILES, type Visit } from "./db.ts";
+import { at, claimEffects, expiryDrops, holder, log, people, quote, raw, tag, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -18,46 +18,67 @@ const store = openStore(DB_PATH);
 
 // --- live updates (SSE) ---
 // Every open page holds a stream. After any change each one is sent the
-// whole board as its own visitor sees it: "mine" depends on who's asking, and
-// a pid never leaves the server. A full board, not a diff, means a stream
-// that drops and reconnects is back in sync from its first event.
-// Both can be shortened by the environment so a test can watch them happen.
+// whole board as its own visitor sees it: "mine" and the wallet (`me`) depend
+// on who's asking, and a pid never leaves the server. A full board, not a
+// diff, means a stream that drops and reconnects is back in sync from its
+// first event. Both can be shortened by the environment so a test can watch
+// them happen.
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS) || 15_000; // Fly's proxy closes connections idle ~30-60 s
-const SWEEP_MS = Number(process.env.SWEEP_MS) || 60_000; // dormancy is time-based, so look for changes each minute
+const SWEEP_MS = Number(process.env.SWEEP_MS) || 60_000; // leases end on the clock, so look each minute
 
 type Stream = { pid: string; res: ServerResponse };
 const streams = new Set<Stream>();
 
 // Every board carries a version that goes up with each change, so a page
-// that gets the same moment twice (a claim's response and its stream event)
-// or out of order can keep the newest. Seeded from the clock so it keeps
-// rising across a restart, when every page reconnects.
+// that gets the same moment twice (an action's response and its stream
+// event) or out of order can keep the newest. Seeded from the clock so it
+// keeps rising across a restart, when every page reconnects.
 let version = Date.now();
-const view = (pid: string, now: Date) => boardView(store.tiles(), pid, now, store.landmarks());
-const versioned = (pid: string, now: Date) => ({ ...view(pid, now), version });
+const EVENTS = 8;
+const view = (pid: string, now: Date, visit: Visit | null = null) =>
+  boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(EVENTS), visit });
+const versioned = (pid: string, now: Date, visit: Visit | null = null) => ({ ...view(pid, now, visit), version });
 
 // A landmark just raised, as the one broadcast after it carries it. Only the
 // newest if two were finished by the same change; both are in `landmarks`.
 type Raised = { cellId: number; label: string; raisers: string[] };
 
-function sendBoard(stream: Stream, now: Date, raised?: Raised): void {
-  const board = raised ? { ...versioned(stream.pid, now), raised } : versioned(stream.pid, now);
-  stream.res.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);
+function sendBoard(stream: Stream, now: Date, raised?: Raised, visit: Visit | null = null): void {
+  const board = versioned(stream.pid, now, visit);
+  stream.res.write(`event: board\ndata: ${JSON.stringify(raised ? { ...board, raised } : board)}\n\n`);
 }
 
-// Called after every change, and only then. Every change that can lift a
-// tower (a claim, a visit that wakes a tile) broadcasts, so this is where a
-// landmark is noticed: in the same synchronous turn as the change, so no other
-// request comes between them. One just raised is logged and goes out on this
-// broadcast only: a stream that connects later gets it in `landmarks` but
-// never as `raised`, so a reconnecting page doesn't celebrate it again.
+// Called after every change, and only then. Every change that can fill a
+// landmark broadcasts, so this is where one is noticed: in the same
+// synchronous turn as the change, so no other request comes between them.
+// One just raised is logged and goes out on this broadcast only: a stream
+// that connects later gets it in `landmarks` but never as `raised`, so a
+// reconnecting page doesn't celebrate it again. Leases the change's
+// settlement ended are logged here too.
 function broadcast(now = new Date()): void {
+  logExpired(store.takeExpired(), now);
   version = Math.max(version + 1, Date.now());
   const raised = store.raise(now);
   for (const l of raised) logLandmark(l);
   const last = raised.at(-1);
   const news = last ? { cellId: last.cellId, label: last.label, raisers: last.raisers } : undefined;
   for (const stream of streams) sendBoard(stream, now, news);
+}
+
+// Logs leases a settlement ended, and says whether there were any (so a
+// read that ended one can broadcast it).
+function logExpired(list: Expiry[], now: Date): boolean {
+  const tiles = store.tiles();
+  for (const e of list) {
+    log("expire", {
+      at: at(e.cellId),
+      holder: raw(`${tag(e.pid)}:${quote(e.label)}`),
+      ended: e.at,
+      unclaimed: e.pendingCents,
+      dropped: people(expiryDrops(tiles, e.cellId, now)),
+    });
+  }
+  return list.length > 0;
 }
 
 function logLandmark(l: Landmark): void {
@@ -78,31 +99,18 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
   streams.add(stream);
   const now = new Date();
   log("stream.open", { who: who(pid), open: streams.size });
-  // An open page is a visit. A holder's visit changes what everyone else sees
-  // of their tile (it wakes, or its safeUntil moves), so they all hear it.
-  if (visit(pid, now)) broadcast(now);
-  else sendBoard(stream, now);
+  // An open page is a visit: its first board carries the once-only welcome
+  // and lease-ended notices, if the page load didn't already show them.
+  const visit = store.visit(pid, now);
+  // A lease that ended before anyone looked ends on this read: everyone hears.
+  if (logExpired(store.takeExpired(), now)) broadcast(now);
+  sendBoard(stream, now, undefined, visit);
   req.on("close", () => {
     // A shutdown already cleared the set; don't log every stream twice.
     if (!streams.delete(stream)) return;
+    store.seen(pid, new Date()); // gone from here: a later visit's welcome counts from now
     log("stream.close", { who: who(pid), open: streams.size, secs: Math.round((Date.now() - now.getTime()) / 1000) });
   });
-}
-
-// Marks a visit. True if the visitor holds a tile, so its safeUntil (and
-// maybe its state) just changed for everyone else: the caller broadcasts, or
-// pages would count down to a time the server no longer holds, and a page
-// reconnecting would be sent the new safeUntil under the old version and keep
-// its stale one.
-function visit(pid: string, now: Date): boolean {
-  const holds = store.tiles().some((t) => t.claimerId === pid);
-  if (store.touch(pid, now)) logWake(pid);
-  return holds;
-}
-
-function logWake(pid: string): void {
-  const tile = store.tiles().find((t) => t.claimerId === pid);
-  log("wake", { who: who(pid), at: tile ? at(tile.id) : undefined, label: tile?.label });
 }
 
 // Comments keep idle streams under the proxy's timeout; the browser ignores
@@ -111,46 +119,30 @@ setInterval(() => {
   for (const { res } of streams) res.write(": hb\n\n");
 }, HEARTBEAT_MS).unref();
 
-// Once a minute: holders with an open page count as visiting (which moves
-// their safeUntil), and if that happened or any tile crossed into dormancy
-// since the last look, every open page hears about it.
-// Only the sweep logs a tile going dormant: a claim or a wake changes the key
-// too, and those log themselves.
-let lastDormant = "";
-const dormantKey = (now: Date): string =>
-  store
-    .tiles()
-    .filter((t) => isDormant(t, now))
-    .map((t) => t.id)
-    .join(",");
-setInterval(() => {
+// Once a minute: settle everyone's income and end every lease that ran out,
+// so every page sees the land free and the neighbours' heights and rates
+// drop. A page open now counts as its holder being here.
+function sweep(now: Date): void {
+  store.settle(now);
+  for (const pid of new Set([...streams].map((s) => s.pid))) store.seen(pid, now);
+  const ended = store.takeExpired();
+  if (ended.length) {
+    logExpired(ended, now);
+    broadcast(now);
+  }
+}
+setInterval(() => sweep(new Date()), SWEEP_MS).unref();
+
+// Leases that ended while the server was off end now, before anyone asks.
+// A building already standing in a full ring when the server starts (say, a
+// database from before migration 4) is recorded now too. Both are logged, not
+// celebrated: nobody watched them happen.
+{
   const now = new Date();
-  const tiles = store.tiles();
-  let moved = false; // some open page's holder had their safeUntil pushed on
-  for (const pid of new Set([...streams].map((s) => s.pid))) {
-    if (tiles.some((t) => t.claimerId === pid)) moved = true;
-    store.touch(pid, now);
-  }
-  const key = dormantKey(now);
-  const crossed = key !== lastDormant;
-  if (crossed) {
-    const was = new Set(lastDormant.split(","));
-    for (const t of store.tiles()) {
-      if (isDormant(t, now) && !was.has(String(t.id))) {
-        log("dormant", { at: at(t.id), holder: holder(t), dropped: people(dormancyDrops(tiles, t.id)) });
-      }
-    }
-    lastDormant = key;
-  }
-  // The clock alone only lowers towers; a visit above that woke one is
-  // `moved`, so broadcast() looks for landmarks whenever one could be new.
-  if (crossed || moved) broadcast(now);
-}, SWEEP_MS).unref();
-lastDormant = dormantKey(new Date());
-// A tower already standing at 8 when the server starts (say, a database from
-// before migration 3) is recorded now. It's logged, not celebrated: nobody
-// watched it happen, and the first broadcast shouldn't replay it.
-for (const l of store.raise(new Date())) logLandmark(l);
+  store.settle(now);
+  logExpired(store.takeExpired(), now);
+  for (const l of store.raise(now)) logLandmark(l);
+}
 
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -191,7 +183,7 @@ function identify(req: IncomingMessage, res: ServerResponse): string {
   return pid;
 }
 
-// A cross-site form can't claim on someone's behalf: a browser always sends
+// A cross-site form can't act on someone's behalf: a browser always sends
 // Origin on a POST, and it has to be this host.
 function sameOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
@@ -241,6 +233,13 @@ function validCell(raw: unknown): number | null {
   return id < TILES ? id : null;
 }
 
+// A renewal's `hours` as the client sent it; whether it's one of the options
+// is the store's rule (src/economy.ts).
+function validHours(raw: unknown): number | null {
+  const s = typeof raw === "number" ? String(raw) : raw;
+  return typeof s === "string" && /^\d{1,3}$/.test(s) ? Number(s) : null;
+}
+
 function send(res: ServerResponse, status: number, type: string, body: string | Buffer): void {
   res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store" });
   res.end(body);
@@ -254,135 +253,145 @@ function redirect(res: ServerResponse, location: string): void {
   res.end();
 }
 
-async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Script clients ask for JSON and get real status codes; a plain form always
-  // gets a 303 back to the board, where the notice says what happened.
-  const wantsJson = (req.headers.accept ?? "").includes("application/json");
-  const fail = (status: number, notice: string): void =>
-    wantsJson ? sendJson(res, status, { error: notice }) : redirect(res, `/?notice=${notice}`);
-  // A refusal names who tried, what, and why; any typed text is cut short.
-  const cut = (v: unknown): string | undefined =>
-    v === undefined ? undefined : Array.from(typeof v === "string" ? v : JSON.stringify(v)).slice(0, 40).join("");
-  const refused = (pid: string | null, status: number, reason: string, fields: Record<string, unknown> = {}): void => {
-    const tile = validCell(fields.cellId);
-    log("claim.refused", {
-      who: pid ? who(pid) : raw("-"),
-      status,
-      reason: raw(reason),
-      at: tile === null ? undefined : at(tile),
-      cell: tile === null ? cut(fields.cellId) : undefined,
-      label: cut(fields.label),
-      held: reason === "taken" && tile !== null ? holder(store.tiles()[tile]) : undefined,
-    });
+// The status each refusal key answers with (CLAUDE.md, ADR 5).
+const STATUS: Record<string, number> = {
+  taken: 409,
+  coins: 402,
+  cooldown: 429,
+  cell: 400,
+  label: 400,
+  hours: 400,
+  "max-level": 400,
+  "max-lease": 400,
+  "not-neighbour": 400,
+  "no-land": 400,
+};
+
+// One POST action, the same shape for each route: same-origin, the
+// requester's own pid, a small body, then the store's one transaction.
+// `act` returns a notice key: an `ok` one is a 200 (JSON, with the board as
+// the requester now sees it) or a 303 to /?notice=<key> (a form); any other
+// is a refusal with its own status. Every outcome is one log line.
+type Outcome = { ok: boolean; key: string; fields?: Record<string, Value>; json?: object };
+type Act = (pid: string, fields: Record<string, unknown>, now: Date) => Outcome;
+
+function action(name: string, act: Act) {
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const wantsJson = (req.headers.accept ?? "").includes("application/json");
+    // A refusal names who tried, what, and why; any typed text is cut short.
+    const refused = (pid: string | null, status: number, reason: string, fields: Outcome["fields"] = {}): void =>
+      log(`${name}.refused`, { who: pid ? who(pid) : raw("-"), status, reason: raw(reason), ...fields });
+
+    if (!sameOrigin(req)) {
+      const cookie = cookies(req).pid;
+      refused(cookie && PID.test(cookie) ? cookie : null, 403, "cross-site");
+      return send(res, 403, "text/plain; charset=utf-8", "Cross-site request refused");
+    }
+    const pid = identify(req, res);
+    const body = await readBody(req);
+    if (body === null) {
+      refused(pid, 413, "too-large");
+      return send(res, 413, "text/plain; charset=utf-8", "Too large");
+    }
+    const now = new Date();
+    const out = act(pid, parseFields(req, body), now);
+    if (!out.ok) {
+      const status = STATUS[out.key] ?? 400;
+      refused(pid, status, out.key, out.fields);
+      // the settlement still ran; a lease it ended is news for everyone
+      if (logExpired(store.takeExpired(), now)) broadcast(now);
+      return wantsJson ? sendJson(res, status, { error: out.key }) : redirect(res, `/?notice=${out.key}`);
+    }
+    if (out.fields) log(name === "claim" && out.key === "moved" ? "relocate" : name, { who: who(pid), ...out.fields });
+    broadcast(now);
+    if (wantsJson) return sendJson(res, 200, { ...out.json, notice: out.key, board: versioned(pid, now) });
+    redirect(res, `/?notice=${out.key}`);
   };
+}
 
-  if (!sameOrigin(req)) {
-    const cookie = cookies(req).pid;
-    refused(cookie && PID.test(cookie) ? cookie : null, 403, "cross-site");
-    return send(res, 403, "text/plain; charset=utf-8", "Cross-site claim refused");
-  }
-  const pid = identify(req, res);
-  const body = await readBody(req);
-  if (body === null) {
-    refused(pid, 413, "too-large");
-    return send(res, 413, "text/plain; charset=utf-8", "Too large");
-  }
+const cut = (v: unknown): string | undefined =>
+  v === undefined ? undefined : Array.from(typeof v === "string" ? v : JSON.stringify(v)).slice(0, 40).join("");
 
-  const fields = parseFields(req, body);
+// Claim a free plot; claim your own again to rename; or, holding land,
+// move to a free plot (docs/adr/0005: 50 coins, 30-minute cooldown).
+const postClaim = action("claim", (pid, fields, now) => {
   const cellId = validCell(fields.cellId);
-  if (cellId === null) {
-    refused(pid, 400, "cell", fields);
-    return fail(400, "cell");
-  }
+  const where = { at: cellId === null ? undefined : at(cellId), cell: cellId === null ? cut(fields.cellId) : undefined, label: cut(fields.label) };
+  if (cellId === null) return { ok: false, key: "cell", fields: where };
   const label = validLabel(fields.label);
-  if (label === null) {
-    refused(pid, 400, "label", fields);
-    return fail(400, "label");
-  }
-
-  const now = new Date();
+  if (label === null) return { ok: false, key: "label", fields: where };
   const before = store.tiles();
-  if (store.claim(cellId, pid, label, now) === "taken") {
-    refused(pid, 409, "taken", fields);
-    return fail(409, "taken");
+  const result = store.claim(cellId, pid, label, now);
+  if (result === "taken" || result === "coins" || result === "cooldown") {
+    const held = before[cellId];
+    return {
+      ok: false,
+      key: result,
+      fields: { ...where, held: result === "taken" && isActive(held, now) ? holder(held) : undefined },
+    };
   }
-  const after = store.tiles();
-  const did = claimEffects(before, after, pid, cellId, now);
-  log("claim", {
-    who: who(pid),
-    label,
-    at: at(cellId),
-    from: did.from === null ? undefined : at(did.from),
-    renamed: did.renamedFrom ?? undefined,
-    took: did.tookFrom ? holder(did.tookFrom) : undefined,
-    lifted: people(did.lifted),
-    dropped: people(did.dropped),
-  });
-  broadcast(now);
-  lastDormant = dormantKey(now);
-  // A script client gets the board as the claimer now sees it, so the page
-  // updates at once without waiting for its stream.
-  if (wantsJson) return sendJson(res, 200, { cellId, label, board: versioned(pid, now) });
-  redirect(res, "/?notice=claimed");
-}
-
-// --- waves (docs/adr/0004) ---
-// A live gesture between neighbours: checked like a claim, pushed only to the
-// person waved at, and never stored. The rate limit is held in memory, keyed
-// by both pids, so a restart forgets it, which costs nothing.
-const WAVE_EVERY_MS = 10_000;
-const lastWave = new Map<string, number>();
-
-// 8-neighbours: one step in any direction, never wrapping round an edge.
-const besides = (a: number, b: number): boolean =>
-  a !== b && Math.abs(Math.floor(a / N) - Math.floor(b / N)) <= 1 && Math.abs((a % N) - (b % N)) <= 1;
-
-async function postWave(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const refused = (pid: string | null, status: number, reason: string, target: number | null = null): void => {
-    log("wave.refused", {
-      who: pid ? who(pid) : raw("-"),
-      status,
-      reason: raw(reason),
-      to: target === null ? undefined : at(target),
-    });
-    if (status === 403) return send(res, 403, "text/plain; charset=utf-8", "Cross-site wave refused");
-    if (status === 413) return send(res, 413, "text/plain; charset=utf-8", "Too large");
-    sendJson(res, status, { error: reason });
+  const did = claimEffects(before, store.tiles(), pid, cellId, now);
+  return {
+    ok: true,
+    key: result === "moved" ? "moved" : "claimed",
+    json: { cellId, label },
+    fields: {
+      label,
+      at: at(cellId),
+      from: did.from === null ? undefined : at(did.from),
+      renamed: did.renamedFrom ?? undefined,
+      lifted: people(did.lifted),
+      dropped: people(did.dropped),
+    },
   };
+});
 
-  if (!sameOrigin(req)) {
-    const cookie = cookies(req).pid;
-    return refused(cookie && PID.test(cookie) ? cookie : null, 403, "cross-site");
-  }
-  const pid = identify(req, res);
-  const body = await readBody(req);
-  if (body === null) return refused(pid, 413, "too-large");
-  const target = validCell(parseFields(req, body).cellId);
-  if (target === null) return refused(pid, 400, "cell");
+const postCollect = action("collect", (pid, _fields, now) => {
+  const { paid } = store.collect(pid, now);
+  return {
+    ok: true,
+    key: paid > 0 ? "collected" : "nothing-to-collect",
+    json: { paid },
+    fields: { paid, coins: store.me(pid, now).coins },
+  };
+});
 
-  const tiles = store.tiles();
-  const mine = tiles.find((t) => t.claimerId === pid);
-  if (!mine) return refused(pid, 409, "no-tile", target);
-  // A faded neighbour is still a person, so they can be waved at.
-  const them = tiles[target];
-  if (them.claimerId === null || them.claimerId === pid || !besides(mine.id, target)) {
-    return refused(pid, 400, "not-neighbour", target);
-  }
-  const pair = `${pid} ${them.claimerId}`;
-  const now = Date.now();
-  if (now - (lastWave.get(pair) ?? -Infinity) < WAVE_EVERY_MS) return refused(pid, 429, "too-soon", target);
-  lastWave.set(pair, now);
-  for (const [key, when] of lastWave) if (now - when >= WAVE_EVERY_MS) lastWave.delete(key);
+const postUpgrade = action("upgrade", (pid, _fields, now) => {
+  const result = store.upgrade(pid, now);
+  if (result !== "upgraded") return { ok: false, key: result };
+  const me = store.me(pid, now);
+  return { ok: true, key: "upgraded", json: { level: me.level }, fields: { at: me.cellId === null ? undefined : at(me.cellId), level: me.level, coins: me.coins } };
+});
 
-  // From a cell and the label already on the board: nothing typed with the
-  // wave, and no pid.
-  const wave = JSON.stringify({ from: mine.id, label: mine.label ?? "" });
-  for (const stream of streams) {
-    if (stream.pid === them.claimerId) stream.res.write(`event: wave\ndata: ${wave}\n\n`);
-  }
-  log("wave", { who: who(pid), at: at(mine.id), to: who(them.claimerId) });
-  sendJson(res, 200, { ok: true });
-}
+const postRenew = action("renew", (pid, fields, now) => {
+  const hours = validHours(fields.hours);
+  if (hours === null) return { ok: false, key: "hours", fields: { hours: cut(fields.hours) } };
+  const result = store.renew(pid, hours, now);
+  if (result !== "renewed") return { ok: false, key: result, fields: { hours } };
+  const me = store.me(pid, now);
+  return {
+    ok: true,
+    key: "renewed",
+    json: { leaseEndsAt: me.leaseEndsAt },
+    fields: { at: me.cellId === null ? undefined : at(me.cellId), hours, until: me.leaseEndsAt, coins: me.coins },
+  };
+});
+
+// Help one neighbour an hour: +50 to them, +20 to you, one transaction.
+const postHelp = action("help", (pid, fields, now) => {
+  const cellId = validCell(fields.cellId);
+  if (cellId === null) return { ok: false, key: "cell", fields: { cell: cut(fields.cellId) } };
+  const them = store.tiles()[cellId];
+  const result = store.help(pid, cellId, now);
+  if (result !== "helped") return { ok: false, key: result, fields: { to: at(cellId) } };
+  const me = store.me(pid, now);
+  return {
+    ok: true,
+    key: "helped",
+    json: { cellId },
+    fields: { at: me.cellId === null ? undefined : at(me.cellId), to: at(cellId), helped: holder(them) },
+  };
+});
 
 // Static files from a fixed root, never outside it.
 async function serveFile(res: ServerResponse, root: string, rel: string): Promise<void> {
@@ -419,24 +428,27 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/" && (req.method === "GET" || req.method === "HEAD")) {
     const pid = identify(req, res);
     const now = new Date();
-    // Loading the page is a visit: it keeps your tile from going dormant, or
-    // wakes it if it already had.
     log("page", { who: who(pid), new: res.hasHeader("Set-Cookie") || undefined });
-    if (visit(pid, now)) broadcast(now);
+    // Loading the page is a visit: it's where "welcome back" and "your lease
+    // ended" are told, once.
+    const visit = store.visit(pid, now);
+    if (visit.welcome) log("welcome", { who: who(pid), coins: visit.welcome });
+    if (visit.expired) log("expired.seen", { who: who(pid) });
+    if (logExpired(store.takeExpired(), now)) broadcast(now);
     const notice = url.searchParams.get("notice");
-    const displaced = store.takeDisplacement(pid) !== null;
-    if (displaced) log("displaced.seen", { who: who(pid) });
     const tiles = store.tiles();
-    const myLabel = tiles.find((t) => t.claimerId === pid)?.label ?? "";
-    const html = renderBoard(boardView(tiles, pid, now, store.landmarks()), myLabel, {
+    const myLabel = tiles.find((t) => t.claimerId === pid && isActive(t, now))?.label ?? store.label(pid) ?? "";
+    const html = renderBoard(view(pid, now, visit), myLabel, {
       notice: isNotice(notice) ? notice : null,
-      displaced,
       version,
     });
     return send(res, 200, "text/html; charset=utf-8", html);
   }
   if (path === "/claim" && req.method === "POST") return postClaim(req, res);
-  if (path === "/wave" && req.method === "POST") return postWave(req, res);
+  if (path === "/collect" && req.method === "POST") return postCollect(req, res);
+  if (path === "/upgrade" && req.method === "POST") return postUpgrade(req, res);
+  if (path === "/renew" && req.method === "POST") return postRenew(req, res);
+  if (path === "/help" && req.method === "POST") return postHelp(req, res);
   if (path === "/events" && req.method === "GET") return openStream(req, res);
   if (path === "/readme") return redirect(res, "/readme/");
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {
@@ -463,7 +475,8 @@ const server = createServer((req, res) => {
 }).listen(PORT, "0.0.0.0", () => {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : PORT;
-  log("start", { port, db: DB_PATH, dormant: lastDormant ? lastDormant.split(",").length : 0 });
+  const now = new Date();
+  log("start", { port, db: DB_PATH, held: store.tiles().filter((t) => isActive(t, now)).length });
 });
 
 // Fly sends SIGTERM before stopping the machine (a redeploy, or no traffic).

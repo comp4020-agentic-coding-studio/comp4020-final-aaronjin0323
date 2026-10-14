@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DORMANT_AFTER_MS, openStore } from "../src/db.ts";
-import { claimEffects, holder, line, people, quote, tag } from "../src/log.ts";
+import { openStore } from "../src/db.ts";
+import { claimEffects, expiryDrops, line, people, quote, tag } from "../src/log.ts";
 
 // Crit 10: the server logs who did what, and at the crit someone narrates two
 // strangers' play from `flyctl logs` alone. The app under APP_URL is a
@@ -14,6 +14,7 @@ import { claimEffects, holder, line, people, quote, tag } from "../src/log.ts";
 
 const MIA = "00000000-0000-4000-8000-00000000017a";
 const KAI = "00000000-0000-4000-8000-0000000004a1";
+const ZED = "00000000-0000-4000-8000-000000000ced";
 const TAG = /^[0-9a-f]{6}$/;
 
 let app: ChildProcess;
@@ -79,12 +80,37 @@ describe("the server log", () => {
     expect((await claim(MIA, 0, "Mia")).status).toBe(200); // moves to r1c1, dropping Kai
     expect((await claim(KAI, 0, "Kai")).status).toBe(409);
 
-    const moved = (await lines("claim")).at(-1)!;
-    expect(moved).toMatch(new RegExp(`^claim who=${tag(MIA)} label="Mia" at=r1c1 from=r6c6 dropped=${tag(KAI)}:"Kai"$`));
+    const moved = (await lines("relocate")).at(-1)!;
+    expect(moved).toMatch(new RegExp(`^relocate who=${tag(MIA)} label="Mia" at=r1c1 from=r6c6 dropped=${tag(KAI)}:"Kai"$`));
     const refused = (await lines("claim.refused")).at(-1)!;
     expect(refused).toMatch(
       new RegExp(`^claim.refused who=${tag(KAI)} status=409 reason=taken at=r1c1 label="Kai" held=${tag(MIA)}:"Mia"$`),
     );
+  });
+
+  it("logs each economy action by tag: collect, upgrade, renew, help, and each refusal with its status", async () => {
+    const post = (pid: string, path: string, body: object = {}): Promise<Response> =>
+      fetch(new URL(path, base), {
+        method: "POST",
+        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+    expect((await claim(ZED, 1, "Zed")).status).toBe(200); // r1c2, beside Mia at r1c1
+    expect((await post(KAI, "/collect")).status).toBe(200);
+    expect((await post(KAI, "/upgrade")).status).toBe(402);
+    expect((await post(ZED, "/renew", { hours: 6 })).status).toBe(200);
+    expect((await post(ZED, "/help", { cellId: 0 })).status).toBe(200);
+    expect((await post(ZED, "/help", { cellId: 0 })).status).toBe(429);
+    expect((await post(KAI, "/help", { cellId: 0 })).status).toBe(400);
+
+    expect((await lines("collect")).at(-1)).toMatch(new RegExp(`^collect who=${tag(KAI)} paid=\\d+ coins=\\d+$`));
+    expect((await lines("upgrade.refused")).at(-1)).toBe(`upgrade.refused who=${tag(KAI)} status=402 reason=coins`);
+    expect((await lines("renew")).at(-1)).toMatch(new RegExp(`^renew who=${tag(ZED)} at=r1c2 hours=6 until="[^"]+" coins=0$`));
+    expect((await lines("help")).at(-1)).toBe(`help who=${tag(ZED)} at=r1c2 to=r1c1 helped=${tag(MIA)}:"Mia"`);
+    expect((await lines("help.refused")).slice(-2)).toEqual([
+      `help.refused who=${tag(ZED)} status=429 reason=cooldown to=r1c1`,
+      `help.refused who=${tag(KAI)} status=400 reason=not-neighbour to=r1c1`,
+    ]);
   });
 
   it("logs a stream opening and closing, with the open count", async () => {
@@ -115,10 +141,10 @@ describe("the server log", () => {
       expect((await fetch(new URL("/", base), { headers: { cookie: `pid=${pid}` } })).status).toBe(200);
     }
     await new Promise((r) => setTimeout(r, 50));
-    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused"]) {
+    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused"]) {
       expect((await lines(event)).length, `no ${event} line was printed`).toBeGreaterThan(0);
     }
-    for (const pid of [MIA, KAI]) {
+    for (const pid of [MIA, KAI, ZED]) {
       expect(out).not.toContain(pid);
       // nor a long run of it, in case something prints part of the cookie
       expect(out).not.toContain(pid.replaceAll("-", "").slice(-12));
@@ -144,22 +170,24 @@ describe("quoting", () => {
   });
 });
 
-describe("what a claim did", () => {
-  it("names whose dormant tile was taken over, which the HTTP spec can't wait a day for", () => {
+// Replaced by ADR 5: "names whose dormant tile was taken over" went with
+// dormant tiles. What a claim and an expiry did, by the same height rule:
+describe("what a claim or an expiry did", () => {
+  it("names who a claim lifted, and who a lease ending dropped", () => {
     const store = openStore(":memory:");
     try {
       const t0 = new Date("2026-10-01T10:00:00.000Z");
       store.claim(0, MIA, "Mia", t0);
-      store.claim(1, KAI, "Kai", t0);
-      const later = new Date(t0.getTime() + DORMANT_AFTER_MS + 60_000);
-      store.touch(KAI, later); // Kai is still around; Mia has gone dormant
+      store.claim(2, KAI, "Kai", t0);
+      const t1 = new Date(t0.getTime() + 60 * 60 * 1000);
       const before = store.tiles();
-      expect(store.claim(0, "ivy-pid", "Ivy", later)).toBe("claimed");
-      const did = claimEffects(before, store.tiles(), "ivy-pid", 0, later);
-      expect(did.tookFrom && holder(did.tookFrom)).toEqual({ raw: `${tag(MIA)}:"Mia"` });
-      // a dormant tile lifts nobody, so Ivy settling there lifts Kai
-      expect(people(did.lifted)).toEqual({ raw: `${tag(KAI)}:"Kai"` });
+      expect(store.claim(1, "ivy-pid", "Ivy", t1)).toBe("claimed");
+      const did = claimEffects(before, store.tiles(), "ivy-pid", 1, t1);
+      expect(people(did.lifted)).toEqual({ raw: `${tag(MIA)}:"Mia",${tag(KAI)}:"Kai"` });
       expect(did.from).toBeNull();
+      // Mia's lease ends a day on (Kai's too); Ivy, an hour younger, is who it drops
+      const end = new Date(t0.getTime() + 24 * 60 * 60 * 1000);
+      expect(people(expiryDrops(store.tiles(), 0, end))).toEqual({ raw: `${tag("ivy-pid")}:"Ivy"` });
     } finally {
       store.close();
     }

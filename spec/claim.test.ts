@@ -1,19 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { describe, expect, inject, it } from "vitest";
 
 // The crit 8 slice, checked over HTTP against the running app: a visitor
 // claims a tile and it's still theirs later, and the rules in CLAUDE.md's
 // Decisions hold. The app keeps its database between runs, so nothing here
-// assumes an empty board: the personas below are fixed ids, and since each
-// person holds one tile, repeated runs move them rather than filling the board.
+// assumes an empty board. Since ADR 5 a second claim by someone holding land
+// is a paid move with a cooldown, so a test that needs a person somewhere new
+// uses a fresh id (`fresh()`); the board is 144 plots and every run leaves its
+// players on 24-hour leases, so point repeated runs at a throwaway DB_PATH.
 const baseUrl = inject("baseUrl");
+const fresh = (): string => randomUUID();
 
-const ALICE = "00000000-0000-4000-8000-00000000a11c";
-const BOB = "00000000-0000-4000-8000-000000000b0b";
-const CAROL = "00000000-0000-4000-8000-0000000ca201";
 const N = 12;
 
-type TileView = { id: number; state: string; height: number; aria: string; title: string | null };
+type TileView = { id: number; state: string; height: number; level: number; aria: string; title: string | null };
 
 async function board(pid?: string): Promise<TileView[]> {
   const res = await fetch(new URL("/", baseUrl), { headers: pid ? { cookie: `pid=${pid}` } : {} });
@@ -23,6 +24,7 @@ async function board(pid?: string): Promise<TileView[]> {
     id: Number(b.value),
     state: b.dataset.state ?? "",
     height: Number(b.dataset.height),
+    level: Number(b.dataset.level ?? 0),
     aria: b.getAttribute("aria-label") ?? "",
     title: b.getAttribute("title"),
   }));
@@ -104,20 +106,24 @@ describe("the board", () => {
 describe("claiming", () => {
   it("keeps a claim for its owner and shows it to everyone else", async () => {
     const [cell] = await freeTiles();
+    const ALICE = fresh();
     const res = await claimJson(ALICE, cell, "Alice");
     expect(res.status).toBe(200);
 
     const mine = (await board(ALICE)).find((t) => t.id === cell)!;
     expect(mine.state).toBe("mine");
-    expect(mine.aria).toMatch(/your tile, Alice/);
+    expect(mine.title).toBe("Alice");
+    expect(mine.aria).toMatch(/\bAlice\b/);
 
     const theirs = (await board()).find((t) => t.id === cell)!;
     expect(theirs.state).toBe("held");
-    expect(theirs.aria).toMatch(/held by Alice/);
+    expect(theirs.title).toBe("Alice");
+    expect(theirs.aria).toMatch(/\bAlice\b/);
   });
 
   it("works as a plain form: 303 back to the board", async () => {
     const [cell] = await freeTiles();
+    const CAROL = fresh();
     const res = await claimForm(CAROL, cell, "Carol");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/?notice=claimed");
@@ -126,6 +132,7 @@ describe("claiming", () => {
 
   it("lets the first claim win and refuses the second", async () => {
     const [cell] = await freeTiles();
+    const [ALICE, BOB] = [fresh(), fresh()];
     expect((await claimJson(ALICE, cell, "Alice")).status).toBe(200);
 
     expect((await claimJson(BOB, cell, "Bob")).status).toBe(409);
@@ -133,13 +140,14 @@ describe("claiming", () => {
     expect(form.status).toBe(303);
     expect(form.headers.get("location")).toBe("/?notice=taken");
 
-    expect((await board()).find((t) => t.id === cell)!.aria).toMatch(/held by Alice/);
+    expect((await board()).find((t) => t.id === cell)!).toMatchObject({ state: "held", title: "Alice" });
   });
 
   it("moves a person's one tile rather than giving them two", async () => {
     const [first, second] = await freeTiles();
+    const BOB = fresh();
     expect((await claimJson(BOB, first, "Bob")).status).toBe(200);
-    expect((await claimJson(BOB, second, "Bob")).status).toBe(200);
+    expect((await claimJson(BOB, second, "Bob")).status).toBe(200); // a move: 50 of the starting 100 coins
 
     const tiles = await board(BOB);
     expect(tiles.filter((t) => t.state === "mine").map((t) => t.id)).toEqual([second]);
@@ -148,7 +156,7 @@ describe("claiming", () => {
 
   it("refuses a claim posted from another site", async () => {
     const [cell] = await freeTiles();
-    const res = await claimForm(CAROL, cell, "Carol", "https://evil.example");
+    const res = await claimForm(fresh(), cell, "Carol", "https://evil.example");
     expect(res.status).toBe(403);
   });
 });
@@ -161,17 +169,17 @@ describe("input", () => {
     ["a negative tile", -1, "Alice"],
     ["a non-numeric tile", "abc", "Alice"],
   ])("refuses %s with a 400", async (_, cellId, label) => {
-    expect((await claimJson(ALICE, cellId, label)).status).toBe(400);
+    expect((await claimJson(fresh(), cellId, label)).status).toBe(400);
   });
 
   it("accepts a 24-character name counted in characters, not bytes", async () => {
     const [cell] = await freeTiles();
-    expect((await claimJson(CAROL, cell, "é".repeat(24))).status).toBe(200);
+    expect((await claimJson(fresh(), cell, "é".repeat(24))).status).toBe(200);
   });
 
   it("shows a name as text, never as markup", async () => {
     const [cell] = await freeTiles();
-    expect((await claimJson(CAROL, cell, "<b>x</b>")).status).toBe(200);
+    expect((await claimJson(fresh(), cell, "<b>x</b>")).status).toBe(200);
     const res = await fetch(new URL("/", baseUrl));
     const doc = new JSDOM(await res.text()).window.document;
     expect(doc.querySelector(".board b")).toBeNull();
@@ -180,22 +188,21 @@ describe("input", () => {
 });
 
 describe("heights", () => {
-  it("raises each claimed tile by its active neighbours, and leaves free ones flat", async () => {
+  it("raises each building by its level plus its occupied neighbours, and leaves free ones flat", async () => {
     // Put two personas side by side so at least one height is non-zero.
     const free = new Set(await freeTiles());
     const pair = [...free].find((id) => id % N < N - 1 && free.has(id + 1));
     expect(pair, "no two adjacent free tiles to test with").toBeDefined();
-    expect((await claimJson(ALICE, pair, "Alice")).status).toBe(200);
-    expect((await claimJson(BOB, pair! + 1, "Bob")).status).toBe(200);
+    expect((await claimJson(fresh(), pair, "Alice")).status).toBe(200);
+    expect((await claimJson(fresh(), pair! + 1, "Bob")).status).toBe(200);
 
     const tiles = await board();
     const claimed = (id: number): boolean => tiles[id].state !== "free";
-    // A faded neighbour still stands but lifts nobody (ADR 3).
-    const active = (id: number): boolean => tiles[id].state === "held" || tiles[id].state === "mine";
+    const active = claimed;
     for (const tile of tiles) {
       const row = Math.floor(tile.id / N);
       const col = tile.id % N;
-      let expected = 0;
+      let expected = claimed(tile.id) ? tile.level : 0;
       if (claimed(tile.id)) {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
@@ -207,7 +214,7 @@ describe("heights", () => {
       }
       expect(tile.height, `tile ${tile.id}`).toBe(expected);
     }
-    expect(tiles[pair!].height).toBeGreaterThan(0);
+    expect(tiles[pair!].height).toBeGreaterThan(1);
   });
 });
 

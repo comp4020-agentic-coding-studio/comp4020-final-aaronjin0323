@@ -6,8 +6,9 @@ import { JSDOM } from "jsdom";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tag } from "../src/log.ts";
 
-// docs/adr/0004 over HTTP: a landmark raised is told to every open page once,
-// and a wave reaches only the person waved at. Raising one takes nine people
+// docs/adr/0004 over HTTP: a landmark raised is told to every open page once.
+// And ADR 5's Help, which replaced the Wave: who may help whom, paid once,
+// and every page told. Raising a landmark takes nine people
 // on a 3x3 block, and the other spec files share the app at APP_URL and take
 // the first free tiles, so like recovery.test.ts this file starts its own
 // server on a free port with a throwaway database, and reads its stdout.
@@ -18,8 +19,11 @@ const pidOf = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).p
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 
 type Raised = { cellId: number; label: string; raisers: string[] };
+type Me = { coins: number; cellId: number | null; helpAt: string | null };
 type Board = {
   tiles: { id: number; state: string; height: number; label: string | null }[];
+  me: Me;
+  events: { type: string; text: string; cellId: number | null }[];
   version: number;
   landmarks: { count: number; cells: Record<string, { label: string; raisers: string[] }> };
   raised?: Raised;
@@ -64,10 +68,10 @@ const claim = (pid: string, cellId: number, label: string): Promise<Response> =>
     body: JSON.stringify({ cellId, label }),
   });
 
-const wave = (pid: string | null, cellId: unknown, headers: Record<string, string> = {}): Promise<Response> =>
-  fetch(new URL("/wave", base), {
+const help = (pid: string | null, cellId: unknown, headers: Record<string, string> = {}): Promise<Response> =>
+  fetch(new URL("/help", base), {
     method: "POST",
-    headers: { ...(pid ? { cookie: `pid=${pid}` } : {}), "content-type": "application/json", ...headers },
+    headers: { ...(pid ? { cookie: `pid=${pid}` } : {}), "content-type": "application/json", accept: "application/json", ...headers },
     body: JSON.stringify({ cellId }),
   });
 
@@ -80,7 +84,6 @@ type Stream = {
 };
 
 const streams: Stream[] = [];
-const wavesSeen: string[] = []; // every wave payload any stream got, across tests
 afterEach(() => {
   for (const s of streams.splice(0)) s.close();
 });
@@ -104,7 +107,6 @@ async function listen(pid: string): Promise<Stream> {
           const name = block.find((l) => l.startsWith("event: "))?.slice(7);
           const data = block.find((l) => l.startsWith("data: "))?.slice(6);
           if (name && data !== undefined) events.push({ name, data });
-          if (name === "wave" && data !== undefined) wavesSeen.push(data);
         }
         wake();
       }
@@ -195,7 +197,7 @@ describe("raising a landmark", () => {
       expect(first.landmarks.cells[String(centre)].raisers).toEqual(raisers);
       expect(first.raised).toBeUndefined();
     }
-    // the holder's visit broadcasts (it moves their safeUntil): still no news
+    // and nothing that happens on a connect replays it
     await settle();
     for (const s of streams) expect(s.boards().filter((x) => x.raised !== undefined)).toEqual([]);
   });
@@ -210,23 +212,27 @@ describe("raising a landmark", () => {
     expect(JSON.parse(crowned[0].dataset.landmarkRaisers!)).toEqual(raisers);
   });
 
-  it("records nothing new when the tower drops and reaches 8 again", async () => {
+  it("records nothing new when the building loses a neighbour and fills again", async () => {
     const corner = people[1];
-    expect((await claim(corner.pid, cell(10, 1), corner.label)).status).toBe(200); // away: 7
+    expect((await claim(corner.pid, cell(10, 1), corner.label)).status).toBe(200); // a paid move away: 7
     const s = await listen(watcherA);
     await s.next("board");
-    expect((await claim(corner.pid, corner.id, corner.label)).status).toBe(200); // back: 8
+    // someone else fills the gap (the mover is on a 30-minute cooldown)
+    expect((await claim(pidOf(0xd0), corner.id, "Filler")).status).toBe(200);
     const board = JSON.parse(await s.next("board", (d) => (JSON.parse(d) as Board).tiles[corner.id].label !== null)) as Board;
-    expect(board.tiles[centre].height).toBe(8);
+    expect(board.tiles[centre].height).toBe(1 + 8);
     expect(board.landmarks.count).toBe(1);
     expect(board.raised).toBeUndefined();
     expect(logLines("landmark")).toHaveLength(1);
   });
 });
 
-describe("waving", () => {
-  // Wes waves; Tia is beside him; Xan is beside him too (a third party);
-  // Far is held but not adjacent; Ned holds nothing.
+// Replaced by ADR 5: the "waving" tests went with /wave. Help is checked
+// the same way: only a neighbour, only someone holding land, rate-limited,
+// paid once, and every page hears it.
+describe("helping", () => {
+  // Wes helps; Tia is beside him; Xan beside him too; Far is held but not
+  // adjacent; Ned holds nothing.
   const WES = { pid: pidOf(0x3e5), id: cell(8, 6), label: "Wes" };
   const TIA = { pid: pidOf(0x71a), id: cell(8, 7), label: "Tia" };
   const XAN = { pid: pidOf(0x8a0), id: cell(9, 5), label: "Xan" };
@@ -237,75 +243,85 @@ describe("waving", () => {
     for (const p of [WES, TIA, XAN, FAR]) expect((await claim(p.pid, p.id, p.label)).status).toBe(200);
   });
 
-  it("reaches only the person waved at, as the waver's tile and label, and is logged by tag", async () => {
+  it("pays the neighbour 50 and the helper 20, each told on their own stream, and every page sees it in the log", async () => {
     const [tia, xan, wes] = await Promise.all([listen(TIA.pid), listen(XAN.pid), listen(WES.pid)]);
-    const tia2 = await listen(TIA.pid); // a second tab of hers
-    await Promise.all([tia, xan, wes, tia2].map((s) => s.next("board")));
+    const [t0, x0, w0] = (await Promise.all([tia, xan, wes].map((s) => s.next("board")))).map((d) => JSON.parse(d) as Board);
 
-    const res = await wave(WES.pid, TIA.id);
+    const res = await help(WES.pid, TIA.id);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-    for (const s of [tia, tia2]) {
-      expect(JSON.parse(await s.next("wave"))).toEqual({ from: WES.id, label: "Wes" });
-    }
-    await settle();
-    expect(xan.events.filter((e) => e.name === "wave")).toEqual([]);
-    expect(wes.events.filter((e) => e.name === "wave")).toEqual([]);
-    expect(logLines("wave")).toEqual([`wave who=${tag(WES.pid)} at=r9c7 to=${tag(TIA.pid)}`]);
+    const body = (await res.json()) as { notice: string; board: Board };
+    expect(body.notice).toBe("helped");
+    expect(body.board.me.coins).toBe(w0.me.coins + 20);
+    const helped = (d: string): boolean => (JSON.parse(d) as Board).events.some((e) => e.type === "help");
+    const [t1, x1, w1] = (await Promise.all([tia, xan, wes].map((s) => s.next("board", helped)))).map((d) => JSON.parse(d) as Board);
+    expect(t1.me.coins).toBe(t0.me.coins + 50);
+    expect(w1.me.coins).toBe(w0.me.coins + 20);
+    expect(x1.me.coins).toBe(x0.me.coins); // a third party's wallet doesn't move
+    expect(x1.events[0]).toMatchObject({ type: "help", text: "Wes helped Tia at row 9, column 8", cellId: TIA.id });
+    expect(w1.me.helpAt).not.toBeNull();
+    expect(logLines("help")).toEqual([`help who=${tag(WES.pid)} at=r9c7 to=r9c8 helped=${tag(TIA.pid)}:"Tia"`]);
   });
 
-  it("refuses a second wave at the same person within 10 s, but not one at someone else", async () => {
-    const res = await wave(WES.pid, TIA.id);
+  it("refuses a second help within the hour, at anyone, and pays nothing", async () => {
+    const tia = await listen(TIA.pid);
+    const before = JSON.parse(await tia.next("board")) as Board;
+    const res = await help(WES.pid, XAN.id);
     expect(res.status).toBe(429);
-    expect(await res.json()).toEqual({ error: "too-soon" });
-    expect((await wave(WES.pid, XAN.id)).status).toBe(200); // a different pair
-    expect((await wave(TIA.pid, WES.id)).status).toBe(200); // and she can wave back
+    expect(await res.json()).toEqual({ error: "cooldown" });
+    expect((await help(TIA.pid, WES.id)).status).toBe(200); // Tia's own hour is unused
+    const after = JSON.parse(await tia.next("board", (d) => (JSON.parse(d) as Board).me.coins !== before.me.coins)) as Board;
+    expect(after.me.coins).toBe(before.me.coins + 20);
+  });
+
+  it("pays once when the same help is sent twice at once", async () => {
+    const results = await Promise.all([help(XAN.pid, WES.id), help(XAN.pid, WES.id)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 429]);
   });
 
   it.each([
-    ["a held tile that isn't next to yours", () => wave(WES.pid, FAR.id), 400, "not-neighbour"],
-    ["a free tile next to yours", () => wave(WES.pid, cell(7, 6)), 400, "not-neighbour"],
-    ["your own tile", () => wave(WES.pid, WES.id), 400, "not-neighbour"],
-    ["anyone, while holding no tile", () => wave(NED, TIA.id), 409, "no-tile"],
-    ["anyone, with no cookie at all", () => wave(null, TIA.id), 409, "no-tile"],
-  ] as const)("refuses a wave at %s", async (_, send, status, error) => {
-    const tia = await listen(TIA.pid);
-    await tia.next("board");
+    ["a held plot that isn't next to yours", () => help(FAR.pid, TIA.id), 400, "not-neighbour"],
+    ["a free plot next to yours", () => help(FAR.pid, cell(7, 9)), 400, "not-neighbour"],
+    ["your own plot", () => help(FAR.pid, FAR.id), 400, "not-neighbour"],
+    ["anyone, while holding no land", () => help(NED, TIA.id), 400, "no-land"],
+    ["anyone, with no cookie at all", () => help(null, TIA.id), 400, "no-land"],
+    ["a plot that doesn't exist", () => help(FAR.pid, 144), 400, "cell"],
+  ] as const)("refuses help at %s", async (_, send, status, error) => {
     const res = await send();
     expect(res.status).toBe(status);
     expect(await res.json()).toEqual({ error });
-    await settle(100);
-    expect(tia.events.filter((e) => e.name === "wave")).toEqual([]);
   });
 
-  it("refuses a wave from another site's page", async () => {
-    const tia = await listen(TIA.pid);
-    await tia.next("board");
-    const res = await fetch(new URL("/wave", base), {
+  it("refuses help from another site's page", async () => {
+    const res = await fetch(new URL("/help", base), {
       method: "POST",
-      headers: { cookie: `pid=${XAN.pid}`, "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
-      body: new URLSearchParams({ cellId: String(TIA.id) }).toString(),
+      headers: { cookie: `pid=${FAR.pid}`, "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+      body: new URLSearchParams({ cellId: String(cell(8, 8)) }).toString(),
     });
     expect(res.status).toBe(403);
-    await settle(100);
-    expect(tia.events.filter((e) => e.name === "wave")).toEqual([]);
   });
 
-  it("logs every refusal with its reason, and never a pid in any wave line or payload", async () => {
+  it("answers a form with a 303 and a notice key", async () => {
+    const res = await fetch(new URL("/help", base), {
+      method: "POST",
+      headers: { cookie: `pid=${NED}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ cellId: String(TIA.id) }).toString(),
+      redirect: "manual",
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?notice=no-land");
+  });
+
+  it("has no /wave route any more", async () => {
+    expect((await fetch(new URL("/wave", base), { method: "POST" })).status).toBe(404);
+  });
+
+  it("logs every refusal with its reason, and never a pid", async () => {
     await settle(50);
-    const refused = logLines("wave.refused");
-    for (const reason of ["too-soon", "not-neighbour", "no-tile", "cross-site"]) {
-      expect(refused.some((l) => l.includes(` reason=${reason}`)), `no wave.refused for ${reason}`).toBe(true);
+    const refused = logLines("help.refused");
+    for (const reason of ["cooldown", "not-neighbour", "no-land", "cross-site", "cell"]) {
+      expect(refused.some((l) => l.includes(` reason=${reason}`)), `no help.refused for ${reason}`).toBe(true);
     }
-    expect(refused).toContain(`wave.refused who=${tag(WES.pid)} status=429 reason=too-soon to=r9c8`);
-    const waves = [...logLines("wave"), ...refused];
-    expect(waves.length).toBeGreaterThan(5);
-    for (const l of waves) expect(l).not.toMatch(UUID);
+    expect(refused.length).toBeGreaterThan(5);
     expect(out).not.toMatch(UUID);
-    expect(wavesSeen.length).toBeGreaterThanOrEqual(2); // Tia's two tabs
-    for (const data of wavesSeen) {
-      expect(Object.keys(JSON.parse(data) as object).sort()).toEqual(["from", "label"]);
-      expect(data).not.toMatch(UUID);
-    }
   });
 });

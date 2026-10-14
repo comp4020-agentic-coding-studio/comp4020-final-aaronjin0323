@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DORMANT_AFTER_MS, openStore } from "../src/db.ts";
+import { openStore } from "../src/db.ts";
+import { LEASE_MS } from "../src/economy.ts";
 import { tag } from "../src/log.ts";
 
 // What happens across a restart, a redeploy, a dropped stream and time passing
@@ -19,8 +20,9 @@ const SAM1 = "00000000-0000-4000-8000-0000000005a1";
 const SAM2 = "00000000-0000-4000-8000-0000000005a2";
 const HOUR = 60 * 60 * 1000;
 
-type TileView = { id: number; state: string; height: number; label: string | null; safeUntil: string | null };
-type Board = { tiles: TileView[]; claimed: number; status: string; version: number };
+type TileView = { id: number; state: string; height: number; label: string | null; leaseEndsAt: string | null; rate: number };
+type Me = { coins: number; pending: number; cellId: number | null; welcome?: number; expired?: true };
+type Board = { tiles: TileView[]; claimed: number; status: string; version: number; me: Me; events: { type: string; text: string }[] };
 
 type App = { base: string; out: () => string; proc: ChildProcess; stop(): Promise<number | null> };
 const running = new Set<App>();
@@ -157,8 +159,8 @@ describe("persistence across a restart (6.1)", () => {
     const ana = await listen(second, ANA);
     const board = await ana.next(() => true);
     ana.close();
-    expect(board.tiles[40]).toMatchObject({ state: "mine", label: "Ana", height: 1 });
-    expect(board.tiles[41]).toMatchObject({ state: "held", label: "Ben", height: 1 });
+    expect(board.tiles[40]).toMatchObject({ state: "mine", label: "Ana", height: 2 });
+    expect(board.tiles[41]).toMatchObject({ state: "held", label: "Ben", height: 2 });
     expect(board.claimed).toBe(2);
     // and the cookie still proves who's who: Ben can't take Ana's tile
     expect((await claim(second, BEN, 40, "Ben")).status).toBe(409);
@@ -172,8 +174,8 @@ describe("version (5.1: stale data can't overwrite newer)", () => {
     const watcher = await listen(first, BEN);
     const v0 = (await watcher.next(() => true)).version;
     const seen: number[] = [v0];
-    for (const cell of [10, 11, 12]) {
-      const res = await claim(first, ANA, cell, "Ana");
+    for (const [i, cell] of [10, 11, 12].entries()) {
+      const res = await claim(first, `00000000-0000-4000-8000-0000000a0a0${i}`, cell, "Ana");
       const body = (await res.json()) as { board: Board };
       const streamed = await watcher.next((b) => b.tiles[cell].label === "Ana");
       // a claim's response and its stream event are the same moment
@@ -254,80 +256,70 @@ describe("shutdown after a page went away", () => {
   });
 });
 
+// Rewritten for ADR 5: a lease ends on the clock, not on absence. The old
+// "dormant on the first request after a day off", "crossing into dormancy
+// from the sweep" and "a visit moves safeUntil" tests went with dormancy.
 describe("expiry (6.2)", () => {
-  it("shows a tile dormant and claimable on the first request after the server was off for a day, with no sweep", async () => {
-    // The tile was last visited 25 hours ago, as if the machine had been
-    // stopped since. The sweep is pushed out of reach, so only the read-time
-    // rule can show it.
+  it("frees a plot whose lease ended while the server was off, on the first request, with no sweep", async () => {
+    // Claimed 25 hours ago, as if the machine had been stopped since. The
+    // sweep is pushed out of reach, so only boot and read-time can show it.
     const db = tempDb();
     const seed = openStore(db);
-    seed.claim(30, ANA, "Ana", new Date(Date.now() - 25 * HOUR));
+    // Ben first: a claim settles everyone, and Ana's lease must still be
+    // standing when the store closes, for the server to be the one to end it
     seed.claim(31, BEN, "Ben", new Date(Date.now() - 1 * HOUR));
+    seed.claim(30, ANA, "Ana", new Date(Date.now() - 25 * HOUR));
     seed.close();
 
     const app = await start(db, { SWEEP_MS: String(HOUR) });
     const sam = await listen(app, SAM1);
     const board = await sam.next(() => true);
-    expect(board.tiles[30].state).toBe("dormant");
-    expect(board.tiles[30].safeUntil).toBeNull();
-    expect(board.tiles[31].state).toBe("held");
-    expect(board.tiles[31].height).toBe(0); // a dormant neighbour lifts nobody
-    expect(board.tiles[30].height).toBe(1); // but stands, lifted by the active one
-    expect(app.out()).toMatch(/^start port=\d+ db=".*" dormant=1$/m);
+    expect(board.tiles[30]).toMatchObject({ state: "free", label: null, leaseEndsAt: null });
+    expect(board.tiles[31]).toMatchObject({ state: "held", height: 1, rate: 1000 }); // nobody beside him now
+    expect(board.events[0]).toMatchObject({ type: "expire", text: "Ana's lease ended at row 3, column 7" });
+    expect(app.out()).toMatch(new RegExp(`^expire at=r3c7 holder=${tag(ANA)}:"Ana" ended="[^"]+" unclaimed=\\d+( dropped=\\S+)?$`, "m"));
 
     const taken = sam.next((b) => b.tiles[30].label === "Sam");
     expect((await claim(app, SAM1, 30, "Sam")).status).toBe(200);
     const settled = await taken;
     expect(settled.tiles[30].state).toBe("mine");
-    expect(settled.tiles[31].height).toBe(1); // settling there lifts Ben again
+    expect(settled.tiles[31].height).toBe(2); // settling there lifts Ben again
     sam.close();
-    // and the held one, an hour old, still can't be taken
+    // and Ben's, an hour old, still can't be taken
     expect((await claim(app, SAM2, 31, "Sam")).status).toBe(409);
+
+    // Ana is told once, keeps her coins, and her ended building's earnings wait for her
+    const ana = await listen(app, ANA);
+    const hers = await ana.next(() => true);
+    ana.close();
+    expect(hers.me).toMatchObject({ coins: 100, cellId: null, expired: true });
+    expect(hers.me.pending).toBeGreaterThan(0);
+    const again = await listen(app, ANA);
+    expect((await again.next(() => true)).me.expired).toBeUndefined();
+    again.close();
     await app.stop();
   });
 
-  it("pushes a tile's crossing into dormancy to open pages, from the sweep alone", async () => {
-    // Last seen just under a day ago, so it crosses a moment after boot.
+  it("pushes a lease ending to open pages from the sweep alone, and lowers the neighbours", async () => {
+    // Claimed just under a day ago, so it ends a moment after boot.
     const db = tempDb();
     const seed = openStore(db);
-    seed.claim(50, ANA, "Ana", new Date(Date.now() - DORMANT_AFTER_MS + 1000));
+    seed.claim(50, ANA, "Ana", new Date(Date.now() - LEASE_MS + 1000));
     seed.claim(51, BEN, "Ben", new Date());
     seed.close();
 
     const app = await start(db, { SWEEP_MS: "300" });
-    // watched by someone holding nothing, so only the crossing can trigger a send
-    const ben = await listen(app, SAM2);
-    const first = await ben.next(() => true);
+    // watched by someone holding nothing, so only the sweep can trigger a send
+    const watcher = await listen(app, SAM2);
+    const first = await watcher.next(() => true);
     expect(first.tiles[50].state).toBe("held");
-    expect(first.tiles[51].height).toBe(1);
-    const crossed = await ben.next((b) => b.tiles[50].state === "dormant", 3000);
-    ben.close();
-    expect(crossed.tiles[50].label).toBe("Ana");
-    // the same broadcast lowers her neighbour, and the log says who dropped
-    expect(crossed.tiles[51].height).toBe(0);
-    expect(crossed.version).toBeGreaterThan(first.version);
-    expect(app.out()).toMatch(new RegExp(`^dormant at=r5c3 holder=${tag(ANA)}:"Ana" dropped=${tag(BEN)}:"Ben"$`, "m"));
-    await app.stop();
-  });
-
-  it("tells every open page when a holder's visit moves their safeUntil", async () => {
-    const db = tempDb();
-    const seed = openStore(db);
-    seed.claim(60, ANA, "Ana", new Date(Date.now() - 5 * HOUR));
-    seed.close();
-
-    const app = await start(db, { SWEEP_MS: String(HOUR) });
-    const ben = await listen(app, BEN);
-    const before = await ben.next(() => true);
-    const was = Date.parse(before.tiles[60].safeUntil!);
-    expect(was).toBeLessThan(Date.now() + 20 * HOUR);
-    // Ana opens the page: her tile is safe for a whole day from now
-    const moved = ben.next((b) => Date.parse(b.tiles[60].safeUntil ?? "0") > was, 1000);
-    expect((await fetch(new URL("/", app.base), { headers: { cookie: `pid=${ANA}` } })).status).toBe(200);
-    const after = await moved;
-    ben.close();
-    expect(Date.parse(after.tiles[60].safeUntil!)).toBeGreaterThan(Date.now() + 23 * HOUR);
-    expect(after.version).toBeGreaterThan(before.version);
+    expect(first.tiles[51]).toMatchObject({ height: 2, rate: 1200 });
+    const ended = await watcher.next((b) => b.tiles[50].state === "free", 3000);
+    watcher.close();
+    // the same broadcast lowers her neighbour's height and income
+    expect(ended.tiles[51]).toMatchObject({ height: 1, rate: 1000 });
+    expect(ended.version).toBeGreaterThan(first.version);
+    expect(app.out()).toMatch(new RegExp(`^expire at=r5c3 holder=${tag(ANA)}:"Ana" ended="[^"]+" unclaimed=\\d+ dropped=${tag(BEN)}:"Ben"$`, "m"));
     await app.stop();
   });
 });

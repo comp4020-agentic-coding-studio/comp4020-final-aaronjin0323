@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { boardView, heights } from "../src/board.ts";
-import { DORMANT_AFTER_MS, N, openStore, TILES, type Store } from "../src/db.ts";
+import { heights } from "../src/board.ts";
+import { isActive, N, openStore, TILES, type Store } from "../src/db.ts";
+import { LEASE_MS } from "../src/economy.ts";
 
-// The store on its own, with a clock the test controls: dormancy needs a day
-// to pass and the migration needs a crit-8 database, and neither can be
-// arranged over HTTP against a running app.
+// The store on its own, with a clock the test controls: a lease needs a day
+// to end and the migration needs a crit-8 database, and neither can be
+// arranged over HTTP against a running app. The economy itself (income,
+// upgrades, moves, renewals, help, migration 4) is in economy.test.ts.
 const T0 = new Date("2026-10-01T10:00:00.000Z");
 const later = (ms: number): Date => new Date(T0.getTime() + ms);
 const HOUR = 60 * 60 * 1000;
@@ -53,7 +55,9 @@ describe("migration from crit 8", () => {
       opened.push(s);
       const tiles = s.tiles();
       expect(tiles).toHaveLength(TILES);
-      expect(tiles[42]).toMatchObject({ claimerId: ALICE, label: "Alice", lastSeenAt: T0.toISOString() });
+      // kept, as a level-1 building on a fresh lease (migration 4)
+      expect(tiles[42]).toMatchObject({ claimerId: ALICE, label: "Alice", level: 1 });
+      expect(isActive(tiles[42], new Date())).toBe(true);
       expect(tiles.filter((t) => t.claimerId !== null)).toHaveLength(1);
       s.close();
       opened.pop();
@@ -64,7 +68,7 @@ describe("migration from crit 8", () => {
       expect(again.tiles()[42].claimerId).toBe(ALICE);
       const v = new DatabaseSync(path);
       // every step since, too: crit 8 straight to the latest
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(3);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
       v.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -72,102 +76,25 @@ describe("migration from crit 8", () => {
   });
 });
 
-describe("dormancy", () => {
-  it("keeps a tile safe for the first 24 hours", () => {
+// Replaced by ADR 5: the "dormancy" and "displacement" tests went with
+// dormant tiles. A lease ending on the clock is held in economy.test.ts
+// ("leases ending"), and here for claims:
+describe("a lease ending", () => {
+  it("keeps a plot for the whole lease, and frees it at the end for anyone", () => {
     const s = memory();
     s.claim(5, ALICE, "Alice", T0);
-    expect(s.claim(5, BOB, "Bob", later(DORMANT_AFTER_MS - 1))).toBe("taken");
+    expect(s.claim(5, BOB, "Bob", later(LEASE_MS - 1))).toBe("taken");
     expect(holder(s, 5)).toBe(ALICE);
-  });
-
-  it("lets someone settle on a tile whose holder has been away over a day", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    expect(s.claim(5, BOB, "Bob", later(25 * HOUR))).toBe("claimed");
+    expect(s.claim(5, BOB, "Bob", later(LEASE_MS))).toBe("claimed");
     expect(holder(s, 5)).toBe(BOB);
   });
 
-  it("counts a visit: a holder who came back isn't dormant", () => {
+  it("leaves the old holder free to claim again, for nothing, with no cooldown", () => {
     const s = memory();
     s.claim(5, ALICE, "Alice", T0);
-    s.touch(ALICE, later(20 * HOUR));
-    expect(s.claim(5, BOB, "Bob", later(25 * HOUR))).toBe("taken");
-  });
-
-  it("reports when a visit wakes a dormant tile", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    expect(s.touch(ALICE, later(1 * HOUR))).toBe(false);
-    expect(s.touch(ALICE, later(30 * HOUR))).toBe(true);
-    expect(s.touch(BOB, later(30 * HOUR))).toBe(false); // holds nothing
-  });
-
-  it("shows a dormant tile as dormant to others, and as mine to its holder", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    const now = later(25 * HOUR);
-    expect(boardView(s.tiles(), BOB, now).tiles[5].state).toBe("dormant");
-    expect(boardView(s.tiles(), ALICE, now).tiles[5].state).toBe("mine");
-  });
-
-  it("stops counting a dormant tile toward its neighbours' height, and counts it again once it wakes", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    s.claim(6, BOB, "Bob", later(25 * HOUR));
-    const view = boardView(s.tiles(), BOB, later(25 * HOUR));
-    expect(view.tiles[5].state).toBe("dormant");
-    expect(view.tiles[6].height).toBe(0);
-    expect(view.tiles[5].height).toBe(1); // a dormant tile still stands, lifted by Bob
-    s.touch(ALICE, later(26 * HOUR));
-    expect(boardView(s.tiles(), BOB, later(26 * HOUR)).tiles[6].height).toBe(1);
-  });
-
-  it("lowers the neighbours of a tile that expired while the server was off, on the first read", () => {
-    // A database file left alone for a day: nothing ran in between, so only
-    // the read-time rule can see the change.
-    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
-    const path = join(dir, "app.db");
-    try {
-      const before = openStore(path);
-      before.claim(5, ALICE, "Alice", T0);
-      before.claim(6, BOB, "Bob", later(20 * HOUR));
-      expect(boardView(before.tiles(), "x", later(20 * HOUR)).tiles[6].height).toBe(1);
-      before.close();
-
-      const after = openStore(path);
-      opened.push(after);
-      const view = boardView(after.tiles(), "x", later(25 * HOUR));
-      expect(view.tiles[5].state).toBe("dormant");
-      expect(view.tiles[6]).toMatchObject({ state: "held", height: 0 });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("displacement", () => {
-  it("tells the old holder once, and only them", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    s.claim(5, BOB, "Bob", later(25 * HOUR));
-    expect(s.takeDisplacement(BOB)).toBeNull();
-    expect(s.takeDisplacement(ALICE)).toMatchObject({ label: "Alice", cellId: 5 });
-    expect(s.takeDisplacement(ALICE)).toBeNull();
-  });
-
-  it("isn't recorded when someone moves off their own tile", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    s.claim(9, ALICE, "Alice", later(HOUR));
-    expect(s.takeDisplacement(ALICE)).toBeNull();
-  });
-
-  it("leaves the displaced person free to claim again", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    s.claim(5, BOB, "Bob", later(25 * HOUR));
-    expect(s.claim(7, ALICE, "Alice", later(26 * HOUR))).toBe("claimed");
+    expect(s.claim(7, ALICE, "Alice", later(LEASE_MS + HOUR))).toBe("claimed");
     expect(s.tiles().filter((t) => t.claimerId === ALICE).map((t) => t.id)).toEqual([7]);
+    expect(s.me(ALICE, later(LEASE_MS + HOUR)).coins).toBe(100);
   });
 });
 
@@ -181,8 +108,9 @@ describe("a lost claim changes nothing", () => {
   });
 });
 
-// docs/adr/0004: a tower at height 8 becomes a landmark, recorded once and
-// kept. A 3x3 block of nine people round an interior centre.
+// docs/adr/0004, as ADR 5 counts it: a building with all 8 neighbours
+// occupied becomes a landmark, recorded once and kept. A 3x3 block of nine
+// people round an interior centre.
 const cell = (r: number, c: number): number => r * N + c;
 const block = (r: number, c: number): number[] => {
   const out: number[] = [];
@@ -203,7 +131,7 @@ const fill = (s: Store, ids: number[], at: Date): number[] => {
 };
 
 describe("landmarks", () => {
-  it("records exactly one when a tower reaches 8, naming the holder first and the eight round it, by label", () => {
+  it("records exactly one when a building's 8th neighbour arrives, naming the holder first and the eight round it, by label", () => {
     const s = memory();
     const centre = cell(5, 5);
     const ring = block(5, 5).filter((id) => id !== centre);
@@ -224,54 +152,43 @@ describe("landmarks", () => {
     expect(JSON.stringify(s.landmarks())).not.toMatch(/"p\d+"/); // labels, never a pid
   });
 
-  it("doesn't record a second when the same tower drops below 8 and reaches it again", () => {
+  it("doesn't record a second when the same building loses a neighbour and fills again", () => {
     const s = memory();
     const centre = cell(5, 5);
     expect(fill(s, block(5, 5), T0)).toEqual([centre]);
     const corner = cell(4, 4);
-    s.claim(cell(9, 9), pidAt(corner), nameAt(corner), later(1000)); // a neighbour moves away: 7
-    expect(heights(s.tiles(), later(1000))[centre]).toBe(7);
-    expect(s.raise(later(1000))).toEqual([]);
-    s.claim(corner, pidAt(corner), nameAt(corner), later(2000)); // and back: 8 again
-    expect(heights(s.tiles(), later(2000))[centre]).toBe(8);
-    expect(s.raise(later(2000))).toEqual([]);
+    const away = later(1000);
+    const back = later(31 * 60 * 1000); // past the 30-minute moving cooldown
+    expect(s.claim(cell(9, 9), pidAt(corner), nameAt(corner), away)).toBe("moved"); // 7 neighbours
+    expect(heights(s.tiles(), away)[centre]).toBe(1 + 7);
+    expect(s.raise(away)).toEqual([]);
+    expect(s.claim(corner, pidAt(corner), nameAt(corner), back)).toBe("moved"); // and back: 8
+    expect(heights(s.tiles(), back)[centre]).toBe(1 + 8);
+    expect(s.raise(back)).toEqual([]);
     expect(s.landmarks()).toHaveLength(1);
     expect(s.landmarks().map((l) => l.raisedAt)).toEqual([T0.toISOString()]);
   });
 
-  it("doesn't count a faded neighbour, and records it once that neighbour comes back", () => {
+  it("doesn't count a neighbour whose lease has ended, and records it once someone settles there", () => {
     const s = memory();
     const centre = cell(5, 5);
-    const faded = cell(4, 4);
-    fill(s, [faded], T0);
-    const now = later(25 * HOUR); // the first neighbour has been away over a day
-    expect(
-      fill(
-        s,
-        block(5, 5).filter((id) => id !== faded),
-        now,
-      ),
-    ).toEqual([]);
-    expect(heights(s.tiles(), now)[centre]).toBe(7);
-    expect(s.landmarks()).toEqual([]);
-
-    expect(s.touch(pidAt(faded), later(26 * HOUR))).toBe(true); // they wake it
-    expect(s.raise(later(26 * HOUR)).map((l) => l.cellId)).toEqual([centre]);
-    expect(s.landmarks().map((l) => l.cellId)).toEqual([centre]);
+    const gone = cell(4, 4);
+    fill(s, [gone], T0);
+    const now = later(LEASE_MS); // the first neighbour's lease has just ended
+    expect(fill(s, block(5, 5).filter((id) => id !== gone), now)).toEqual([]);
+    expect(heights(s.tiles(), now)[centre]).toBe(1 + 7);
+    expect(s.claim(gone, "newcomer", "New", later(LEASE_MS + 1000))).toBe("claimed");
+    expect(s.raise(later(LEASE_MS + 1000)).map((l) => l.cellId)).toEqual([centre]);
   });
 
-  it("doesn't raise a faded holder's tower, even with eight people round it", () => {
+  it("doesn't raise a building whose own lease has ended, even with eight round it", () => {
     const s = memory();
     const centre = cell(5, 5);
     fill(s, [centre], T0);
-    const now = later(25 * HOUR);
-    fill(
-      s,
-      block(5, 5).filter((id) => id !== centre),
-      now,
-    );
-    expect(heights(s.tiles(), now)[centre]).toBe(8); // it stands at 8 ...
-    expect(s.landmarks()).toEqual([]); // ... but nobody's there to hold it
+    const now = later(LEASE_MS);
+    fill(s, block(5, 5).filter((id) => id !== centre), now);
+    expect(heights(s.tiles(), now)[centre]).toBe(0); // it's free now
+    expect(s.landmarks()).toEqual([]);
   });
 
   it("can never raise one on an edge or a corner: they have 5 and 3 neighbours, so a full board raises only the 100 inside", () => {
@@ -289,21 +206,23 @@ describe("landmarks", () => {
 });
 
 describe("landmarks agree with heights()", () => {
-  it("raises exactly the held, non-faded tiles that heights() puts at 8, on random dense boards with faded tiles", () => {
+  it("raises exactly the held buildings with 8 occupied neighbours, on random dense boards with ended leases", () => {
     let seed = 7;
     const rand = (): number => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
     let raisedTotal = 0;
     for (let round = 0; round < 40; round++) {
       const s = memory();
-      const now = later(25 * HOUR);
+      const now = later(LEASE_MS + HOUR);
+      const old = new Set<number>();
+      for (let id = 0; id < TILES; id++) if (rand() < 0.1) old.add(id);
+      // first the leases that will have ended, then everyone else
+      for (const id of old) s.claim(id, pidAt(id), nameAt(id), T0);
       for (let id = 0; id < TILES; id++) {
-        if (rand() < 0.85) s.claim(id, pidAt(id), nameAt(id), rand() < 0.1 ? T0 : now);
+        if (!old.has(id) && rand() < 0.85) s.claim(id, pidAt(id), nameAt(id), now);
       }
       const tiles = s.tiles();
       const hs = heights(tiles, now);
-      const expected = tiles
-        .filter((t) => t.claimerId !== null && hs[t.id] === 8 && t.lastSeenAt === now.toISOString())
-        .map((t) => t.id);
+      const expected = tiles.filter((t) => isActive(t, now) && hs[t.id] === (t.level ?? 1) + 8).map((t) => t.id);
       expect(s.raise(now).map((l) => l.cellId)).toEqual(expected);
       raisedTotal += expected.length;
     }
@@ -312,7 +231,7 @@ describe("landmarks agree with heights()", () => {
 });
 
 describe("migration 3 (landmarks)", () => {
-  it("upgrades a crit-10 database in place, keeping every claim and displacement", () => {
+  it("upgrades a crit-10 database in place, keeping every claim", () => {
     const dir = mkdtempSync(join(tmpdir(), "skyline-"));
     const path = join(dir, "app.db");
     try {
@@ -338,12 +257,11 @@ describe("migration 3 (landmarks)", () => {
       opened.push(s);
       const held = s.tiles().filter((t) => t.claimerId !== null);
       expect(held.map((t) => t.id).sort((a, b) => a - b)).toEqual([0, ...tower].sort((a, b) => a - b));
-      for (const t of held) expect(t).toMatchObject({ claimerId: pidAt(t.id), label: nameAt(t.id), lastSeenAt: T0.toISOString() });
-      expect(s.takeDisplacement(ALICE)).toMatchObject({ label: "Alice", cellId: 3 });
+      for (const t of held) expect(t).toMatchObject({ claimerId: pidAt(t.id), label: nameAt(t.id), level: 1 });
       // Nothing is backfilled by the migration itself; the tower standing at
       // 8 is recorded on the first raise (the server calls it at start).
       expect(s.landmarks()).toEqual([]);
-      expect(s.raise(later(1000)).map((l) => l.cellId)).toEqual([cell(5, 5)]);
+      expect(s.raise(new Date()).map((l) => l.cellId)).toEqual([cell(5, 5)]);
       s.close();
       opened.pop();
 
@@ -351,7 +269,7 @@ describe("migration 3 (landmarks)", () => {
       opened.push(again);
       expect(again.landmarks()).toHaveLength(1);
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(3);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
       v.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

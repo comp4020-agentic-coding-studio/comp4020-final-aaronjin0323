@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { heights } from "./board.ts";
-import { N, type Tile } from "./db.ts";
+import { isActive, N, neighbourIds, type Tile } from "./db.ts";
 
 // Who did what, one line per event on stdout, for `flyctl logs` to show:
 //
@@ -19,7 +19,7 @@ import { N, type Tile } from "./db.ts";
 // below, never from input.
 
 type Raw = { raw: string };
-type Value = string | number | boolean | Raw | null | undefined;
+export type Value = string | number | boolean | Raw | null | undefined;
 export const raw = (s: string): Raw => ({ raw: s });
 
 export const tag = (pid: string): string => createHash("sha256").update(pid).digest("hex").slice(0, 6);
@@ -55,40 +55,35 @@ export function log(event: string, fields: Record<string, Value> = {}): void {
 }
 
 export type ClaimEffects = {
-  from: number | null; // the tile the claimer let go of, if they moved
-  renamedFrom: string | null; // their old label, if they re-claimed their own tile
-  tookFrom: Tile | null; // the dormant tile's previous holder
+  from: number | null; // the plot the claimer moved off, if they relocated
+  renamedFrom: string | null; // their old label, if they re-claimed their own plot
   lifted: Tile[]; // other people whose height went up
   dropped: Tile[]; // and down
 };
 
 // What a successful claim did, from the board before and after it, both at
-// the claim's `now`. A height change only counts for a tile that kept its
-// holder, as on the page. Settling on a dormant tile lifts its neighbours,
-// since a dormant tile lifts nobody.
+// the claim's `now`. A height change only counts for a building that kept its
+// holder, as on the page.
 export function claimEffects(before: Tile[], after: Tile[], pid: string, cellId: number, now: Date): ClaimEffects {
   const was = before[cellId];
-  const fromTile = before.find((t) => t.claimerId === pid);
+  const fromTile = before.find((t) => t.claimerId === pid && isActive(t, now));
   const hb = heights(before, now);
   const ha = heights(after, now);
-  const kept = after.filter((t) => t.claimerId !== null && t.claimerId !== pid && t.claimerId === before[t.id].claimerId);
+  const kept = after.filter(
+    (t) => isActive(t, now) && t.claimerId !== pid && t.claimerId === before[t.id].claimerId && isActive(before[t.id], now),
+  );
   return {
     from: fromTile && fromTile.id !== cellId ? fromTile.id : null,
     renamedFrom: was.claimerId === pid && was.label !== after[cellId].label ? was.label : null,
-    tookFrom: was.claimerId !== null && was.claimerId !== pid ? was : null,
     lifted: kept.filter((t) => ha[t.id] > hb[t.id]),
     dropped: kept.filter((t) => ha[t.id] < hb[t.id]),
   };
 }
 
-// Everyone a tile going dormant just dropped a floor: each claimed neighbour,
-// dormant ones too, since a dormant tile lifts nobody.
-export function dormancyDrops(tiles: Tile[], id: number): Tile[] {
-  const row = Math.floor(id / N);
-  const col = id % N;
-  return tiles.filter((t) => {
-    const dr = Math.abs(Math.floor(t.id / N) - row);
-    const dc = Math.abs((t.id % N) - col);
-    return t.id !== id && dr <= 1 && dc <= 1 && t.claimerId !== null;
-  });
+// Everyone a plot's lease ending just dropped: each building still standing
+// beside it.
+export function expiryDrops(tiles: Tile[], id: number, now: Date): Tile[] {
+  return neighbourIds(id)
+    .map((n) => tiles[n])
+    .filter((t) => isActive(t, now));
 }

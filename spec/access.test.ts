@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { describe, expect, inject, it } from "vitest";
 
@@ -9,13 +10,13 @@ import { describe, expect, inject, it } from "vitest";
 // other files' players; nothing assumes an empty board.
 const baseUrl = inject("baseUrl");
 
-const GIA = "00000000-0000-4000-8000-00000000091a";
-const HAL = "00000000-0000-4000-8000-0000000004a1";
-const IDA = "00000000-0000-4000-8000-0000000001da";
-const JOE = "00000000-0000-4000-8000-000000000105";
+// A fresh person per test: since ADR 5 a second claim is a paid move with a
+// cooldown, so a fixed persona reused across runs would be refused.
+const fresh = (): string => randomUUID();
+const IDA = "00000000-0000-4000-8000-0000000001da"; // only ever looks, or is refused
 const UUID = /^pid=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12});/;
 
-type TileView = { id: number; state: string; aria: string };
+type TileView = { id: number; state: string; aria: string; title: string | null };
 
 async function page(pid?: string): Promise<string> {
   const res = await fetch(new URL("/", baseUrl), { headers: pid ? { cookie: `pid=${pid}` } : {} });
@@ -29,6 +30,7 @@ async function board(pid?: string): Promise<TileView[]> {
     id: Number(b.value),
     state: b.dataset.state ?? "",
     aria: b.getAttribute("aria-label") ?? "",
+    title: b.getAttribute("title"),
   }));
 }
 
@@ -68,10 +70,16 @@ describe("notices", () => {
 });
 
 describe("one person, one tile", () => {
-  it("lets ten simultaneous claims by one person leave exactly one tile theirs", async () => {
+  it("lets ten simultaneous claims by one person leave exactly one tile theirs, and charge for one move at most", async () => {
+    const GIA = fresh();
     const cells = (await freeTiles()).slice(0, 10);
     const results = await Promise.all(cells.map((cell) => claim(GIA, cell, "Gia")));
-    expect(results.every((r) => r.status === 200)).toBe(true);
+    // the first claims, one more may move (50 coins, then a 30-minute
+    // cooldown), and every other is refused for the cooldown
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 200).length).toBeGreaterThanOrEqual(1);
+    expect(statuses.filter((s) => s === 200).length).toBeLessThanOrEqual(2);
+    expect(statuses.filter((s) => s !== 200).every((s) => s === 429)).toBe(true);
     const mine = (await board(GIA)).filter((t) => t.state === "mine");
     expect(mine).toHaveLength(1);
     expect(cells).toContain(mine[0].id);
@@ -80,10 +88,13 @@ describe("one person, one tile", () => {
 
 describe("a pid never leaves the server", () => {
   it("isn't in the page anyone else loads, with or without a cookie", async () => {
+    const HAL = fresh();
     const [cell] = await freeTiles();
     expect((await claim(HAL, cell, "Hal")).status).toBe(200);
     for (const body of [await page(IDA), await page()]) {
-      expect(body).toMatch(/held by Hal/); // the tile is there, so the page did render it
+      // the tile is there, held by Hal, so the page did render it
+      const tile = new JSDOM(body).window.document.querySelector(`button.tile[value="${cell}"]`)!;
+      expect([tile.getAttribute("data-state"), tile.getAttribute("title")]).toEqual(["held", "Hal"]);
       expect(body).not.toContain(HAL);
     }
   });
@@ -100,21 +111,25 @@ describe("who you are", () => {
   });
 
   it("can't take a held tile by sending no cookie at all", async () => {
+    const HAL = fresh();
     const [cell] = await freeTiles();
     expect((await claim(HAL, cell, "Hal")).status).toBe(200);
     expect((await claimJson(null, cell, "Nobody")).status).toBe(409);
     const after = (await board(HAL)).find((t) => t.id === cell)!;
     expect(after.state).toBe("mine");
-    expect(after.aria).toMatch(/your tile, Hal,/);
+    expect(after.title).toBe("Hal");
+    expect(after.aria).toMatch(/\bHal\b/);
   });
 
   it("renames you when you claim your own tile again", async () => {
+    const JOE = fresh();
     const [cell] = await freeTiles();
     expect((await claim(JOE, cell, "Joe")).status).toBe(200);
     expect((await claim(JOE, cell, "Joey")).status).toBe(200);
     const mine = (await board(JOE)).filter((t) => t.state === "mine");
     expect(mine.map((t) => t.id)).toEqual([cell]);
-    expect(mine[0].aria).toMatch(/your tile, Joey,/);
+    expect(mine[0].title).toBe("Joey");
+    expect(mine[0].aria).toMatch(/\bJoey\b/);
   });
 });
 
