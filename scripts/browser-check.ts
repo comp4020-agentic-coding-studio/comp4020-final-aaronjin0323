@@ -13,8 +13,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright-core";
+import { refuseProduction } from "../spec/not-production.ts";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
+refuseProduction(APP);
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const only = process.argv[2];
 mkdirSync(".shots", { recursive: true });

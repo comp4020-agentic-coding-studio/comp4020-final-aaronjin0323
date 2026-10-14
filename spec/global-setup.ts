@@ -1,4 +1,5 @@
 import type { TestProject } from "vitest/node";
+import { refuseProduction } from "./not-production.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -13,6 +14,7 @@ declare module "vitest" {
 // up to a minute, since some stacks take a while to boot or migrate.
 export default async function setup(project: TestProject): Promise<void> {
   const baseUrl = process.env.APP_URL ?? "http://localhost:8080";
+  refuseProduction(baseUrl);
 
   for (let attempt = 0; ; attempt++) {
     try {

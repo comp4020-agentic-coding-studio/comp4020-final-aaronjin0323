@@ -509,7 +509,12 @@ and delete the line when one is settled.
 - **Never point `pnpm check` at the live URL.** The spec claims tiles as its
   fixture players, so a run against production leaves Alice, Bob and Fay
   holding tiles on the real board. CI already runs the spec against the
-  built image; after a deploy, fetch the URL instead.
+  built image; after a deploy, fetch the URL instead. It did happen once
+  before crit 10 (Alice, Bob, Fay and `<b>x</b>` were found on the live
+  board), so it's now enforced, not just a rule: `spec/not-production.ts`
+  makes both `pnpm check` and `scripts/browser-check.ts` refuse any
+  `fly.dev` host before sending a request, held by
+  `spec/not-production.test.ts`. Don't weaken it to get a check to run.
 
 ## The checks
 
