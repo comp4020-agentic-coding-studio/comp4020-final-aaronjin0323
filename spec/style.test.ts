@@ -24,6 +24,24 @@ describe("the stylesheet and the code", () => {
     expect(unstyled, "classes app.js adds that style.css never names").toEqual([]);
   });
 
+  // The server renders classes too (the crown, the goal line's parts): a
+  // class in the markup with no rule is as invisible as one the script adds.
+  it("names every class the server renders on the board page", () => {
+    const board = readFileSync("src/board.ts", "utf8");
+    const rendered = [...board.matchAll(/class="([\w\s-]+)"/g)].flatMap((m) => m[1].split(/\s+/)).filter(Boolean);
+    expect(rendered.length, "board.ts renders no classes; nothing to check").toBeGreaterThan(0);
+    const unstyled = [...new Set(rendered)].filter((name) => !new RegExp(`\\.${name}(?![\\w-])`).test(css));
+    expect(unstyled, "classes board.ts renders that style.css never names").toEqual([]);
+  });
+
+  // An animation naming keyframes that don't exist runs nothing, silently.
+  it("runs only keyframes it defines", () => {
+    const defined = new Set([...css.matchAll(/@keyframes ([\w-]+)/g)].map((m) => m[1]));
+    const used = [...css.matchAll(/(?:^|[;{\s])animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
+    expect(used.length, "style.css runs no animations; nothing to check").toBeGreaterThan(0);
+    expect([...new Set(used)].filter((n) => !defined.has(n)), "animations naming keyframes style.css never defines").toEqual([]);
+  });
+
   it("selects only attribute values the code writes", () => {
     const selected = [...css.matchAll(/\[data-[\w-]+="([^"]+)"\]/g)].map((m) => m[1]);
     expect(selected.length, "style.css selects no attribute values; nothing to check").toBeGreaterThan(0);
@@ -54,6 +72,16 @@ describe("the stylesheet's hooks", () => {
     const set = (n: string): boolean => code.includes(n) || new RegExp(`dataset\\.${camel(n)}\\b`).test(code);
     const unset = [...new Set(names)].filter((n) => !set(n));
     expect(unset, "data attributes style.css selects that nothing sets").toEqual([]);
+  });
+
+  // The goal and the room's moments are all data-* hooks the script sets
+  // and the stylesheet draws: each one the script writes has a rule.
+  it("styles every goal, landmark and wave hook the script sets", () => {
+    const set = [...app.matchAll(/dataset\.(helps|landmark|raised|waving|bump)\b\s*=/g)].map((m) => m[1]);
+    const hooks = ["helps", "landmark", "raised", "waving", "bump"];
+    expect([...new Set(set)].sort(), "app.js no longer sets one of these hooks").toEqual([...hooks].sort());
+    const kebab = (n: string): string => `data-${n.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    expect(hooks.filter((h) => !css.includes(`[${kebab(h)}]`)), "hooks app.js sets that style.css never selects").toEqual([]);
   });
 
   // Every value the script writes for these is styled: a preview kind or a

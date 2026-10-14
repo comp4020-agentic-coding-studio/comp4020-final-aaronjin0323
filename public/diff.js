@@ -161,6 +161,116 @@ export function preview(board, id) {
   return { id, height: heights[id], heights, lifted, dropped, from: mine ? mine.id : null };
 }
 
+// --- the room's goal: landmarks (docs/adr/0004) ---
+// A tower becomes a landmark at height 8. The board carries
+// `landmarks: { count, cells: { [cellId]: { label, raisers } } }`; a board
+// from before landmarks existed counts as none raised.
+
+export const LANDMARK_AT = 8;
+
+const landmarksOf = (board) => board.landmarks ?? { count: 0, cells: {} };
+export const landmarkAt = (board, id) => {
+  const cells = landmarksOf(board).cells ?? {};
+  return Object.hasOwn(cells, String(id)) ? cells[String(id)] : null;
+};
+// An edge tile has at most 5 neighbours, so it can never reach 8.
+const interior = (id) => {
+  const r = Math.floor(id / N);
+  const c = id % N;
+  return r > 0 && r < N - 1 && c > 0 && c < N - 1;
+};
+// A tower that can still become a landmark: someone around holds it, it isn't
+// one already, and it isn't on an edge.
+const contender = (board, t) => active(t) && interior(t.id) && !landmarkAt(board, t.id);
+const towerName = (t) => (t.state === "mine" ? "your tower" : `${t.label}'s tower`);
+
+// Every name, for the one message that names all nine raisers.
+export function allNames(list) {
+  if (list.length <= 2) return list.join(" and ");
+  return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
+// What claiming `id` would do for the goal, worked out from preview(): the
+// tower it brings closest to 8 (highest resulting height, ties to the lower
+// cell id), or that settling there completes a landmark of your own. Null if
+// it raises no contender. Only a tower that really rises counts, so moving
+// between two gaps round the same tower helps nobody.
+export function helpsWith(board, id) {
+  const p = preview(board, id);
+  if (!p) return null;
+  if (p.height >= LANDMARK_AT && interior(id) && !landmarkAt(board, id)) {
+    return { id, label: null, height: p.height, landmark: true, name: "your tower" };
+  }
+  let best = null;
+  for (const x of board.tiles) {
+    if (x.id === id || !contender(board, x)) continue;
+    const after = p.heights[x.id];
+    if (after <= x.height) continue;
+    if (!best || after > best.height) best = { id: x.id, label: x.label, height: after, landmark: after >= LANDMARK_AT, name: towerName(x) };
+  }
+  return best;
+}
+
+// "brings Mia's tower to 7 of 8", "raises a landmark!"
+export function helpText(h) {
+  if (!h) return null;
+  return h.landmark ? "raises a landmark!" : `brings ${h.name} to ${h.height} of ${LANDMARK_AT}`;
+}
+
+// The goal line and the glowing tiles. `closest` is the contender standing
+// highest (ties to the lower cell id), or null when no tower is above 0.
+// `helps` are the free or faded tiles whose claim, by this visitor, would
+// lift a tower to at least that top height (or complete a landmark on the
+// spot): the gaps round the front-runners, not every tile beside anyone,
+// which on a busy board would be most of it. With no tower above 0 yet, any
+// tile beside someone helps, which is how a tower starts. The preview and
+// inspector still say what a non-glowing tile would do.
+export function goal(board) {
+  const count = landmarksOf(board).count ?? 0;
+  let top = null;
+  for (const t of board.tiles) if (contender(board, t) && (!top || t.height > top.height)) top = t;
+  const closest =
+    top && top.height > 0 ? { id: top.id, label: top.label, height: top.height, mine: top.state === "mine", name: towerName(top) } : null;
+  const peak = top ? top.height : Infinity;
+  const helps = [];
+  for (const t of board.tiles) {
+    const h = helpsWith(board, t.id);
+    if (h && (h.landmark || h.height >= peak)) helps.push(t.id);
+  }
+  return { count, closest, helps };
+}
+
+// The goal line's words, in pieces so a long name can be cut short on a
+// phone without losing "6 of 8". src/board.ts renders the same line, so the
+// page says it before (and without) any script; spec/diff.test.ts holds the
+// two equal. "1 landmark raised · Closest: Mia's tower, 6 of 8".
+export function goalParts(g) {
+  // "raised" is its own fixed word in the markup, so a phone can tuck it away.
+  const noun = g.count === 1 ? "landmark" : "landmarks";
+  if (!g.closest) return { count: String(g.count), noun, lead: "Start a tower by someone", who: "", tail: "" };
+  const tail = `${g.closest.mine ? " tower" : "'s tower"}, ${g.closest.height} of ${LANDMARK_AT}`;
+  return { count: String(g.count), noun, lead: "Closest: ", who: g.closest.mine ? "your" : g.closest.label, tail };
+}
+
+// A tile's aria-label: the server's words for it, plus the landmark ever
+// raised on that cell. src/board.ts renders it the same way.
+export const tileAria = (aria, mark) => (mark ? `${aria}. Landmark raised by ${allNames(mark.raisers)}` : aria);
+
+// Whether I can wave at tile `id`: I hold a tile, and it's someone else's
+// held tile right beside mine. The server checks the same (docs/adr/0004);
+// this only decides whether the page offers the button.
+export function canWave(board, id) {
+  const mine = board.tiles.find((t) => t.state === "mine");
+  const t = board.tiles[id];
+  if (!mine || !t || t.state !== "held" || !neighbours(mine.id).includes(id)) return null;
+  return { id, label: t.label };
+}
+
+// The one message every page shows when a landmark is raised, naming all nine.
+export function raisedText(raised) {
+  return `Landmark raised at ${place(raised.cellId)} by ${allNames(raised.raisers)}!`;
+}
+
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // "Would lift 2 neighbours. Moving drops 1." from a preview.
@@ -182,10 +292,13 @@ export function describeTile(board, id) {
   if (t.state === "mine") return { title: `Your tile, ${where}`, action: "Rename here", open: true };
   if (t.state === "held") return { title: `${t.label} holds ${where}`, action: null, open: false };
   const lift = effect(preview(board, id));
+  const help = helpText(helpsWith(board, id));
+  const goalPart = help ? ` Settling here ${help}` : "";
+  const end = goalPart && !goalPart.endsWith("!") ? "." : "";
   if (t.state === "dormant") {
-    return { title: `${t.label} has been away over a day. ${lift}`, action: `Settle on ${where}`, open: true };
+    return { title: `${t.label} has been away over a day. ${lift}${goalPart}${end}`, action: `Settle on ${where}`, open: true };
   }
-  return { title: lift, action: `Claim ${where}`, open: true };
+  return { title: `${lift}${goalPart}${end}`, action: `Claim ${where}`, open: true };
 }
 
 // "safe for 23 h 12 m": how long until a held tile fades, from its
@@ -235,5 +348,9 @@ export function inspect(board, id, now) {
   ]);
   const p = preview(board, id);
   if (p) facts.push(["If you settle here", `height ${p.height}. ${effect(p)}`]);
+  const help = helpText(helpsWith(board, id));
+  if (help) facts.push(["Goal", `Settling here ${help}`]);
+  const mark = landmarkAt(board, id);
+  if (mark) facts.unshift(["Landmark", `raised by ${allNames(mark.raisers)}`]);
   return { title, facts };
 }

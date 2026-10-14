@@ -10,6 +10,7 @@
 // the behaviour works, not that the page looks right.
 //
 // It claims tiles, so point it at a throwaway database, never production.
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright-core";
 
@@ -49,6 +50,15 @@ const reachable = (page: Page, cell: string | number): Promise<boolean> =>
 
 // Turn the camera until the tile is uncovered, the way a player would, then
 // click it. Fails the check rather than clicking through with force.
+async function tapTile(page: Page, cell: string | number): Promise<void> {
+  for (let turns = 0; !(await reachable(page, cell)); turns++) {
+    if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
+    await page.locator("text=Turn left").tap();
+    await page.waitForTimeout(350);
+  }
+  await page.locator(`button.tile[value="${cell}"]`).tap();
+}
+
 async function clickTile(page: Page, cell: string | number): Promise<void> {
   for (let turns = 0; !(await reachable(page, cell)); turns++) {
     if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
@@ -220,6 +230,7 @@ async function viewports(browser: Browser): Promise<void> {
   for (const [name, width, height, mobile] of [
     ["desktop", 1440, 900, false],
     ["phone", 390, 844, true],
+    ["phone-360", 360, 780, true],
   ] as const) {
     const page = await fresh(browser, { viewport: { width, height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 2 });
     await page.evaluate(() => document.fonts.ready);
@@ -234,6 +245,39 @@ async function viewports(browser: Browser): Promise<void> {
       Object.assign(window, { touchSeen: seen });
     });
     await wholePage(page, `.shots/${name}.png`);
+    // The goal line is one line, at every size, even with the longest name a
+    // label allows in it (wide glyphs) and a two-digit count.
+    const real = await page.$eval("[data-goal]", (el) => el.innerHTML);
+    await page.$eval("[data-goal]", (el) => {
+      el.querySelector("[data-landmarks]")!.textContent = "90";
+      el.querySelector("[data-goal-lead]")!.textContent = "Closest: ";
+      el.querySelector("[data-goal-who]")!.textContent = "WWWWWWWWWWWWWWWWWWWWWWWW";
+      el.querySelector("[data-goal-tail]")!.textContent = "'s tower, 6 of 8";
+    });
+    const worst = await page.$eval("[data-goal]", (el) => {
+      const r = el.getBoundingClientRect();
+      const tail = el.querySelector("[data-goal-tail]")!.getBoundingClientRect();
+      return { h: Math.round(r.height), tailRight: Math.round(tail.right) };
+    });
+    await page.locator(".hud").screenshot({ path: `.shots/goal-worst-${name}.png` });
+    check(worst.tailRight <= width, `${name}: "6 of 8" stays on screen with a 24-character name`, `${worst.h}px tall, ends at ${worst.tailRight}px`);
+    // ...and with no tower yet, the hint in its place.
+    await page.$eval("[data-goal]", (el) => {
+      el.querySelector("[data-goal-lead]")!.textContent = "Start a tower by someone";
+      el.querySelector("[data-goal-who]")!.textContent = "";
+      el.querySelector("[data-goal-tail]")!.textContent = "";
+    });
+    const hint = await page.$eval("[data-goal-lead]", (el) => ({ right: Math.round(el.getBoundingClientRect().right), cut: el.scrollWidth > el.clientWidth }));
+    check(hint.right <= width, `${name}: the start-a-tower hint stays on screen`, `ends at ${hint.right}px${hint.cut ? ", cut short with 90 raised" : ""}`);
+    await page.$eval("[data-landmarks]", (el) => (el.textContent = "0"));
+    check(!(await page.$eval("[data-goal-lead]", (el) => el.scrollWidth > el.clientWidth)), `${name}: and isn't cut short with none raised`);
+    await page.$eval("[data-goal]", (el, html) => (el.innerHTML = html), real);
+    const goal = await page.$eval("[data-goal]", (el) => {
+      const r = el.getBoundingClientRect();
+      const lh = parseFloat(getComputedStyle(el.querySelector("[data-landmarks]")!).fontSize);
+      return { h: Math.round(r.height), lh: Math.round(lh), right: Math.round(r.right), text: el.textContent ?? "" };
+    });
+    check(goal.h <= goal.lh * 1.5 && goal.right <= width, `${name}: the goal line fits on one line`, `${goal.h}px tall, "${goal.text}"`);
     if (mobile) {
       const seen = await page.evaluate(() => (window as unknown as { touchSeen: boolean[] }).touchSeen);
       check(seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
@@ -254,7 +298,11 @@ async function phone(browser: Browser): Promise<void> {
   const label = (await page.textContent(".confirm-claim")) ?? "";
   check(/^Claim row \d+, column \d+$/.test(label), "the bar names the tile", label);
   const title = (await page.textContent(".confirm-text")) ?? "";
-  check(/^(No neighbours yet|Would lift \d+ neighbours?)\.$/.test(title), "and says whom it would lift", title);
+  check(
+    /^(No neighbours yet|Would lift \d+ neighbours?)\.( Settling here (brings .+'s tower to \d of 8\.|raises a landmark!))?$/.test(title),
+    "and says whom it would lift",
+    title,
+  );
   const box = await page.locator(".confirm-claim").boundingBox();
   check((box?.height ?? 0) >= 44, "its button is a comfortable tap", `${Math.round(box?.height ?? 0)}px tall`);
   await page.screenshot({ path: ".shots/phone-confirm.png" });
@@ -365,6 +413,9 @@ const hooks = (page: Page, cell: number): Promise<Record<string, string | undefi
 // Whether an element is really on screen: [hidden] can lose to a display rule.
 const shown = (page: Page, sel: string): Promise<boolean> =>
   page.$eval(sel, (el) => getComputedStyle(el).display !== "none").catch(() => false);
+// Whether it's rendered at all, an ancestor's [hidden] included.
+const rendered = (page: Page, sel: string): Promise<boolean> =>
+  page.$eval(sel, (el) => el.checkVisibility()).catch(() => false);
 
 async function preview(browser: Browser): Promise<void> {
   console.log("\n— preview and inspector, by mouse and keyboard —");
@@ -546,7 +597,283 @@ async function touchInspect(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
-const SECTIONS = { realtime, dormant, keyboard, noScript, effects, phone, preview, claiming, touchInspect, hitTesting, viewports };
+// --- the room's goal, waves and landmarks (docs/adr/0004) ---
+
+// A player who exists only as a cookie: seeded through the HTTP API, never
+// the database, like any script client would.
+type Player = { pid: string; label: string };
+const player = (label: string): Player => ({ pid: randomUUID(), label });
+async function seed(p: Player, cellId: number): Promise<void> {
+  const res = await fetch(`${APP}/claim`, {
+    method: "POST",
+    headers: { cookie: `pid=${p.pid}`, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ cellId, label: p.label }),
+  });
+  if (res.status !== 200) throw new Error(`seeding ${p.label} on ${cellId}: ${res.status}`);
+}
+const around = (id: number): number[] =>
+  [-13, -12, -11, -1, 1, 11, 12, 13].map((d) => id + d);
+const goalText = (page: Page): Promise<string> => page.$eval("[data-goal]", (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim());
+
+async function goalLine(browser: Browser): Promise<void> {
+  console.log("\n— the goal: the closest tower, and tiles that help —");
+  const me = await fresh(browser);
+  await me.waitForTimeout(400);
+  const before = await goalText(me);
+  check(/^\d+ landmarks? raised · (Closest: .+, \d of 8|Start a tower by someone)$/.test(before), "the goal line shows", before);
+
+  // Make sure some tower stands, then grow whichever is closest by one
+  // neighbour: the line has to count up to match. (One claim lifts any tower
+  // by at most one, so the top height becomes exactly one more.)
+  if (!/Closest:/.test(before)) {
+    const patch = await openPatch(me);
+    await seed(player("Seed"), patch);
+    await seed(player("Seed2"), patch + 1);
+    await me.waitForFunction(() => /Closest:/.test(document.querySelector("[data-goal]")?.textContent ?? ""), null, { timeout: 3000 });
+  }
+  const read = async () => {
+    const tiles = await me.$$eval("button.tile", (els) =>
+      els.map((e) => ({ state: (e as HTMLElement).dataset.state, h: Number((e as HTMLElement).dataset.height), mark: (e as HTMLElement).dataset.landmark !== undefined, label: e.getAttribute("title") })),
+    );
+    // The closest tower, worked out here from the board's own hooks.
+    const interior = (id: number) => id > 11 && id < 132 && id % 12 > 0 && id % 12 < 11;
+    let top = -1;
+    tiles.forEach((t, id) => {
+      if ((t.state === "held" || t.state === "mine") && interior(id) && !t.mark && (top < 0 || t.h > tiles[top].h)) top = id;
+    });
+    return { tiles, top };
+  };
+  let { tiles, top } = await read();
+  const height = tiles[top].h;
+  const named = tiles[top].state === "mine" ? "your tower" : `${tiles[top].label}'s tower`;
+  check((await goalText(me)).endsWith(`Closest: ${named}, ${height} of 8`), "the goal line names the closest tower on the board", await goalText(me));
+  const gaps = [-13, -12, -11, -1, 1, 11, 12, 13].map((d) => top + d).filter((id) => tiles[id].state === "free" || tiles[id].state === "dormant");
+  // Reaching 8 makes it a landmark instead: then the count is what goes up.
+  const count = Number(await me.textContent("[data-landmarks]"));
+  const watch = me
+    .waitForFunction(
+      ([t, n]) =>
+        (document.querySelector("[data-goal]")?.textContent ?? "").replace(/\s+/g, " ").endsWith(t as string) ||
+        Number(document.querySelector("[data-landmarks]")?.textContent) >= n,
+      [height + 1 < 8 ? `, ${height + 1} of 8` : "\u0000", count + 1] as const,
+      { timeout: 3000 },
+    )
+    .catch(() => null);
+  await seed(player("Helper"), gaps[0]);
+  check((await watch) !== null, "and counts up when that tower gains a neighbour", await goalText(me));
+  ({ tiles, top } = await read());
+  const name = tiles[top].state === "mine" ? "your tower" : `${tiles[top].label}'s tower`;
+  const ring = [-13, -12, -11, -1, 1, 11, 12, 13].map((d) => top + d);
+  const open = ring.filter((id) => tiles[id].state === "free" || tiles[id].state === "dormant");
+  const k = tiles[top].h;
+
+  // Its gaps glow, and the preview and inspector say what settling would do.
+  const gap = open[0];
+  const glowing = await me.$$eval("button.tile[data-helps]", (els) => els.map((e) => Number((e as HTMLButtonElement).value)));
+  check(open.length > 0 && open.every((id) => glowing.includes(id)), "every gap round the closest tower glows", `gaps ${open.join(",")}; glowing ${glowing.join(",")}`);
+  const states = await me.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
+  const lonely = [...Array(144).keys()].find((id) => states[id] === "free" && around(id).every((n) => n < 0 || n > 143 || Math.abs((n % 12) - (id % 12)) > 1 || states[n] === "free"));
+  if (lonely !== undefined) check(!glowing.includes(lonely), "and a tile beside nobody doesn't", `tile ${lonely}`);
+  const glow = await me.$eval(`button.tile[value="${gap}"]`, (el) => getComputedStyle(el).boxShadow);
+  check(/255, 176, 0/.test(glow), "the glow is drawn", glow.slice(0, 60));
+  while (!(await reachable(me, gap))) {
+    await me.click("text=Turn left");
+    await me.waitForTimeout(350);
+  }
+  await me.hover(`button.tile[value="${gap}"]`);
+  const facts = ((await me.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
+  check(facts.includes(`Settling here brings ${name} to ${k + 1} of 8`) || facts.includes("Settling here raises a landmark!"), "the inspector says what a glowing tile would do", facts.trim());
+  await me.locator("[data-stage]").screenshot({ path: ".shots/goal-helps.png" });
+  await me.mouse.move(2, 2);
+  await me.locator(".hud").screenshot({ path: ".shots/goal-line.png" });
+  await me.context().close();
+
+  // The phone's confirm bar says it too.
+  const phone = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  // A tap can land on a taller tower in front: then turn and tap again, as
+  // a player would.
+  for (let tries = 0; tries < 4; tries++) {
+    await tapTile(phone, gap);
+    if ((await phone.$eval("[data-selected]", (el) => (el as HTMLButtonElement).value).catch(() => null)) === String(gap)) break;
+    await phone.locator(".confirm-cancel").tap();
+    await phone.locator("text=Turn left").tap();
+    await phone.waitForTimeout(350);
+  }
+  const bar = (await phone.textContent(".confirm-text")) ?? "";
+  const picked = await phone.$eval("[data-selected]", (el) => ({ value: (el as HTMLButtonElement).value, state: (el as HTMLElement).dataset.state })).catch(() => null);
+  check(/ Settling here (brings .+ to \d of 8\.|raises a landmark!)$/.test(bar), "and so does the phone's confirm bar", `${bar} [gap ${gap}, selected ${JSON.stringify(picked)}]`);
+  await phone.locator(".hud").screenshot({ path: ".shots/goal-line-phone.png" });
+  await phone.context().close();
+}
+
+async function waves(browser: Browser): Promise<void> {
+  console.log("\n— waving between neighbours —");
+  const ana = await fresh(browser);
+  const ben = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  const cy = await fresh(browser);
+  await ana.waitForTimeout(400);
+  const centre = await openPatch(ana);
+  await claimAs(ana, "Ana", centre);
+  await ben.fill("#label", "Ben");
+  await tapTile(ben, centre + 1);
+  await ben.locator(".confirm-claim").tap();
+  await ben.waitForSelector(`button.tile[value="${centre + 1}"][data-state="mine"]`, { timeout: 3000 });
+  const states = await cy.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
+  const far = [...Array(144).keys()].find((id) => states[id] === "free" && Math.abs((id % 12) - (centre % 12)) > 2 && around(id).every((n) => n < 0 || n > 143 || states[n] === "free"));
+  if (far === undefined) throw new Error("no lonely free tile left; reseed the board");
+  await claimAs(cy, "Cy", far);
+  await ana.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
+
+  // Without a neighbour's tower looked at, nothing offers a wave.
+  check(!(await rendered(ana, ".wave-button")), "no Wave button until a neighbour's tower is looked at");
+
+  // Keyboard: focus Ben's tile, Tab reaches the Wave button in its inspector.
+  await ana.press("#label", "Enter");
+  for (const [away, back] of [["ArrowLeft", "ArrowRight"], ["ArrowRight", "ArrowLeft"]]) {
+    await ana.evaluate((c) => (document.querySelector(`button.tile[value="${c}"]`) as HTMLElement).focus(), String(centre + 1));
+    await ana.keyboard.press(away);
+    await ana.keyboard.press(back);
+    if ((await ana.evaluate(() => (document.activeElement as HTMLButtonElement).value)) === String(centre + 1)) break;
+  }
+  await ana.keyboard.press("Tab");
+  const onWave = await ana.evaluate(() => document.activeElement?.className ?? "");
+  const label = (await ana.textContent(".wave-button")) ?? "";
+  check(onWave === "wave-button" && label === "Wave at Ben" && (await rendered(ana, ".wave-button")), "Tab from a neighbour's tile reaches its Wave button", `${onWave}: ${label}`);
+  check(await shown(ana, "[data-inspect]"), "and the inspector stays open while it's focused");
+
+  // Ana waves: Ben sees a hand on Ana's tower and a line; Cy sees nothing.
+  const benHand = ben.waitForSelector(`button.tile[value="${centre}"] .hand`, { timeout: 3000 }).catch(() => null);
+  const cyHand = cy.waitForSelector(".hand", { timeout: 2000 }).catch(() => null);
+  await ana.keyboard.press("Enter");
+  await ana.waitForFunction(() => (document.querySelector(".wave-said")?.textContent ?? "") !== "", null, { timeout: 3000 }).catch(() => null);
+  check((await ana.textContent(".wave-said")) === "Waved at Ben.", "Ana is told the wave went", (await ana.textContent(".wave-said")) ?? "");
+  check(
+    await ana.evaluate(() => document.activeElement?.className === "wave-button"),
+    "and focus stays on the button",
+  );
+  check((await benHand) !== null, "Ben sees a hand on Ana's tower");
+  await ben.waitForFunction(() => /waved at you/.test(document.querySelector(".waved")?.textContent ?? ""), null, { timeout: 2000 }).catch(() => null);
+  const line = ((await ben.textContent(".waved-text")) ?? "").trim();
+  check((await shown(ben, ".waved")) && line === "Ana waved at you.", "and the line \"Ana waved at you.\"", line);
+  await ben.waitForTimeout(150);
+  check(((await ben.textContent("[data-announce]")) ?? "") === "Ana waved at you.", "read out politely", (await ben.textContent("[data-announce]")) ?? "");
+  check(!(await ben.evaluate(() => document.activeElement?.closest(".waved") !== null)), "without moving Ben's focus");
+  await ben.addStyleTag({ content: ".hand::before { animation-play-state: paused !important; }" });
+  await ben.screenshot({ path: ".shots/wave-phone.png" });
+  const handBox = await ben.locator(`button.tile[value="${centre}"]`).boundingBox();
+  if (handBox) {
+    const clip = { x: handBox.x - handBox.width * 2, y: handBox.y - handBox.height * 3, width: handBox.width * 5, height: handBox.height * 5 };
+    await ben.screenshot({ path: ".shots/wave-hand.png", clip });
+  }
+
+  // Waving again at once is refused, and says so.
+  await ana.keyboard.press("Enter");
+  await ana.waitForFunction(() => (document.querySelector(".wave-said")?.textContent ?? "") !== "Waved at Ben.", null, { timeout: 3000 }).catch(() => null);
+  check((await ana.textContent(".wave-said")) === "You can wave again in a moment.", "a second wave at once says to wait", (await ana.textContent(".wave-said")) ?? "");
+  await ana.screenshot({ path: ".shots/wave-desktop.png" });
+
+  // Ben waves back from the line.
+  const anaHand = ana.waitForSelector(`button.tile[value="${centre + 1}"] .hand`, { timeout: 3000 }).catch(() => null);
+  await ben.locator(".wave-back").tap();
+  check((await anaHand) !== null, "Ben's Wave back puts a hand on Ben's tower for Ana");
+  await ana.waitForFunction(() => /Ben waved at you/.test(document.querySelector(".waved")?.textContent ?? ""), null, { timeout: 2000 }).catch(() => null);
+  check(await shown(ana, ".waved"), "and Ana gets the line");
+  await ben.waitForTimeout(200);
+  check(((await ben.textContent(".waved-text")) ?? "").trim() === "Waved back at Ana.", "Ben is told", (await ben.textContent(".waved-text")) ?? "");
+
+  check((await cyHand) === null && !(await shown(cy, ".waved")), "a third browser, not a neighbour, sees no wave");
+  await cy.locator(`button.tile[value="${centre}"]`).hover().catch(() => null);
+  check(!(await rendered(cy, ".wave-button")), "and is offered no Wave button at Ana's tower");
+
+  // The hand goes after about three seconds.
+  await ben.waitForTimeout(3300);
+  check((await ben.$$(".hand")).length === 0, "the hand goes after about three seconds");
+  for (const p of [ana, ben, cy]) await p.context().close();
+
+  // Without JavaScript nothing offers a wave.
+  const nojs = await fresh(browser, { javaScriptEnabled: false });
+  check((await nojs.$$(".wave-button, .wave-back, .waved")).length === 0, "without JavaScript there's no wave anywhere");
+  await nojs.context().close();
+}
+
+async function landmarks(browser: Browser): Promise<void> {
+  console.log("\n— a landmark raised by nine people —");
+  const watcher = await fresh(browser);
+  const calm = await fresh(browser, { reducedMotion: "reduce" });
+  await watcher.waitForTimeout(400);
+  const centre = await openPatch(watcher);
+  const countBefore = Number(await watcher.textContent("[data-landmarks]"));
+  // Watcher's focus sits in the name field; a celebration mustn't move it.
+  await watcher.focus("#label");
+
+  // Nine people, the holder first, then the ring. Names at their worst: one
+  // as long as a label can be.
+  const nine = ["Holder Hana", "Kai", "Zoe", "Ari", "Bartholomew Fitzgerald-X", "Cy", "Di", "Ed", "Flo"].map(player);
+  await seed(nine[0], centre);
+  const ring = around(centre);
+  for (let i = 0; i < 7; i++) await seed(nine[i + 1], ring[i]);
+  const burst = watcher.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
+  const calmBurst = calm.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
+  await seed(nine[8], ring[7]);
+
+  check((await burst) !== null, "the watching page bursts over the new landmark");
+  // Up by one on an empty patch; by more if the block also finished a tower
+  // beside an earlier run's.
+  check(Number(await watcher.textContent("[data-landmarks]")) > countBefore, "and the count goes up", `${countBefore} → ${await watcher.textContent("[data-landmarks]")}`);
+  check((await watcher.$("[data-landmarks][data-bump]")) !== null, "with a bump");
+  const cheer = ((await watcher.textContent(".cheer")) ?? "").trim();
+  check((await shown(watcher, ".cheer")) && nine.every((p) => cheer.includes(p.label)), "one line names all nine", cheer);
+  await watcher.waitForTimeout(150);
+  check(((await watcher.textContent("[data-announce]")) ?? "") === cheer, "and it's announced", (await watcher.textContent("[data-announce]")) ?? "");
+  check(await watcher.evaluate(() => document.activeElement?.id === "label"), "focus stays where it was");
+  check((await watcher.$(`button.tile[value="${centre}"] .crown`)) !== null, "the tower wears a crown");
+  const aria = (await watcher.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
+  check(aria.endsWith(`Landmark raised by ${nine.slice(0, 8).map((p) => p.label).join(", ")} and Flo`), "and its label names who raised it", aria);
+  // Frozen mid-burst for the screenshot.
+  await watcher.addStyleTag({ content: ".burst { animation-play-state: paused !important; animation-delay: -0.5s !important; }" });
+  await watcher.screenshot({ path: ".shots/landmark.png" });
+  await watcher.locator("[data-stage]").screenshot({ path: ".shots/landmark-stage.png" });
+
+  check((await calmBurst) !== null, "under reduced motion it's marked too");
+  const still = await calm.$eval(`button.tile[value="${centre}"] .burst`, (el) => getComputedStyle(el).animationName).catch(() => "gone");
+  check(still === "none", "standing still", still);
+
+  // The crown, up close, in greyscale, after the moment has passed.
+  await watcher.waitForTimeout(3200);
+  check((await watcher.$$(".burst")).length === 0, "the burst goes by itself");
+  const late = await fresh(browser, { deviceScaleFactor: 4, reducedMotion: "reduce" });
+  await late.waitForTimeout(500);
+  check((await late.$(`button.tile[value="${centre}"] .crown`)) !== null, "a page opened later shows the crown");
+  check((await late.$$(".burst")).length === 0 && !(await shown(late, ".cheer")), "but doesn't replay the celebration");
+  const box = await late.locator(`button.tile[value="${centre}"]`).boundingBox();
+  if (box) {
+    const clip = { x: box.x - box.width * 1.2, y: box.y - box.height * 2.4, width: box.width * 3.4, height: box.height * 4 };
+    await late.screenshot({ path: ".shots/landmark-crown.png", clip });
+    await late.addStyleTag({ content: "html { filter: grayscale(1); }" });
+    await late.screenshot({ path: ".shots/landmark-crown-grey.png", clip });
+  }
+  await late.locator(`button.tile[value="${centre}"]`).hover();
+  const facts = ((await late.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
+  check(/Landmark\s*raised by Holder Hana, Kai/.test(facts), "the inspector names the landmark's raisers", facts.trim());
+  for (const p of [watcher, calm, late]) await p.context().close();
+}
+
+const SECTIONS = {
+  realtime,
+  dormant,
+  keyboard,
+  noScript,
+  effects,
+  phone,
+  preview,
+  claiming,
+  touchInspect,
+  hitTesting,
+  goalLine,
+  waves,
+  landmarks,
+  viewports,
+};
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {

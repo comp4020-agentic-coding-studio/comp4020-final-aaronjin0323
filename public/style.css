@@ -483,6 +483,87 @@ main {
   }
 }
 
+/* The goal line: the room's score and its next target, one line across the
+   HUD under the count. The count is a gold counter like the cash one; the
+   closest tower's name is cut short on a phone so "6 of 8" always shows. */
+.landmarks {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  white-space: pre; /* one line, and the spaces between the parts kept */
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 1.3;
+}
+
+.landmarks > * {
+  flex: none;
+}
+
+.landmarks > .goal-next {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.goal-next > * {
+  flex: none;
+}
+
+/* the name gives way first, down to a letter or two and an ellipsis; the
+   hint shown before any tower stands can give way too */
+.goal-next > [data-goal-lead]:has(+ :empty) {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.goal-next > .goal-who {
+  flex: 0 1 auto;
+  min-width: 0; /* a minimum wider than a short name ("Cy") left a gap */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.goal-next > :empty {
+  display: none;
+}
+
+.goal-sep {
+  padding-inline: 0.15rem;
+}
+
+[data-landmarks] {
+  display: inline-block;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--accent);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+  margin-right: 0.15em;
+}
+
+/* the count going up when a landmark is raised */
+[data-landmarks][data-bump] {
+  transform-origin: right bottom;
+  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+
+/* Grows from its right-bottom corner, toward empty space, so the bump never
+   covers the word after the number. */
+@keyframes bump {
+  30% {
+    scale: 1.35;
+  }
+}
+
 /* --- the tile inspector, filled by app.js --- */
 
 .inspect {
@@ -928,6 +1009,141 @@ main {
   color: var(--danger);
 }
 
+/* --- the goal on the board --- */
+
+/* A tile whose claim would bring a tower closer to a landmark glows: a gold
+   kerb and a soft halo, breathing slowly. On a free lot a small gold diamond
+   (a waypoint) sits in the middle too, so it reads by shape in greyscale.
+   After the state rules, so it wins over a faded roof's own outline. */
+.tile[data-helps]:not([data-pending]) {
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    0 0 10px 1px rgb(255 176 0 / 0.55);
+  animation: helps 2.4s ease-in-out infinite;
+}
+
+@keyframes helps {
+  50% {
+    box-shadow:
+      inset 0 0 0 2px var(--accent),
+      0 0 4px 0 rgb(255 176 0 / 0.25);
+  }
+}
+
+.tile[data-state="free"][data-helps]:not([data-preview]) .beacon::before {
+  content: "";
+  width: 34%;
+  aspect-ratio: 1;
+  border: 2px solid var(--accent);
+  background: rgb(255 176 0 / 0.25);
+  rotate: 45deg;
+}
+
+/* A landmark: a gold crown standing on the roof, turned to face the camera
+   like the +1 floats. Black outline and a solid shape, so it reads in
+   greyscale and at 1x. It sits below the player's own marker, which floats
+   higher, so a crowned tile of your own shows both. */
+.crown {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 115%;
+  aspect-ratio: 1.25;
+  pointer-events: none;
+  translate: -50% -100% 2px;
+  transform-origin: 50% 100%;
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+  filter: drop-shadow(1px 0 0 var(--line)) drop-shadow(-1px 0 0 var(--line)) drop-shadow(0 1px 0 var(--line))
+    drop-shadow(0 -1px 0 var(--line)) drop-shadow(1px 1px 0 var(--line));
+}
+
+.crown::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, #ffe27a, var(--accent) 60%, #d98a00);
+  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
+}
+
+/* A landmark's roof keeps a gold edge, so the cell reads as one even
+   when the crown is behind a taller tower. */
+.tile[data-landmark]:not(:focus-visible, .is-selected, [data-raised]) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* The moment a landmark is raised: gold rays bursting out behind the crown,
+   and a ring on the tower. Under reduced motion the rays just stand there
+   until they go. */
+.burst {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 360%;
+  aspect-ratio: 1;
+  pointer-events: none;
+  translate: -50% -60% 1px;
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+  background: repeating-conic-gradient(rgb(255 215 106 / 0.95) 0 10deg, transparent 10deg 30deg);
+  mask: radial-gradient(closest-side, transparent 22%, #000 24%, #000 70%, transparent 100%);
+  animation: burst 2.6s ease-out forwards;
+}
+
+@keyframes burst {
+  from {
+    opacity: 0;
+    scale: 0.2;
+  }
+  15% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 1.2;
+    rotate: 40deg;
+  }
+}
+
+.tile[data-raised] {
+  z-index: 2;
+  outline: 4px solid var(--cream);
+  outline-offset: 3px;
+}
+
+/* A neighbour waved: a small hand over their tower, rocking, for about
+   three seconds. An outlined emoji: it reads in greyscale by shape. */
+.tile[data-waving] {
+  z-index: 2;
+}
+
+.hand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: none;
+  translate: -50% -50% calc(var(--unit) * 2 + 10px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt))) translateY(-60%);
+}
+
+.hand::before {
+  content: "\1F44B";
+  display: block;
+  font-size: clamp(1.4rem, 2.6vw, 2rem);
+  line-height: 1;
+  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line)) drop-shadow(2px 2px 0 var(--line));
+  transform-origin: 70% 90%;
+  animation: hand 600ms ease-in-out 5 alternate;
+}
+
+@keyframes hand {
+  from {
+    rotate: -18deg;
+  }
+  to {
+    rotate: 18deg;
+  }
+}
+
 /* Names on the roofs are map labels: white, outlined in black, legible on
    any colour of roof. */
 .initials {
@@ -1096,6 +1312,143 @@ body:has(.confirm:not([hidden])) main {
   padding-bottom: 8rem;
 }
 
+.confirm-wave {
+  background: var(--cream);
+}
+
+/* --- the inspector's Wave button --- */
+
+.inspect-actions {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.wave-button,
+.wave-back {
+  justify-self: start;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 1.05rem;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  min-height: 44px;
+  padding: 0.5rem 0.9rem 0.45rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--accent);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  cursor: pointer;
+}
+
+.wave-button:active,
+.wave-back:active {
+  translate: 2px 2px;
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.wave-button:focus-visible,
+.wave-back:focus-visible {
+  outline-color: var(--ink);
+}
+
+.wave-said {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.wave-said:empty {
+  display: none;
+}
+
+/* --- messages that float over the page: a landmark raised, a wave --- */
+
+/* Pinned to the top of the screen so they're seen wherever the page is
+   scrolled, and taking no room, so the board never moves under a pointer.
+   Neither is modal: nothing behind them is blocked but what they cover,
+   and they go by themselves. */
+.toasts {
+  position: fixed;
+  z-index: 11;
+  top: 0.75rem;
+  left: 50%;
+  translate: -50% 0;
+  width: min(34rem, calc(100% - 2rem));
+  display: grid;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.cheer,
+.waved {
+  pointer-events: auto;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  border-radius: 0.6rem;
+  box-shadow:
+    5px 5px 0 var(--line),
+    inset 0 0 0 2px var(--accent);
+  animation: toast-in 280ms cubic-bezier(0.3, 1.4, 0.6, 1);
+}
+
+/* "Mission passed": the one message the whole room sees, in the gold mission
+   type, with a crown in front so it reads without the colour. */
+.cheer {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: var(--fs-notice);
+  line-height: 1.15;
+  color: var(--accent);
+  -webkit-text-stroke: 2px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 2px 2px 0 var(--line);
+}
+
+.cheer::before {
+  content: "";
+  display: inline-block;
+  width: 1.3em;
+  height: 1em;
+  margin-right: 0.35em;
+  vertical-align: -0.1em;
+  background: var(--accent);
+  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
+}
+
+.waved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.waved-text {
+  font-weight: 700;
+  font-size: var(--fs-body);
+}
+
+.waved-text::before {
+  content: "\1F44B";
+  margin-right: 0.4rem;
+}
+
+.wave-back {
+  justify-self: auto;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: 0 -0.6rem;
+  }
+}
+
 /* a touch-only screen has no keyboard to describe */
 @media (hover: none) and (pointer: coarse) {
   .keys-hint {
@@ -1187,6 +1540,14 @@ body:has(.confirm:not([hidden])) main {
     grid-column: 1 / -1;
     text-align: center;
   }
+  /* "raised" is still read out, but makes room for the tower's name */
+  .goal-raised {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
 }
 
 /* --- reduced motion: nothing moves that doesn't have to --- */
@@ -1206,6 +1567,11 @@ body:has(.confirm:not([hidden])) main {
 
   .rise,
   .notice,
+  .tile[data-helps]:not([data-pending]),
+  [data-landmarks][data-bump],
+  .hand::before,
+  .cheer,
+  .waved,
   .tile[data-pending],
   .tile[aria-busy="true"],
   .tile[data-state="mine"]:not([data-preview]) .beacon::after,
@@ -1218,6 +1584,17 @@ body:has(.confirm:not([hidden])) main {
     animation: none;
     outline: 3px solid var(--cream);
     outline-offset: 2px;
+  }
+
+  /* A raised landmark is still marked on every screen, standing still: the
+     rays at full strength until they go, and the count in cream. */
+  .burst {
+    animation: none;
+    opacity: 0.9;
+  }
+
+  [data-landmarks][data-bump] {
+    color: var(--cream);
   }
 }
 

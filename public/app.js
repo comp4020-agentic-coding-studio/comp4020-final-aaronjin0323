@@ -1,4 +1,19 @@
-import { accepts, arrivals, describeTile, diffBoards, inspect, preview } from "./diff.js";
+import {
+  accepts,
+  arrivals,
+  canWave,
+  describeTile,
+  diffBoards,
+  goal,
+  goalParts,
+  helpText,
+  helpsWith,
+  inspect,
+  landmarkAt,
+  preview,
+  raisedText,
+  tileAria,
+} from "./diff.js";
 
 // Everything the board does beyond plain HTML. Without this script the board
 // sits at a fixed angle, every claim is a form post and a reload, and other
@@ -209,7 +224,7 @@ if (board && stage) {
   const claimedCount = document.querySelector("[data-claimed]");
   const notices = document.querySelector("[data-notices]");
 
-  const patchTile = (el, t) => {
+  const patchTile = (el, t, view) => {
     if (el.dataset.state !== t.state) el.dataset.state = t.state;
     if (el.dataset.height !== String(t.height)) {
       el.dataset.height = String(t.height);
@@ -217,7 +232,25 @@ if (board && stage) {
     }
     if (t.hue === null) el.style.removeProperty("--hue");
     else el.style.setProperty("--hue", String(t.hue));
-    if (el.getAttribute("aria-label") !== t.aria) el.setAttribute("aria-label", t.aria);
+    // A landmark ever raised on this cell: a crown on the roof, and the
+    // tile's label names who raised it.
+    const mark = landmarkAt(view, t.id);
+    const aria = tileAria(t.aria, mark);
+    if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
+    if (mark) {
+      el.dataset.landmark = mark.label;
+      el.dataset.landmarkRaisers = JSON.stringify(mark.raisers);
+      if (!el.querySelector(".crown")) {
+        const crown = document.createElement("span");
+        crown.className = "crown";
+        crown.setAttribute("aria-hidden", "true");
+        el.append(crown);
+      }
+    } else if (el.dataset.landmark !== undefined) {
+      delete el.dataset.landmark;
+      delete el.dataset.landmarkRaisers;
+      el.querySelector(".crown")?.remove();
+    }
     if (t.label === null) el.removeAttribute("title");
     else el.title = t.label;
     const initials = el.querySelector(".initials");
@@ -228,8 +261,24 @@ if (board && stage) {
 
   // The board the page currently shows, read from the server-rendered HTML,
   // so the very first update has something to be compared with.
+  const landmarkCount = document.querySelector("[data-landmarks]");
+  const readLandmarks = () => {
+    const cells = {};
+    tiles.forEach((el, id) => {
+      if (el.dataset.landmark === undefined) return;
+      let raisers = [];
+      try {
+        raisers = JSON.parse(el.dataset.landmarkRaisers ?? "[]");
+      } catch {
+        // unreadable: the crown still shows, with no names
+      }
+      cells[String(id)] = { label: el.dataset.landmark, raisers };
+    });
+    return { count: Number(landmarkCount?.textContent) || Object.keys(cells).length, cells };
+  };
   const readBoard = () => ({
     version: Number(board.dataset.version) || 0,
+    landmarks: readLandmarks(),
     tiles: tiles.map((el, id) => ({
       id,
       state: el.dataset.state,
@@ -253,6 +302,24 @@ if (board && stage) {
   const announcer = document.querySelector("[data-announce]");
   let hovered = null;
   let looked = null; // tile id currently previewed and inspected
+  // A held tile clicked with a mouse stays inspected after the pointer
+  // leaves it, so the inspector's Wave button can be reached.
+  let pinned = null;
+
+  // The inspector's actions: a Wave button for a neighbour's tower, and the
+  // answer to the last wave. Made here, so without script nothing offers a
+  // wave (docs/adr/0004).
+  const inspectActions = document.createElement("div");
+  inspectActions.className = "inspect-actions";
+  inspectActions.hidden = true;
+  const waveButton = document.createElement("button");
+  waveButton.type = "button"; // inside the claim form: never submit it
+  waveButton.className = "wave-button";
+  const waveSaid = document.createElement("p");
+  waveSaid.className = "wave-said";
+  inspectActions.append(waveButton, waveSaid);
+  inspector?.append(inspectActions);
+  let waveSaidFor = null; // which tile the answer is about
 
   const clearPreview = () => {
     for (const el of board.querySelectorAll("[data-preview]")) {
@@ -288,6 +355,17 @@ if (board && stage) {
         }),
       );
     }
+    // Wave: only at someone else's held tile beside mine.
+    const target = canWave(shown, id);
+    if (target) {
+      waveButton.textContent = `Wave at ${target.label}`;
+      waveButton.dataset.cell = String(id);
+    }
+    if (waveSaidFor !== id) {
+      waveSaid.textContent = "";
+      waveSaidFor = null;
+    }
+    inspectActions.hidden = !target;
     inspector.hidden = false;
   };
   // Keyboard focus only: a tile focused by a mouse click isn't "looked at"
@@ -299,7 +377,9 @@ if (board && stage) {
   // Re-picks the tile being looked at and redraws its preview and inspector:
   // after a hover, focus or selection change, and after every new board.
   const look = () => {
-    const el = hovered ?? focusedTile() ?? selected;
+    // Focus inside the inspector (on its Wave button) keeps its tile in view.
+    const kept = inspector?.contains(document.activeElement) && looked !== null ? tiles[looked] : null;
+    const el = hovered ?? focusedTile() ?? kept ?? selected ?? pinned;
     looked = el ? Number(el.value) : null;
     showPreview(looked);
     showInspect(looked);
@@ -334,6 +414,13 @@ if (board && stage) {
   // Focus leaving the board: wait until it has landed, so moving between
   // tiles doesn't flash the inspector shut.
   board.addEventListener("focusout", () => setTimeout(look, 0));
+  inspector?.addEventListener("focusout", () => setTimeout(look, 0));
+  // A click anywhere but the board and the inspector lets go of a pinned tile.
+  document.addEventListener("click", (e) => {
+    if (!pinned || !(e.target instanceof Node) || board.contains(e.target) || inspector?.contains(e.target)) return;
+    pinned = null;
+    look();
+  });
 
   // The protection countdown ticks while it's on screen.
   setInterval(() => {
@@ -385,12 +472,17 @@ if (board && stage) {
   // `streamVersion` is passed only for the first board on a reopened stream
   // (see accepts() in diff.js: it lets a restarted server's board through).
   const applyBoard = (view, { streamVersion = null } = {}) => {
+    // A landmark just raised is celebrated even when this board is dropped as
+    // no newer: my own claim's reply can bring the same board first, without
+    // the news. Each cell is celebrated once.
+    if (view.raised) celebrate(view.raised);
     if (!accepts(shown.version, view.version, streamVersion)) return;
     const { rises, messages } = diffBoards(shown, view);
     const fresh = arrivals(shown, view);
     shown = view;
 
-    view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t));
+    view.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t, view));
+    showGoal(view);
     if (selected) select(selected); // re-read its state: someone may have taken it
     if (claimedCount) claimedCount.textContent = String(view.claimed);
     if (status) status.textContent = view.status;
@@ -411,6 +503,67 @@ if (board && stage) {
     }
   };
   let claimText = null; // my last claim's narration, waiting for its reply
+
+  // --- the room's goal (docs/adr/0004) ---
+  // The status row says how many landmarks the room has raised and which
+  // tower is closest to the next, and the tiles that would bring a tower
+  // closer glow. All from the board, like the +1/-1: goal() in diff.js,
+  // which the server also uses to render the same line before any script.
+  const goalLine = document.querySelector("[data-goal]");
+  const goalSlots = goalLine
+    ? Object.fromEntries(["noun", "lead", "who", "tail"].map((k) => [k, goalLine.querySelector(`[data-goal-${k}]`)]))
+    : {};
+  const showGoal = (view) => {
+    const g = goal(view);
+    const parts = goalParts(g);
+    if (landmarkCount && landmarkCount.textContent !== parts.count) landmarkCount.textContent = parts.count;
+    for (const [k, el] of Object.entries(goalSlots)) if (el && el.textContent !== parts[k]) el.textContent = parts[k];
+    const glow = new Set(g.helps);
+    tiles.forEach((el, id) => {
+      if (glow.has(id)) {
+        if (el.dataset.helps === undefined) el.dataset.helps = "";
+      } else if (el.dataset.helps !== undefined) delete el.dataset.helps;
+    });
+  };
+
+  // --- a landmark raised: the one room-wide moment ---
+  // A burst over the tower and the count bumping, on every open page, and one
+  // line naming the nine, shown and read out once. Nothing modal and focus
+  // stays put. Under reduced motion it's a static highlight instead.
+  const celebrated = new Set();
+  const cheer = document.createElement("p");
+  cheer.className = "cheer";
+  cheer.hidden = true;
+  let cheerTimer = 0;
+  let raisedNews = null; // a raising that landed while my claim was in flight
+  const celebrate = (raised) => {
+    const id = Number(raised.cellId);
+    if (celebrated.has(id) || !tiles[id]) return;
+    celebrated.add(id);
+    const text = raisedText(raised);
+    const tile = tiles[id];
+    tile.dataset.raised = "";
+    const burst = document.createElement("span");
+    burst.className = "burst";
+    burst.setAttribute("aria-hidden", "true");
+    tile.append(burst);
+    setTimeout(() => {
+      burst.remove();
+      delete tile.dataset.raised;
+    }, 3000);
+    if (landmarkCount) {
+      landmarkCount.dataset.bump = "";
+      setTimeout(() => delete landmarkCount.dataset.bump, 1200);
+    }
+    cheer.textContent = text;
+    cheer.hidden = false;
+    clearTimeout(cheerTimer);
+    cheerTimer = setTimeout(() => (cheer.hidden = true), 8000);
+    // Read out once. My own claim's words wait for its reply, so the news
+    // joins them there instead of being cut off by them.
+    if (pending) raisedNews = text;
+    else announce(text);
+  };
 
   // A notice is shown, and read out once: through the page's one live region
   // when it has one, else as its own status element.
@@ -452,6 +605,13 @@ if (board && stage) {
       setConn("live");
     });
     events.addEventListener("open", () => setConn("live"));
+    events.addEventListener("wave", (e) => {
+      try {
+        onWave(JSON.parse(e.data));
+      } catch {
+        // a malformed wave shows nothing
+      }
+    });
     events.addEventListener("error", () => {
       reopened = true;
       // CONNECTING: the browser is retrying by itself. CLOSED: it gave up
@@ -461,6 +621,122 @@ if (board && stage) {
     addEventListener("offline", () => setConn("offline"));
     addEventListener("online", () => events.readyState !== EventSource.OPEN && setConn("reconnecting"));
   } else setConn("offline");
+
+  // --- waving (docs/adr/0004) ---
+  // POST /wave with a neighbour's cell. Each answer has its own short words,
+  // shown where the wave was made and read out once.
+  const WAVE_ERRORS = {
+    "too-soon": () => "You can wave again in a moment.",
+    "no-tile": () => "Hold a tile first, then wave at a neighbour.",
+    "not-neighbour": (who) => `${who} isn't beside you any more.`,
+    cell: () => "That tile doesn't exist.",
+  };
+  let waving = false;
+  const sendWave = async (cell, who) => {
+    if (waving) return null;
+    waving = true;
+    try {
+      let res;
+      try {
+        res = await fetch("/wave", {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ cellId: cell }),
+        });
+      } catch {
+        return "Couldn't reach the server, so no wave was sent.";
+      }
+      if (res.ok) return `Waved at ${who}.`;
+      if (res.status === 403) return "The server refused a wave from this page. Reload and try again.";
+      const body = await res.json().catch(() => ({}));
+      const words = Object.hasOwn(WAVE_ERRORS, body.error ?? "") ? WAVE_ERRORS[body.error] : null;
+      return words ? words(who) : `That didn't work (error ${res.status}). Try again.`;
+    } finally {
+      waving = false;
+    }
+  };
+  const waveFrom = async (button, where) => {
+    const cell = Number(button.dataset.cell);
+    const who = shown.tiles[cell]?.label ?? "them";
+    const text = await sendWave(cell, who);
+    if (!text) return;
+    where(text);
+    announce(text);
+  };
+  waveButton.addEventListener("click", () =>
+    waveFrom(waveButton, (text) => {
+      waveSaid.textContent = text;
+      waveSaidFor = Number(waveButton.dataset.cell);
+    }),
+  );
+
+  // Someone beside me waved: a small hand on their tower for about three
+  // seconds, and a line above the board with a Wave back button. Nothing
+  // modal; focus stays where it is.
+  const waved = document.createElement("div");
+  waved.className = "waved";
+  waved.hidden = true;
+  const wavedText = document.createElement("span");
+  wavedText.className = "waved-text";
+  const waveBack = document.createElement("button");
+  waveBack.type = "button";
+  waveBack.className = "wave-back";
+  waveBack.textContent = "Wave back";
+  waved.append(wavedText, waveBack);
+  let wavedTimer = 0;
+  const handTimers = new Map();
+  const showHand = (id) => {
+    const tile = tiles[id];
+    clearTimeout(handTimers.get(id));
+    if (!tile.querySelector(".hand")) {
+      const hand = document.createElement("span");
+      hand.className = "hand";
+      hand.setAttribute("aria-hidden", "true");
+      tile.append(hand);
+    }
+    tile.dataset.waving = "";
+    handTimers.set(
+      id,
+      setTimeout(() => {
+        tile.querySelector(".hand")?.remove();
+        delete tile.dataset.waving;
+        handTimers.delete(id);
+      }, 3000),
+    );
+  };
+  const onWave = (data) => {
+    const id = Number(data.from);
+    if (!Number.isInteger(id) || !tiles[id]) return;
+    const who = typeof data.label === "string" && data.label ? data.label : "A neighbour";
+    showHand(id);
+    wavedText.textContent = `${who} waved at you.`;
+    waveBack.dataset.cell = String(id);
+    waveBack.hidden = false;
+    waved.hidden = false;
+    clearTimeout(wavedTimer);
+    wavedTimer = setTimeout(() => (waved.hidden = true), 10_000);
+    announce(`${who} waved at you.`);
+  };
+  waveBack.addEventListener("click", async () => {
+    const cell = Number(waveBack.dataset.cell);
+    const who = shown.tiles[cell]?.label ?? "them";
+    const text = await sendWave(cell, who);
+    if (!text) return;
+    wavedText.textContent = text.startsWith("Waved at") ? `Waved back at ${who}.` : text;
+    if (text.startsWith("Waved at")) waveBack.hidden = true;
+    announce(wavedText.textContent);
+    clearTimeout(wavedTimer);
+    wavedTimer = setTimeout(() => (waved.hidden = true), 4000);
+  });
+
+  // The room-wide line and the wave line float at the top of the screen, so
+  // they're seen wherever the page is scrolled, and the board never shifts
+  // under a pointer because a message came in. In the page they follow the
+  // board's HUD, so Tab reaches Wave back soon after the board.
+  const toasts = document.createElement("div");
+  toasts.className = "toasts";
+  toasts.append(cheer, waved);
+  (document.querySelector(".hud") ?? board).after(toasts);
 
   // --- claiming in place ---
   // With script the form posts through fetch: no reload, so the camera and
@@ -500,7 +776,12 @@ if (board && stage) {
   confirmCancel.type = "button";
   confirmCancel.className = "confirm-cancel";
   confirmCancel.textContent = "Cancel";
-  confirmBar.append(confirmText, confirmButton, confirmCancel);
+  // On a phone a neighbour's tower is waved at from the bar, under the thumb.
+  const confirmWave = document.createElement("button");
+  confirmWave.type = "button";
+  confirmWave.className = "confirm-wave";
+  confirmWave.hidden = true;
+  confirmBar.append(confirmText, confirmButton, confirmWave, confirmCancel);
   form?.append(confirmBar);
 
   let selected = null;
@@ -524,15 +805,28 @@ if (board && stage) {
     confirmButton.textContent = action ?? "";
     confirmButton.value = tile.value;
     confirmButton.hidden = !open;
+    const neighbour = canWave(shown, Number(tile.value));
+    confirmWave.hidden = !neighbour;
+    if (neighbour) {
+      confirmWave.textContent = `Wave at ${neighbour.label}`;
+      confirmWave.dataset.cell = tile.value;
+    }
     confirmBar.hidden = false;
     look();
   };
   confirmCancel.addEventListener("click", () => select(null));
+  confirmWave.addEventListener("click", () => waveFrom(confirmWave, (text) => (confirmText.textContent = text)));
 
   form?.addEventListener(
     "click",
     (e) => {
       const tile = e.target instanceof Element ? e.target.closest("button.tile") : null;
+      if (tile && !touch.matches) {
+        // A mouse click on someone's tower keeps it inspected (for its Wave
+        // button); any other click lets go.
+        pinned = tile.dataset.state === "held" ? tile : null;
+        look();
+      }
       if (!tile || !touch.matches || e.detail === 0) return; // detail 0: keyboard Enter
       e.preventDefault(); // the first tap selects; it never submits
       select(tile === selected ? null : tile);
@@ -586,7 +880,9 @@ if (board && stage) {
         applyBoard(body.board); // a no-op if the stream already brought it
         // A rename on your own tile moves nobody, so the diff has no words.
         const where = `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
-        showNotice("claimed", claimText ?? `Saved: you hold ${where} as ${body.label ?? nameField.value.trim()}.`);
+        const said = claimText ?? `Saved: you hold ${where} as ${body.label ?? nameField.value.trim()}.`;
+        showNotice("claimed", said, { speak: false });
+        announce(raisedNews ? `${said} ${raisedNews}` : said);
       } else {
         const text = MESSAGES[body.error] ?? STATUS_MESSAGES[res.status] ?? `That didn't work (error ${res.status}). Try again.`;
         showNotice(body.error ?? `http-${res.status}`, text);
@@ -596,6 +892,7 @@ if (board && stage) {
       pending.removeAttribute("aria-busy");
       pending = null;
       claimText = null;
+      raisedNews = null;
       confirmButton.disabled = false;
     }
   });

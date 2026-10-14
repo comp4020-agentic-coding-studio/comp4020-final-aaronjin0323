@@ -1,5 +1,10 @@
-import { DORMANT_AFTER_MS, isDormant, N, type Tile } from "./db.ts";
+import { DORMANT_AFTER_MS, isDormant, type Landmark, N, type Tile } from "./db.ts";
 import { escapeHtml, page } from "./html.ts";
+// The page's own pure module (no DOM), so the goal line and the glowing
+// tiles are worked out by one function whether the server or the page draws
+// them. The expect-error: it's a plain browser module with no declarations.
+// @ts-expect-error
+import { goal, goalParts, tileAria } from "../public/diff.js";
 
 // Notices are chosen from this fixed set by key; nothing from the query
 // string is ever echoed into the page.
@@ -40,7 +45,18 @@ export type TileView = {
   safeUntil: string | null;
 };
 
-export type BoardView = { tiles: TileView[]; claimed: number; status: string };
+// Every landmark the room has raised (docs/adr/0004): how many, and per cell
+// the holder's label then and the nine who raised it. Labels only, never a
+// pid. Keyed by cell id as a string, since it travels as JSON.
+export type LandmarksView = { count: number; cells: Record<string, { label: string; raisers: string[] }> };
+
+export type BoardView = { tiles: TileView[]; claimed: number; status: string; landmarks: LandmarksView };
+
+export function landmarksView(landmarks: Landmark[]): LandmarksView {
+  const cells: LandmarksView["cells"] = {};
+  for (const l of landmarks) cells[String(l.cellId)] = { label: l.label, raisers: l.raisers };
+  return { count: landmarks.length, cells };
+}
 
 // A claimed tile's height is how many of its 8 neighbours are claimed and
 // not dormant at `now`: someone away over a day stops lifting anyone. A
@@ -77,7 +93,7 @@ const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(
 
 // The board as one visitor sees it: their own tile is "mine" (never dormant:
 // they're here), anyone else's is held or dormant.
-export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
+export function boardView(tiles: Tile[], me: string, now: Date, landmarks: Landmark[] = []): BoardView {
   const hs = heights(tiles, now);
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
@@ -122,17 +138,40 @@ export function boardView(tiles: Tile[], me: string, now: Date): BoardView {
     ? `You hold ${place(mine.id)}, at height ${mine.height}. Pick another tile to move.`
     : "You don't hold a tile yet. Type a name, then pick a free or faded tile.";
 
-  return { tiles: views, claimed: views.filter((t) => t.state !== "free").length, status };
+  return {
+    tiles: views,
+    claimed: views.filter((t) => t.state !== "free").length,
+    status,
+    landmarks: landmarksView(landmarks),
+  };
 }
 
-function tileButton(t: TileView): string {
+function tileButton(t: TileView, landmark: { label: string; raisers: string[] } | undefined, helps: boolean): string {
+  // A landmark ever raised on this cell: the label it was raised under, and
+  // the nine raisers as a JSON array, so the page has them before the stream.
+  // It wears a crown on its roof, and its label says who raised it.
+  const crown = landmark
+    ? ` data-landmark="${escapeHtml(landmark.label)}" data-landmark-raisers="${escapeHtml(JSON.stringify(landmark.raisers))}"`
+    : "";
+  // A free or faded tile whose claim would bring a tower closer to a
+  // landmark glows (the same goal() the page recomputes on every board).
+  const glow = helps ? " data-helps" : "";
   const style = t.hue === null ? `--h:${t.height}` : `--h:${t.height};--hue:${t.hue}`;
   const title = t.label === null ? "" : ` title="${escapeHtml(t.label)}"`;
   const safe = t.safeUntil === null ? "" : ` data-safe-until="${t.safeUntil}"`;
   // .beacon is the marker that floats over the roof: the player's pin on
   // your own tile, the ghost height of a tile you're about to claim, the +1
   // over a neighbour you'd lift. Which one shows is all in the stylesheet.
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${safe} style="${style}" aria-label="${escapeHtml(t.aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span></button>`;
+  const crownMark = landmark ? `<span class="crown" aria-hidden="true"></span>` : "";
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${safe}${crown}${glow} style="${style}" aria-label="${escapeHtml(tileAria(t.aria, landmark ?? null))}"${title}><span class="sides" aria-hidden="true"></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span>${crownMark}</button>`;
+}
+
+// The goal line: landmarks raised, and the tower closest to the next one.
+// The name is its own element so a long one can be cut short on a phone
+// without losing "6 of 8". app.js rewrites the same pieces on every board.
+function goalLine(view: BoardView): string {
+  const p = goalParts(goal(view)) as { count: string; noun: string; lead: string; who: string; tail: string };
+  return `<p class="landmarks" data-goal><span data-landmarks>${p.count}</span> <span data-goal-noun>${p.noun}</span><span class="goal-raised"> raised</span><span class="goal-sep" aria-hidden="true"> · </span><span class="goal-next"><span data-goal-lead>${escapeHtml(p.lead)}</span><span class="goal-who" data-goal-who>${escapeHtml(p.who)}</span><span data-goal-tail>${escapeHtml(p.tail)}</span></span></p>`;
 }
 
 // The map key: one sample roof per tile state, so the rules on the tiles can
@@ -161,6 +200,7 @@ export function renderBoard(
     displaced ? `<p class="notice" data-notice="displaced" role="status">${DISPLACED}</p>` : "",
     notice ? `<p class="notice" data-notice="${notice}" role="status">${NOTICES[notice]}</p>` : "",
   ].join("");
+  const helps = new Set<number>((goal(view) as { helps: number[] }).helps);
 
   return page({
     title: "Skyline",
@@ -188,10 +228,11 @@ export function renderBoard(
           <div class="hud">
             <p class="count"><span data-claimed>${view.claimed}</span> of ${view.tiles.length} tiles claimed</p>
             <p class="conn" data-conn="connecting">Connecting…</p>
+            ${goalLine(view)}
           </div>
           <div class="stage" data-stage>
             <div class="board" role="group" aria-label="Board, ${N} by ${N}" aria-describedby="status" data-version="${version}">
-          ${view.tiles.map(tileButton).join("\n          ")}
+          ${view.tiles.map((t) => tileButton(t, Object.hasOwn(view.landmarks.cells, String(t.id)) ? view.landmarks.cells[String(t.id)] : undefined, helps.has(t.id))).join("\n          ")}
             </div>
           </div>
         </section>

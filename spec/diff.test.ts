@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { boardView, heights } from "../src/board.ts";
-import { openStore, type Store } from "../src/db.ts";
+import { JSDOM } from "jsdom";
+import { boardView, heights, renderBoard } from "../src/board.ts";
+import { type Landmark, openStore, type Store } from "../src/db.ts";
 // @ts-expect-error: a plain browser module with no type declarations
-import { accepts, arrivals, describeTile, diffBoards, inspect, preview, safeFor } from "../public/diff.js";
+import { accepts, arrivals, canWave, describeTile, diffBoards, goal, goalParts, helpsWith, inspect, preview, raisedText, safeFor, tileAria } from "../public/diff.js";
 
 // The page's diff, fed real boards from the real store: so a change to what
 // the server sends and a change to how the page reads it can't drift apart.
@@ -163,7 +164,11 @@ describe("the phone confirm bar", () => {
     const { store, view } = scene();
     store.claim(at(1, 1), MIA, "Mia", NOW);
     store.claim(at(1, 3), KAI, "Kai", NOW);
-    expect(describeTile(view(), at(1, 2))).toMatchObject({ title: "Would lift 2 neighbours.", action: "Claim row 2, column 3" });
+    expect(describeTile(view(), at(1, 2))).toEqual({
+      title: "Would lift 2 neighbours. Settling here brings Mia's tower to 1 of 8.",
+      action: "Claim row 2, column 3",
+      open: true,
+    });
     expect(describeTile(view(), at(9, 9)).title).toBe("No neighbours yet.");
   });
 
@@ -290,7 +295,7 @@ describe("the placement preview", () => {
     expect(cornersSeen).toBeGreaterThan(10);
     expect(movesSeen).toBeGreaterThan(10);
     expect(dormantTargets).toBeGreaterThan(50);
-  });
+  }, 30_000);
 
   it("names the lifted neighbours, diagonals and edges included", () => {
     const { store, view } = scene();
@@ -324,7 +329,7 @@ describe("the placement preview", () => {
     store.claim(at(5, 6), MIA, "Mia", NOW);
     expect(describeTile(view(), at(9, 9)).title).toBe("No neighbours yet. Moving drops 1.");
     store.claim(at(1, 1), KAI, "Kai", NOW);
-    expect(describeTile(view(), at(1, 2)).title).toBe("Would lift 1 neighbour. Moving drops 1.");
+    expect(describeTile(view(), at(1, 2)).title).toBe("Would lift 1 neighbour. Moving drops 1. Settling here brings Kai's tower to 1 of 8.");
   });
 });
 
@@ -397,5 +402,230 @@ describe("which board to show", () => {
     // Same server: the stream last sent 100, my claim's reply showed 101, and
     // the reconnect's first board is still 100.
     expect(accepts(101, 100, 100)).toBe(false);
+  });
+});
+
+// --- the room's goal: landmarks (docs/adr/0004) ---
+
+type Goal = { count: number; closest: { id: number; label: string; height: number; mine: boolean; name: string } | null; helps: number[] };
+const goalOf = (board: unknown): Goal => goal(board);
+const line = (board: unknown): string => {
+  const p = goalParts(goal(board));
+  return `${p.count} ${p.noun} raised · ${p.lead}${p.who}${p.tail}`;
+};
+const landmark = (cellId: number, raisers: string[]): Landmark => ({ cellId, label: raisers[0], raisers, raisedAt: NOW.toISOString() });
+const NINE = ["Mia", "Kai", "Zoe", "Ari", "Bo", "Cy", "Di", "Ed", "Flo"];
+
+describe("the goal line", () => {
+  const OLD = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+
+  it("names the tower closest to 8, with the landmarks raised so far", () => {
+    const { store } = scene();
+    store.claim(at(4, 4), MIA, "Mia", NOW);
+    store.claim(at(4, 5), KAI, "Kai", NOW);
+    store.claim(at(5, 4), ZOE, "Zoe", NOW);
+    const board = boardView(store.tiles(), ME, NOW, [landmark(at(9, 9), NINE)]);
+    // All three stand at 2 (Kai and Zoe are diagonal): the tie goes to Mia's lower id.
+    expect(goalOf(board).closest).toMatchObject({ id: at(4, 4), label: "Mia", height: 2 });
+    expect(line(board)).toBe("1 landmark raised · Closest: Mia's tower, 2 of 8");
+  });
+
+  it("breaks a tie by the lower cell id, and calls my own tower mine", () => {
+    const { store, view } = scene();
+    store.claim(at(6, 6), KAI, "Kai", NOW);
+    store.claim(at(6, 7), ME, "Me", NOW);
+    // Kai (78) and I (79) both stand at 1: Kai's is the lower id.
+    expect(line(view())).toBe("0 landmarks raised · Closest: Kai's tower, 1 of 8");
+    store.claim(at(7, 8), MIA, "Mia", NOW); // beside me, not Kai: I'm at 2
+    expect(line(view())).toBe("0 landmarks raised · Closest: your tower, 2 of 8");
+  });
+
+  it("skips edge tiles, faded towers and towers that are already landmarks", () => {
+    const { store } = scene();
+    // An edge tower at 3 can never reach 8.
+    store.claim(at(0, 4), MIA, "Mia", NOW);
+    store.claim(at(0, 3), `a`, "A", NOW);
+    store.claim(at(0, 5), `b`, "B", NOW);
+    store.claim(at(1, 4), `c`, "C", NOW); // interior, height 3 too, id 16
+    // A faded tower at 2 doesn't count.
+    store.claim(at(8, 8), ZOE, "Zoe", OLD);
+    store.claim(at(8, 9), `d`, "D", NOW);
+    store.claim(at(9, 8), `e`, "E", NOW);
+    const plain = boardView(store.tiles(), ME, NOW);
+    expect(goalOf(plain).closest).toMatchObject({ id: at(1, 4), label: "C", height: 3 });
+    // C's cell already has a landmark: the next is D or E at 1 (Zoe is faded,
+    // so she lifts nobody); A and B are on the edge.
+    const marked = boardView(store.tiles(), ME, NOW, [landmark(at(1, 4), NINE)]);
+    expect(goalOf(marked).closest).toMatchObject({ id: at(8, 9), height: 1 });
+  });
+
+  it("says how to start a tower when none stands above 0", () => {
+    const { store, view } = scene();
+    expect(line(view())).toBe("0 landmarks raised · Start a tower by someone");
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    expect(goalOf(view()).closest).toBeNull();
+    // ...and every spot beside Mia glows, since settling there starts one.
+    expect(goalOf(view()).helps.sort((a, b) => a - b)).toEqual([at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6), at(6, 4), at(6, 5), at(6, 6)]);
+  });
+});
+
+describe("helpful tiles", () => {
+  const OLD = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+  // Mia at the centre of a 3x3 block round (5,5), with the given gaps.
+  function towerWithGaps(gaps: number[]): { store: Store; view: (pid?: string) => ReturnType<typeof boardView> } {
+    const s = scene();
+    s.store.claim(at(5, 5), MIA, "Mia", NOW);
+    let n = 0;
+    for (const id of [at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6), at(6, 4), at(6, 5), at(6, 6)]) {
+      if (!gaps.includes(id)) s.store.claim(id, `n${n}`, `N${n++}`, NOW);
+    }
+    return s;
+  }
+
+  it("glows the gaps round the closest tower, and the preview says what they'd do", () => {
+    const { store, view } = towerWithGaps([at(4, 4), at(6, 6)]);
+    store.claim(at(4, 4), ZOE, "Zoe", OLD); // one gap is faded: still a gap
+    const board = view();
+    expect(goalOf(board).closest).toMatchObject({ label: "Mia", height: 6 });
+    expect(goalOf(board).helps).toContain(at(4, 4));
+    expect(goalOf(board).helps).toContain(at(6, 6));
+    expect(describeTile(board, at(6, 6)).title).toBe("Would lift 3 neighbours. Settling here brings Mia's tower to 7 of 8.");
+    expect(inspect(board, at(4, 4), NOW).facts).toContainEqual(["Goal", "Settling here brings Mia's tower to 7 of 8"]);
+    // A tile beside nobody in particular doesn't glow.
+    expect(goalOf(board).helps).not.toContain(at(10, 10));
+  });
+
+  it("says it raises a landmark when it fills the last gap", () => {
+    const { view } = towerWithGaps([at(6, 6)]);
+    expect(helpsWith(view(), at(6, 6))).toMatchObject({ id: at(5, 5), landmark: true });
+    expect(describeTile(view(), at(6, 6)).title).toBe("Would lift 3 neighbours. Settling here raises a landmark!");
+    expect(goalOf(view()).helps).toContain(at(6, 6));
+  });
+
+  it("doesn't glow a gap round a tower that's already a landmark", () => {
+    const { store } = towerWithGaps([at(6, 6)]);
+    const board = boardView(store.tiles(), ME, NOW, [landmark(at(5, 5), NINE)]);
+    expect(helpsWith(board, at(6, 6))?.id).not.toBe(at(5, 5));
+  });
+
+  it("doesn't count my own move round the same tower as help", () => {
+    const { store, view } = towerWithGaps([at(4, 4), at(6, 6)]);
+    store.claim(at(4, 4), ME, "Me", NOW); // I fill one gap; the other is left
+    // Moving from one gap to the other leaves Mia where she is.
+    expect(helpsWith(view(), at(6, 6))?.id).not.toBe(at(5, 5));
+  });
+
+  // Held equal to the server's rule: on random boards, each tile is claimed
+  // (on a copy of the rows, through the server's heights()) and goal() has to
+  // agree on which towers it raises and how high.
+  it("agrees with the server's heights on random boards", () => {
+    let glowing = 0;
+    let dark = 0;
+    let landmarksSeen = 0;
+    for (let seed = 1; seed <= 25; seed++) {
+      const rand = rng(seed * 7919);
+      const store = openStore(":memory:");
+      const density = 0.3 + rand() * 0.6;
+      const mineAt = rand() < 0.6 ? Math.floor(rand() * 144) : -1;
+      for (let id = 0; id < 144; id++) {
+        if (id === mineAt) store.claim(id, ME, "Me", NOW);
+        else if (rand() < density) store.claim(id, `p${id}`, `P${id}`, rand() < 0.2 ? OLD : NOW);
+      }
+      const rows = store.tiles().map((t) => ({ ...t }));
+      // a landmark on a random held interior cell, so they're skipped too
+      const marked = rows.filter((t) => t.claimerId && t.id % 12 > 0 && t.id % 12 < 11 && t.id > 11 && t.id < 132);
+      const marks = marked.length && rand() < 0.5 ? [landmark(marked[Math.floor(rand() * marked.length)].id, NINE)] : [];
+      const board = boardView(rows, ME, NOW, marks);
+      const real = heights(rows, NOW);
+      const g = goalOf(board);
+
+      // The closest tower, worked out here from the server's heights.
+      const interior = (id: number) => id > 11 && id < 132 && id % 12 > 0 && id % 12 < 11;
+      const live = (t: (typeof rows)[number]) => t.claimerId !== null && !(t.lastSeenAt! < new Date(NOW.getTime() - 86_400_000).toISOString());
+      const contenders = rows.filter((t) => live(t) && interior(t.id) && !marks.some((m) => m.cellId === t.id));
+      const peak = Math.max(-1, ...contenders.map((t) => real[t.id]));
+      const top = contenders.find((t) => real[t.id] === peak);
+      if (peak > 0) expect(g.closest, `seed ${seed}`).toMatchObject({ id: top!.id, height: peak });
+      else expect(g.closest).toBeNull();
+
+      for (const t of board.tiles) {
+        if (t.state === "held" || t.state === "mine") {
+          expect(g.helps).not.toContain(t.id);
+          continue;
+        }
+        // Claim it for real: my old tile frees, this one is mine and here.
+        const after = rows.map((r) =>
+          r.id === t.id ? { ...r, claimerId: ME, label: "Me", lastSeenAt: NOW.toISOString() } : r.claimerId === ME ? { ...r, claimerId: null, label: null } : r,
+        );
+        const hs = heights(after, NOW);
+        const raisedTo = contenders.filter((c) => c.claimerId !== ME && hs[c.id] > real[c.id]).map((c) => hs[c.id]);
+        const selfLandmark = interior(t.id) && hs[t.id] >= 8 && !marks.some((m) => m.cellId === t.id);
+        const best = Math.max(-1, ...raisedTo);
+        const shouldGlow = selfLandmark || raisedTo.some((h) => h >= 8) || (raisedTo.length > 0 && best >= (peak < 0 ? Infinity : peak));
+        expect(g.helps.includes(t.id), `seed ${seed} tile ${t.id}`).toBe(shouldGlow);
+        const h = helpsWith(board, t.id);
+        if (selfLandmark) expect(h).toMatchObject({ id: t.id, landmark: true });
+        else if (raisedTo.length) expect(h?.height, `seed ${seed} tile ${t.id}`).toBe(best);
+        else expect(h).toBeNull();
+        if (shouldGlow) glowing++;
+        else dark++;
+        if (h?.landmark) landmarksSeen++;
+      }
+    }
+    expect(glowing).toBeGreaterThan(100);
+    expect(dark).toBeGreaterThan(100);
+    expect(landmarksSeen).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe("landmarks on the board", () => {
+  it("names the nine who raised one, in the tile's label and the inspector", () => {
+    const { store } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    const board = boardView(store.tiles(), ME, NOW, [landmark(at(5, 5), NINE)]);
+    expect(tileAria(board.tiles[at(5, 5)].aria, board.landmarks.cells[String(at(5, 5))])).toBe(
+      "Row 6, column 6, held by Mia, height 0. Landmark raised by Mia, Kai, Zoe, Ari, Bo, Cy, Di, Ed and Flo",
+    );
+    expect(inspect(board, at(5, 5), NOW).facts[0]).toEqual(["Landmark", "raised by Mia, Kai, Zoe, Ari, Bo, Cy, Di, Ed and Flo"]);
+  });
+
+  it("celebrates with one line naming all nine", () => {
+    expect(raisedText({ cellId: at(3, 3), label: "Mia", raisers: NINE })).toBe(
+      "Landmark raised at row 4, column 4 by Mia, Kai, Zoe, Ari, Bo, Cy, Di, Ed and Flo!",
+    );
+  });
+
+  it("is rendered by the server the way the page draws it: goal line, glow and crown", () => {
+    const { store } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    store.claim(at(5, 6), KAI, "Kai", NOW);
+    const view = boardView(store.tiles(), ME, NOW, [landmark(at(5, 6), NINE)]);
+    const doc = new JSDOM(renderBoard(view, "")).window.document;
+    const hud = doc.querySelector("[data-goal]")!.textContent!.replace(/\s+/g, " ");
+    expect(hud).toBe("1 landmark raised · Closest: Mia's tower, 1 of 8");
+    const glowing = [...doc.querySelectorAll<HTMLButtonElement>("button.tile[data-helps]")].map((b) => Number(b.value));
+    expect(glowing.sort((a, b) => a - b)).toEqual(goalOf(view).helps.sort((a, b) => a - b));
+    expect(glowing.length).toBeGreaterThan(0);
+    const crowned = doc.querySelector<HTMLButtonElement>(`button.tile[value="${at(5, 6)}"]`)!;
+    expect(crowned.querySelector(":scope > .crown")).not.toBeNull();
+    expect(crowned.getAttribute("aria-label")).toMatch(/\. Landmark raised by Mia, Kai, .* and Flo$/);
+    expect(doc.querySelectorAll(".crown")).toHaveLength(1);
+  });
+});
+
+describe("waving", () => {
+  it("is offered only at someone else's held tile beside mine, while I hold one", () => {
+    const { store, view } = scene();
+    const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+    store.claim(at(5, 6), MIA, "Mia", NOW);
+    store.claim(at(5, 8), KAI, "Kai", NOW);
+    expect(canWave(view(), at(5, 6))).toBeNull(); // I hold nothing yet
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(4, 4), ZOE, "Zoe", old);
+    expect(canWave(view(), at(5, 6))).toEqual({ id: at(5, 6), label: "Mia" });
+    expect(canWave(view(), at(5, 8))).toBeNull(); // not beside me
+    expect(canWave(view(), at(5, 5))).toBeNull(); // my own
+    expect(canWave(view(), at(6, 6))).toBeNull(); // free
+    expect(canWave(view(), at(4, 4))).toBeNull(); // faded: nobody there to see it
   });
 });
