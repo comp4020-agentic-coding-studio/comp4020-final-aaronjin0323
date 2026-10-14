@@ -15,7 +15,9 @@ commitments:
    Your height comes only from your neighbours, and every claim reaches every
    open screen within a second. When you settle, the tiles you lift show +1
    and you're told whose they were; when someone settles beside you, you're
-   told who.
+   told who. The room's goal is landmarks: a tower ringed by eight people
+   who are here. It takes nine of you, the page always shows the closest
+   one, and you can wave at whoever's beside you.
 2. **Your mark stays while you're part of the room.** A claim survives
    closing the tab, a restart and a redeploy. After a day away your tile
    fades: it keeps standing but stops lifting your neighbours, and a
@@ -64,4 +66,5 @@ and whether the board looks good at a glance.
 - **Taking tiles from people who are here.** It would make the game about
   aggression rather than proximity. Only a faded tile is open.
 - **Chat and live cursors.** The board is the conversation; chat would turn
-  it into a chat room with a grid attached.
+  it into a chat room with a grid attached. A wave to a neighbour carries no
+  words, so it stays a gesture.

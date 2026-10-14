@@ -200,6 +200,42 @@ whole point. So:
   is worked out by comparing the board before and after, the same rule as
   the page's +1/−1.
 
+### A goal for the room, and something to do with your neighbours
+
+Playing it found the game was one action: claim, then wait. Recorded in
+`docs/adr/0004-landmarks-and-waves.md`.
+
+- **The goal is landmarks.** A tower becomes a landmark when it reaches
+  height 8, all 8 neighbours held by people who are around. Nine people are
+  needed, so it's cooperation by definition, and every gap round a nearly
+  finished tower is a reason to move.
+- **Landmarks are stored, permanent, and only ever counted up.** Migration 3
+  adds `landmarks (id INTEGER PRIMARY KEY, cell_id INTEGER, label TEXT,
+  raisers TEXT, raised_at TEXT)`, with `raisers` a JSON array of the nine
+  labels and no `pid`. One row per raising: a tower that drops and reaches 8
+  again on the same cell doesn't record a second. They can't be derived,
+  because the people who raised one may have left.
+- **A landmark is a mark on the spot, not a lock.** Ownership rules are
+  unchanged: its holder can move, and the tile can fade and be settled. It
+  shows as a crown on that cell.
+- **The only room-wide message is a landmark being raised.** Every open
+  page celebrates it briefly and names the nine. Everything else is still
+  narrated for your own tile only.
+- **The page always shows what's next:** landmarks raised so far, and the
+  tower closest to 8 ("Mia's tower, 6 of 8"). Tiles that would bring a tower
+  closer glow (`data-helps`), and the preview and inspector say so. This is
+  worked out on the page from the board, like the +1/−1, and held equal to
+  the server's heights by a test.
+- **Each `board` event carries `landmarks`** (count, plus per raised cell
+  its label and raisers) and, once, a `raised` entry for a landmark that
+  just happened, so a reconnecting page doesn't replay old celebrations.
+- **Neighbours can wave.** Selecting a neighbour's tower offers a Wave
+  button: `POST /wave` with `cellId`, same-origin like `/claim`. It's allowed
+  only from someone holding a tile, at a held tile next to theirs, at most
+  once per pair every 10 s (`429` otherwise). The server pushes a `wave`
+  event `{ from: cellId, label }` to the holder's streams only. No text,
+  never stored, not offered without JS. Logged as `wave who=… at=… to=…`.
+
 ### Seeing a claim before and while you make it
 
 - **A placement preview, never a change.** Hover, keyboard focus or a phone
@@ -332,11 +368,10 @@ and delete the line when one is settled.
   matching rule here or a check in `spec/`, and the README says which claims
   are tested and which are judged.
 - **The rest of the roadmap (weeks 11--12)**, from the same review:
-  "N here now" (a count of open streams); a warning before a move ("moving
-  will drop 3 neighbours"); a shared room score ("room skyline: 46 floors"),
-  which rises only when people cluster; and "since you left, 4 people
-  settled near you" on return, which needs the server to remember the board
-  at your last visit.
+  "N here now" (a count of open streams); "since you left, 4 people settled
+  near you" on return; a "room here" invite marker; a cooldown on moving.
+  The move warning shipped as the preview's "drop" marks, and the room
+  score became landmarks (ADR 4).
 
 ## How to work in here
 
