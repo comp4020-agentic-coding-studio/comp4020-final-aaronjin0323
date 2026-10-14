@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
-import { isDormant, openStore, TILES } from "./db.ts";
-import { at, claimEffects, dormancyDrops, holder, log, people, raw, who } from "./log.ts";
+import { isDormant, type Landmark, N, openStore, TILES } from "./db.ts";
+import { at, claimEffects, dormancyDrops, holder, log, people, quote, raw, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -33,16 +33,35 @@ const streams = new Set<Stream>();
 // or out of order can keep the newest. Seeded from the clock so it keeps
 // rising across a restart, when every page reconnects.
 let version = Date.now();
-const versioned = (pid: string, now: Date) => ({ ...boardView(store.tiles(), pid, now), version });
+const view = (pid: string, now: Date) => boardView(store.tiles(), pid, now, store.landmarks());
+const versioned = (pid: string, now: Date) => ({ ...view(pid, now), version });
 
-function sendBoard(stream: Stream, now: Date): void {
-  stream.res.write(`event: board\ndata: ${JSON.stringify(versioned(stream.pid, now))}\n\n`);
+// A landmark just raised, as the one broadcast after it carries it. Only the
+// newest if two were finished by the same change; both are in `landmarks`.
+type Raised = { cellId: number; label: string; raisers: string[] };
+
+function sendBoard(stream: Stream, now: Date, raised?: Raised): void {
+  const board = raised ? { ...versioned(stream.pid, now), raised } : versioned(stream.pid, now);
+  stream.res.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);
 }
 
-// Called after every change, and only then.
+// Called after every change, and only then. Every change that can lift a
+// tower (a claim, a visit that wakes a tile) broadcasts, so this is where a
+// landmark is noticed: in the same synchronous turn as the change, so no other
+// request comes between them. One just raised is logged and goes out on this
+// broadcast only: a stream that connects later gets it in `landmarks` but
+// never as `raised`, so a reconnecting page doesn't celebrate it again.
 function broadcast(now = new Date()): void {
   version = Math.max(version + 1, Date.now());
-  for (const stream of streams) sendBoard(stream, now);
+  const raised = store.raise(now);
+  for (const l of raised) logLandmark(l);
+  const last = raised.at(-1);
+  const news = last ? { cellId: last.cellId, label: last.label, raisers: last.raisers } : undefined;
+  for (const stream of streams) sendBoard(stream, now, news);
+}
+
+function logLandmark(l: Landmark): void {
+  log("landmark", { at: at(l.cellId), label: l.label, raisers: raw(l.raisers.map(quote).join(",")) });
 }
 
 function openStream(req: IncomingMessage, res: ServerResponse): void {
@@ -123,9 +142,15 @@ setInterval(() => {
     }
     lastDormant = key;
   }
+  // The clock alone only lowers towers; a visit above that woke one is
+  // `moved`, so broadcast() looks for landmarks whenever one could be new.
   if (crossed || moved) broadcast(now);
 }, SWEEP_MS).unref();
 lastDormant = dormantKey(new Date());
+// A tower already standing at 8 when the server starts (say, a database from
+// before migration 3) is recorded now. It's logged, not celebrated: nobody
+// watched it happen, and the first broadcast shouldn't replay it.
+for (const l of store.raise(new Date())) logLandmark(l);
 
 const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -301,6 +326,64 @@ async function postClaim(req: IncomingMessage, res: ServerResponse): Promise<voi
   redirect(res, "/?notice=claimed");
 }
 
+// --- waves (docs/adr/0004) ---
+// A live gesture between neighbours: checked like a claim, pushed only to the
+// person waved at, and never stored. The rate limit is held in memory, keyed
+// by both pids, so a restart forgets it, which costs nothing.
+const WAVE_EVERY_MS = 10_000;
+const lastWave = new Map<string, number>();
+
+// 8-neighbours: one step in any direction, never wrapping round an edge.
+const besides = (a: number, b: number): boolean =>
+  a !== b && Math.abs(Math.floor(a / N) - Math.floor(b / N)) <= 1 && Math.abs((a % N) - (b % N)) <= 1;
+
+async function postWave(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const refused = (pid: string | null, status: number, reason: string, target: number | null = null): void => {
+    log("wave.refused", {
+      who: pid ? who(pid) : raw("-"),
+      status,
+      reason: raw(reason),
+      to: target === null ? undefined : at(target),
+    });
+    if (status === 403) return send(res, 403, "text/plain; charset=utf-8", "Cross-site wave refused");
+    if (status === 413) return send(res, 413, "text/plain; charset=utf-8", "Too large");
+    sendJson(res, status, { error: reason });
+  };
+
+  if (!sameOrigin(req)) {
+    const cookie = cookies(req).pid;
+    return refused(cookie && PID.test(cookie) ? cookie : null, 403, "cross-site");
+  }
+  const pid = identify(req, res);
+  const body = await readBody(req);
+  if (body === null) return refused(pid, 413, "too-large");
+  const target = validCell(parseFields(req, body).cellId);
+  if (target === null) return refused(pid, 400, "cell");
+
+  const tiles = store.tiles();
+  const mine = tiles.find((t) => t.claimerId === pid);
+  if (!mine) return refused(pid, 409, "no-tile", target);
+  // A faded neighbour is still a person, so they can be waved at.
+  const them = tiles[target];
+  if (them.claimerId === null || them.claimerId === pid || !besides(mine.id, target)) {
+    return refused(pid, 400, "not-neighbour", target);
+  }
+  const pair = `${pid} ${them.claimerId}`;
+  const now = Date.now();
+  if (now - (lastWave.get(pair) ?? -Infinity) < WAVE_EVERY_MS) return refused(pid, 429, "too-soon", target);
+  lastWave.set(pair, now);
+  for (const [key, when] of lastWave) if (now - when >= WAVE_EVERY_MS) lastWave.delete(key);
+
+  // From a cell and the label already on the board: nothing typed with the
+  // wave, and no pid.
+  const wave = JSON.stringify({ from: mine.id, label: mine.label ?? "" });
+  for (const stream of streams) {
+    if (stream.pid === them.claimerId) stream.res.write(`event: wave\ndata: ${wave}\n\n`);
+  }
+  log("wave", { who: who(pid), at: at(mine.id), to: who(them.claimerId) });
+  sendJson(res, 200, { ok: true });
+}
+
 // Static files from a fixed root, never outside it.
 async function serveFile(res: ServerResponse, root: string, rel: string): Promise<void> {
   const base = resolve(root);
@@ -345,7 +428,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (displaced) log("displaced.seen", { who: who(pid) });
     const tiles = store.tiles();
     const myLabel = tiles.find((t) => t.claimerId === pid)?.label ?? "";
-    const html = renderBoard(boardView(tiles, pid, now), myLabel, {
+    const html = renderBoard(boardView(tiles, pid, now, store.landmarks()), myLabel, {
       notice: isNotice(notice) ? notice : null,
       displaced,
       version,
@@ -353,6 +436,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return send(res, 200, "text/html; charset=utf-8", html);
   }
   if (path === "/claim" && req.method === "POST") return postClaim(req, res);
+  if (path === "/wave" && req.method === "POST") return postWave(req, res);
   if (path === "/events" && req.method === "GET") return openStream(req, res);
   if (path === "/readme") return redirect(res, "/readme/");
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {

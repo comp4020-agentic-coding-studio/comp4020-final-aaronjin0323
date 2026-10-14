@@ -8,7 +8,7 @@ export const TILES = N * N;
 
 // A tile whose holder hasn't visited for this long is dormant: still theirs
 // and still standing, but anyone may settle there
-// (docs/adr/0001-dormant-tiles.md).
+// (docs/adr/0003-faded-tiles-lift-nobody.md).
 export const DORMANT_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export type Tile = {
@@ -23,6 +23,14 @@ export type ClaimResult = "claimed" | "taken";
 
 export type Displacement = { label: string; cellId: number; displacedAt: string };
 
+// A tower that reached height 8, recorded for good (docs/adr/0004). The
+// raisers are labels, holder first, then the eight neighbours in board order:
+// never a pid, since the row outlives everyone in it and is shown to anyone.
+export type Landmark = { cellId: number; label: string; raisers: string[]; raisedAt: string };
+
+// A tile at this height has all 8 neighbours held by people who are around.
+export const LANDMARK_HEIGHT = 8;
+
 export type Store = {
   tiles(): Tile[];
   claim(tileId: number, claimerId: string, label: string, now: Date): ClaimResult;
@@ -30,6 +38,12 @@ export type Store = {
   touch(claimerId: string, now: Date): boolean;
   // The visitor's pending "someone settled on your tile" notice, read once.
   takeDisplacement(claimerId: string): Displacement | null;
+  // Every landmark raised so far, oldest first.
+  landmarks(): Landmark[];
+  // Records a landmark for every held, non-dormant tile standing at height 8
+  // whose cell has never had one, and returns those just recorded. Run after
+  // any change that can lift a tower: a claim, a visit, the clock.
+  raise(now: Date): Landmark[];
   close(): void;
 };
 
@@ -68,6 +82,18 @@ const MIGRATIONS = [
      cell_id      INTEGER NOT NULL,
      displaced_at TEXT NOT NULL
    );`,
+
+  // 3. Crit 10 (week 11): landmarks, docs/adr/0004. Nothing to backfill: a
+  // tower already standing at 8 is recorded by the first raise(). One row
+  // per cell ever, held by the unique index as well as the code.
+  `CREATE TABLE landmarks (
+     id        INTEGER PRIMARY KEY,
+     cell_id   INTEGER,
+     label     TEXT,
+     raisers   TEXT,
+     raised_at TEXT
+   );
+   CREATE UNIQUE INDEX one_landmark_each ON landmarks(cell_id);`,
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -124,6 +150,19 @@ export function openStore(path: string): Store {
     "SELECT label, cell_id AS cellId, displaced_at AS displacedAt FROM displaced WHERE claimer_id = ?",
   );
   const forget = db.prepare("DELETE FROM displaced WHERE claimer_id = ?");
+  // Prepared on first use: tests open stores by the thousand and most never
+  // look at a landmark. OR IGNORE on the unique cell: a tower that drops and
+  // reaches 8 again records nothing new.
+  const lazy = (sql: string) => {
+    let stmt: ReturnType<DatabaseSync["prepare"]> | undefined;
+    return () => (stmt ??= db.prepare(sql));
+  };
+  const selectLandmarks = lazy(
+    "SELECT cell_id AS cellId, label, raisers, raised_at AS raisedAt FROM landmarks ORDER BY id",
+  );
+  const recordLandmark = lazy(
+    "INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at) VALUES (?, ?, ?, ?)",
+  );
 
   type Holder = { claimerId: string | null; label: string | null; lastSeenAt: string | null };
 
@@ -173,6 +212,55 @@ export function openStore(path: string): Store {
       if (!row) return null;
       forget.run(claimerId);
       return { label: row.label, cellId: row.cellId, displacedAt: row.displacedAt };
+    },
+
+    landmarks: () =>
+      (selectLandmarks().all() as { cellId: number; label: string; raisers: string; raisedAt: string }[]).map((r) => ({
+        cellId: r.cellId,
+        label: r.label,
+        raisers: JSON.parse(r.raisers) as string[],
+        raisedAt: r.raisedAt,
+      })),
+
+    // Not inside claim() and touch(): a claim stays three statements, which
+    // the page's preview test makes by the hundred thousand. The server runs
+    // this straight after every change, in the same synchronous turn, so no
+    // other request can come between the two. Heights are heights(tiles,
+    // now)'s rule: a tile's claimed, non-dormant neighbours, so a faded
+    // neighbour lifts nobody, and a faded holder isn't around to raise one.
+    raise(now) {
+      const tiles = selectAll.all() as Tile[];
+      const around = (t: Tile | undefined): t is Tile => t !== undefined && t.claimerId !== null && !isDormant(t, now);
+      const raised: Landmark[] = [];
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const tile of tiles) {
+          if (!around(tile)) continue;
+          const row = Math.floor(tile.id / N);
+          const col = tile.id % N;
+          const neighbours: Tile[] = [];
+          for (let r = row - 1; r <= row + 1; r++) {
+            for (let c = col - 1; c <= col + 1; c++) {
+              if ((r === row && c === col) || r < 0 || r >= N || c < 0 || c >= N) continue;
+              if (around(tiles[r * N + c])) neighbours.push(tiles[r * N + c]);
+            }
+          }
+          if (neighbours.length < LANDMARK_HEIGHT) continue;
+          const landmark: Landmark = {
+            cellId: tile.id,
+            label: tile.label ?? "",
+            raisers: [tile, ...neighbours].map((t) => t.label ?? ""),
+            raisedAt: now.toISOString(),
+          };
+          const added = recordLandmark().run(tile.id, landmark.label, JSON.stringify(landmark.raisers), landmark.raisedAt);
+          if (Number(added.changes) === 1) raised.push(landmark);
+        }
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+      return raised;
     },
 
     close: () => db.close(),
