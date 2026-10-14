@@ -50,22 +50,27 @@ commitments:
 
 Checked by `spec/` on every run, against the running app: a claim reaches two
 other open sessions within one second; it persists; the first claim wins;
-one person holds one tile; a tile is safe for 24 hours and claimable after,
-with its holder told once (on a simulated clock); upgrading the database
-loses no claim; heights match claimed neighbours; the page names exactly the
-neighbours a claim lifted or dropped; names render as text; no one's identity
-cookie is ever sent to anyone else.
+one person holds one plot; a lease ends on time and its land comes back
+free, even if the server was off (on a simulated clock); income is paid at
+the rate each building really had, minute by minute, as neighbours come and
+go, never more than once and never past 4 hours; coins never go negative;
+upgrades, moves, renewals and help follow their costs, limits and cooldowns;
+upgrading the database loses no claim; heights are level plus neighbours;
+names render as text; no one's identity cookie, coins or income is ever sent
+to anyone else.
 
 Judged by people, not tests: whether rising beside strangers actually feels
-rewarding, whether a newcomer understands the rules without reading this page,
-and whether the board looks good at a glance.
+rewarding, whether the economy's numbers make choices feel worth making,
+whether a newcomer understands the rules without reading this page, and
+whether the board looks good at a glance.
 
 ## What I left out
 
 - **Accounts.** They'd stop a stranger joining in seconds. A cookie tells
   people apart well enough for one room.
 - **Taking tiles from people who are here.** It would make the game about
-  aggression rather than proximity. Only a faded tile is open.
+  aggression rather than proximity. Land only comes back when a lease runs
+  out.
 - **Chat and live cursors.** The board is the conversation; chat would turn
-  it into a chat room with a grid attached. A wave to a neighbour carries no
+  it into a chat room with a grid attached. Helping a neighbour carries no
   words, so it stays a gesture.
