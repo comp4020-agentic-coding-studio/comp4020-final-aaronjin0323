@@ -15,14 +15,15 @@ commitments:
    Your height comes only from your neighbours, and every claim reaches every
    open screen within a second. When you settle, the tiles you lift show +1
    and you're told whose they were; when someone settles beside you, you're
-   told who. The room's goal is landmarks: a tower ringed by eight people
-   who are here. It takes nine of you, the page always shows the closest
-   one, and you can wave at whoever's beside you.
-2. **Your mark stays while you're part of the room.** A claim survives
-   closing the tab, a restart and a redeploy. After a day away your tile
-   fades: it keeps standing but stops lifting your neighbours, and a
-   newcomer may settle there; you're told if they do.
-   [Why a day, and what it costs](docs/adr/0003-faded-tiles-lift-nobody.md).
+   told who. Every neighbour also adds a fifth to your building's income,
+   so standing beside strangers pays. The room's goal is landmarks: a
+   building ringed by eight others. It takes nine of you, and you can help
+   whoever's beside you.
+2. **Land is borrowed; what you build with it is yours.** A plot is a
+   24-hour lease you can renew with coins, up to two days, then it returns
+   to the room. Your coins survive the tab closing, a restart, a redeploy
+   and losing your land, so you can always build again.
+   [Why leases, and what they cost](docs/adr/0005-a-city-economy.md).
 3. **Anyone can join in seconds.** No account and no install: type a name,
    pick a tile. Drag the board to turn it, or play from the keyboard (WASD or
    arrows to move, Enter to claim). On a phone, tap a tile, then confirm.

@@ -30,12 +30,14 @@ row their `pid` holds, or a row nobody is still around for.
 | Anyone | Never another person's `pid` | | `pid` never enters `TileView`; hue is a one-way hash of it (`hue`, `src/board.ts`); the cookie is `HttpOnly` (`identify`, `src/server.ts`) |
 | You | Your own tile as "mine", your status line, your one-time displacement notice | | Per request and per stream: `boardView(tiles, pid)`; each `/events` connection holds its own `pid` (`openStream`); `takeDisplacement(pid)` |
 | You | | Claim a free tile | `take`'s `WHERE claimer_id IS NULL …` in `claim`, `src/db.ts`; the change count decides who won |
-| You | | Claim a dormant tile (away over 24 h) | Same `WHERE … OR last_seen_at < cutoff`; the old holder is recorded in `displaced` ([ADR 3](0003-faded-tiles-lift-nobody.md)) |
+| You | | Claim a plot whose lease has ended | Expired is free: the same `WHERE` treats `lease_ends_at < now` as unheld ([ADR 5](0005-a-city-economy.md)) |
+| You | | Collect your own income, upgrade, renew or move your own building; help one neighbour an hour | Each POST settles income then changes only rows keyed by your `pid`, in one `BEGIN IMMEDIATE`; coins can't go below 0 (a `CHECK`), and costs and limits come from `src/economy.ts`, never the request |
+| Anyone | Every building's level, neighbour count, height, income rate and lease end; the latest public city events | | Your coins, uncollected income and cooldowns go only to your own stream (`me`) |
 | You | | Rename yourself, by claiming your own tile again | `relabel`'s `WHERE id = ? AND claimer_id = ?`, in `claim` |
 | You | | Move, which releases your old tile | `release` then `take` in one `BEGIN IMMEDIATE` transaction; a lost move rolls back and you keep your tile |
 | You | | Keep your tile awake, by visiting | `touch(pid)` on `GET /` and `/events`; it only ever updates the row your `pid` holds |
 | Anyone | Every landmark the room has raised, and the names of the nine people who raised it | | `raise` in `src/db.ts` stores labels only, never a `pid`, when a tower reaches 8 ([ADR 4](0004-landmarks-and-waves.md)) |
-| You | | Wave at a held tile next to yours, while you hold one; at most once per neighbour every 10 s | `postWave` in `src/server.ts` checks same-origin, the waver's tile, adjacency and the rate limit; the wave carries no typed text and reaches only the person waved at |
+| You | | Help a neighbour (their building is next to yours), once an hour: +50 to them, +20 to you | `/help` checks same-origin, your active land, adjacency and `last_helped_at` inside one transaction, so a repeated or simultaneous request can't pay twice (Help replaced Wave, ADR 5) |
 | Nobody | | Take a held tile that isn't dormant | The same `WHERE`: `409` (JSON) or `303 /?notice=taken` (form) |
 | Nobody | | Hold two tiles | The move transaction, and the unique index `one_tile_each` on `claimer_id` as a backstop |
 | Nobody | | Change another person's label or wake their tile | Every write is keyed by the requester's own `pid` |

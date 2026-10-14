@@ -46,9 +46,8 @@ Settled; change them here first, then in the code.
   holds row 5, column 6"), so "got there first" only ever means a real race.
 - **Grid is 12×12 (144 tiles).** `N = 12` is a constant in code, not a config
   table.
-- **Height = number of active claimed neighbours**, counting the 8
-  surrounding tiles (0--8) and skipping dormant ones. It's derived when the
-  page renders, never stored.
+- **Height = building level + occupied neighbours** (ADR 5), counting the
+  8 surrounding tiles. Derived when the page renders, never stored.
 - **The 3D board is CSS 3D transforms over real DOM buttons.** The board is
   tilted with `perspective`/`rotateX` and each tile is raised with
   `translateZ` by its height. Three.js/WebGL was the alternative and was
@@ -94,7 +93,59 @@ Settled; change them here first, then in the code.
   whatever production already holds. A committed migration is never edited;
   a fix is a new step.
 
-### Crit 9: real-time and leaving
+### The city economy (ADR 5) — this section wins over any older rule
+
+Skyline is a city game: land on a lease, buildings that earn coins. Read
+`docs/adr/0005-a-city-economy.md`. Where an older bullet below talks about
+dormant tiles, fading, waking by visiting, or waving, this section replaces
+it.
+
+- **Every game number lives in `src/economy.ts`**, nowhere else: starting
+  coins 100; base income 10/min; +20% per occupied neighbour; 4 h cap on
+  uncollected income; levels 1--5 (Small House, Townhouse, Apartment, Office
+  Building, Skyscraper) with upgrade costs 150, 400, 900, 1800; relocation
+  50 coins, 30 min cooldown; lease 24 h, renewals 6 h/100, 12 h/180,
+  24 h/300, never past 48 h from the ownership start; help +50 to the
+  neighbour, +20 to the helper, once an hour.
+- **Players are rows.** `players (pid PRIMARY KEY, label, coins INTEGER,
+  created_at, last_relocated_at, last_helped_at)`, created on first sight
+  with 100 coins. Coins are integers and never negative (a `CHECK`).
+- **A plot holds one building.** `cells` gains `level`, `lease_ends_at`,
+  `owned_since` (the start of this ownership, which caps renewals),
+  `pending_cents` (earned, not yet collected, in hundredths of a coin) and
+  `settled_at`. One active plot per player stays a unique index.
+- **Income is settled, never guessed.** `settle(now)` brings every building's
+  `pending_cents` up to `now` at the rate each one had since `settled_at`,
+  stopping at its lease end and at the 4 h cap. Every change that can alter
+  any rate (claim, relocate, upgrade, expiry, collect) runs `settle` first,
+  in the same `BEGIN IMMEDIATE` transaction, then applies the change. A rate
+  is never applied to time before the change that set it.
+- **A lease ends on the clock, not on absence.** Expired land is free on
+  read: a plot whose `lease_ends_at` is past is free for heights, claims and
+  income, whether or not a sweep has run. The sweep clears expired rows
+  (after settling them, so their earnings stay collectable on the player) and
+  broadcasts. Uncollected earnings from an ended lease move to
+  `players.unclaimed_cents`, collectable later.
+- **Each action is one POST, checked on the server, one transaction:**
+  `/claim` (also relocation, when you already hold land: 50 coins,
+  cooldown), `/collect`, `/upgrade`, `/renew` (`hours` 6|12|24), `/help`
+  (`cellId` of an adjacent neighbour). Same-origin, `pid` only, JSON or form
+  (form gets a `303` with a notice key, as `/claim` does). Refusals are
+  specific: `409` taken, `402` not enough coins, `429` cooldown, `400` bad
+  input or rule (`max-level`, `max-lease`, `not-neighbour`, `no-land`).
+  Nothing the client sends is trusted except the plot and option it picks.
+- **The board event carries public state for all, private state for you.**
+  Every tile: `{ state, label, hue, level, neighbours, height, rate,
+  leaseEndsAt }` (no `pid`). Your stream also gets `me: { coins, pending,
+  rate, cellId, level, leaseEndsAt, ownedSince, relocateAt, helpAt,
+  welcome? }`. The page counts `pending` up between events from `rate`, for
+  display only.
+- **The city log** is a table of public events (`type`, text fields, plot,
+  time; never a `pid`), the latest 8 sent on each board.
+- **Landmarks stay** (ADR 4): a building with all 8 neighbours occupied.
+  **Help replaces Wave**: `/wave` is removed.
+
+### Crit 9: real-time and leaving (superseded in part by ADR 5)
 
 - **Live updates over SSE** (`GET /events`). Claims stay `POST`s; the server
   pushes the board to every open page after any change. SSE fits bare
@@ -117,25 +168,15 @@ Settled; change them here first, then in the code.
   board updates from the response and the stream: no reload, and the camera
   and focus stay put. Without JS it's the `303` reload, as before, and other
   people's claims show on the next load.
-- **A tile goes dormant after 24 hours unvisited, and a dormant tile can be
-  claimed.** The tile never vanishes and stays yours while nobody needs the
-  room; visiting the page (or keeping it open) wakes it. A dormant tile shows
-  greyed. Recorded in `docs/adr/0003-faded-tiles-lift-nobody.md` with the
-  options turned down (ADR 1 is dropped). The cost to own: someone who comes back after a day
-  may find their tile taken.
-- **Being displaced is told, not hidden.** When a dormant tile is claimed,
-  the previous holder is recorded, and their next visit shows once: "Your
-  tile went quiet after a day away, and someone else settled there." A rule
+- **Replaced by ADR 5: dormant tiles, waking by visiting, and the "your
+  tile went quiet" notice.** ADR 1 (faded tiles still count) and ADR 3
+  (faded tiles stand, lift nobody, wake on a visit) are both dropped. Land
+  now ends on a lease clock and becomes free; nobody's tile fades.
+- **Losing land is told, not hidden.** The rule that survives from the
+  displaced notice: when a lease ends, the player's next visit says so
+  once ("Your land lease has expired. Choose a new plot to continue
+  building."), and their coins and uncollected earnings are kept. A rule
   that takes something from you has to be readable off the screen.
-- **An open page counts as a visit.** While a holder's stream is open, their
-  `last_seen_at` is bumped on connect and once a minute, so nobody playing
-  goes dormant.
-- **Dormant tiles don't count toward heights** (changed at crit 10; ADR 1
-  had them counting). Height counts only neighbours that are claimed and not
-  dormant, so the skyline shows who is around. A dormant tile still stands
-  and keeps its own height from its active neighbours. When a tile fades its
-  neighbours drop at the next sweep; when it wakes or someone settles there
-  they rise. `heights(tiles, now)` takes the clock for that reason.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
   on a tile selects it and shows a full-width "Claim row R, column C" bar;
   that button claims. Mouse and keyboard claim directly, as before. The bar
