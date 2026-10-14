@@ -214,8 +214,8 @@ whole point. So:
   `spec/diff.test.ts`.
 - **Scripts are ES modules, served `no-cache`,** so an `app.js` and a
   `diff.js` from different deploys can never run together.
-- **The lede is three short sentences.** The rules people need while playing
-  are on the tiles, the status line and the confirm bar, not in a paragraph.
+- **Superseded by "Show, don't tell" below:** the lede was three short
+  sentences; it's now one line.
 
 ### Crit 10: telling people apart, and who did what
 
@@ -311,6 +311,47 @@ Playing it found the game was one action: claim, then wait. Recorded in
   Within one stream, a lower version is still stale and dropped.
 - **The connection line says live, reconnecting or offline,** by shape as
   well as colour, and is hidden without JS.
+
+### Show, don't tell — this wins over any older layout rule
+
+Playing it cold, the first screen was too complicated to start: a full
+dashboard of empty stats, four greyed buttons, a goal line, a key and an
+activity list, before the player had done anything. The game is learned by
+playing, so the page guides with motion, highlight and numbers on the
+board, and as few words as possible.
+
+- **Show only what you can act on now.** Nothing is drawn disabled to
+  explain itself. A control appears when it becomes possible and goes when
+  it isn't: no land means no dashboard and no action buttons; Upgrade appears
+  once you can afford it; Renew once the lease is under 6 h; Relocate and
+  Help in the inspector of the plot you picked. The disabled-with-a-reason
+  pattern is gone.
+- **The first screen is one step.** Logo, a single-line tagline, the name
+  field, and the board with free plots gently glowing. Typing a name isn't a
+  gate: tapping a plot with no name focuses and pulses the name field, and
+  the claim goes through once a name is there. No instruction text beyond
+  the tagline and the field's placeholder.
+- **The board teaches.** Hovering, focusing or tapping a plot shows, on the
+  board itself, what claiming would do: a ghost building, `+N/min` floating
+  over it, and `+20%` over each neighbour it would lift. Money is shown as
+  coins flying from your building to your wallet when you collect, and a
+  `+N` that ticks up over your building while income waits.
+- **Numbers and icons over sentences.** The wallet is a coin icon and a
+  number. Income is `+12/min`. The lease is a draining ring round your
+  building, not "23 h 59 m". Words stay only where an icon would be
+  ambiguous, and every icon still has an accessible name.
+- **One message at a time, short.** Narration is at most one line of a few
+  words ("Kai built beside you, +20%"), shown briefly near the thing it's
+  about, and spoken through the live region. No stacked notices, no
+  paragraphs.
+- **Secondary things are tucked away until asked for.** The map key, the
+  city activity list, the camera buttons and the keyboard hint sit behind
+  small icon buttons (or appear after your first claim), not on the first
+  screen. The landmark goal shows only once someone's building has 5+
+  neighbours.
+- **Accessibility is kept, not traded away.** Every visual cue has a
+  text equivalent for screen readers, keyboard and no-JS paths still work,
+  and reduced motion replaces motion with a static highlight.
 
 ### The look
 
