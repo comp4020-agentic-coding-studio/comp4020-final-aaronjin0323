@@ -22,7 +22,10 @@ empty or faded spot around a nearly finished tower is a reason to move.
 - **A landmark is permanent.** It's recorded when it's raised (a new
   `landmarks` table, by migration: cell, holder's label, the eight neighbour
   labels, time) and stays raised even after people leave. The room's score
-  only goes up.
+  only goes up. The check runs on every broadcast, in the same synchronous
+  turn as the change that caused it, so no request can come between; a
+  unique index on the cell makes it one landmark per cell, ever. A tower
+  already standing when this deploys is recorded at boot, not celebrated.
 - **It's announced to everyone, briefly.** Every open page celebrates it and
   names the nine people who raised it. That's the one room-wide message the
   game sends; everything else is still narrated only for your own tile.
@@ -43,7 +46,8 @@ button. The neighbour sees a small hand on your tile and a short message
 - **No text.** A wave carries nothing a person typed, so it can't become
   chat (README: left out).
 - **Rate-limited and never stored.** One wave per pair every 10 seconds; a
-  wave is pushed to the two people involved and then forgotten.
+  wave is pushed only to the person waved at (the waver gets the reply) and
+  then forgotten.
 - **Without JavaScript,** waving isn't offered. It's a live gesture, and the
   game is still fully playable without it.
 

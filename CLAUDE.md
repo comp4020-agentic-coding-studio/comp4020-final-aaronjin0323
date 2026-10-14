@@ -212,8 +212,13 @@ Playing it found the game was one action: claim, then wait. Recorded in
 - **Landmarks are stored, permanent, and only ever counted up.** Migration 3
   adds `landmarks (id INTEGER PRIMARY KEY, cell_id INTEGER, label TEXT,
   raisers TEXT, raised_at TEXT)`, with `raisers` a JSON array of the nine
-  labels and no `pid`. One row per raising: a tower that drops and reaches 8
-  again on the same cell doesn't record a second. They can't be derived,
+  labels and no `pid`. One row per cell, ever (unique index, `INSERT OR
+  IGNORE`): a tower that drops and reaches 8 again doesn't record a second.
+  `store.raise(now)` runs inside every `broadcast()`, since every change that
+  can lift a tower already broadcasts; it's the same synchronous turn as the
+  change, not the same SQL transaction (inside `claim()` it slowed the
+  random-board test past its limit). It also runs once at boot, logged but
+  not celebrated. They can't be derived,
   because the people who raised one may have left.
 - **A landmark is a mark on the spot, not a lock.** Ownership rules are
   unchanged: its holder can move, and the tile can fade and be settled. It
