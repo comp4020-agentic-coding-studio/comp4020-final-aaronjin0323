@@ -1072,6 +1072,56 @@ async function helping(browser: Browser): Promise<void> {
 }
 
 
+// --- parks (docs/adr/0007) ---
+async function parks(browser: Browser): Promise<void> {
+  console.log("\n— parks: a public good placed beside a neighbour —");
+  const ana = player("Pia");
+  const ben = player("Quin");
+  const a = await freshAs(browser, ana);
+  const b = await freshAs(browser, ben);
+  const centre = await openPatch(a);
+  await claimAs(a, "Pia", centre);
+  await claimAs(b, "Quin", centre + 2);
+  await a.waitForSelector(`button.tile[value="${centre + 2}"][data-state="held"]`, { timeout: 3000 });
+  // a free plot beside my own building only: no Park offered
+  await clickTile(a, centre - 1);
+  check(!(await rendered(a, ".park-button")), "a plot beside only my own building offers no Park");
+  // the plot between us, beside Quin
+  await clickTile(a, centre + 1);
+  const label = (await a.textContent(".park-button")) ?? "";
+  const name = (await a.getAttribute(".park-button", "aria-label")) ?? "";
+  check(label === "Place park (60)" && (await rendered(a, ".park-button")), "the plot beside Quin's building offers Place park (60)", label);
+  check(name === "Place a park here for 60 coins: lifts Quin for 2 hours", "with a full accessible name", name);
+  const started = Date.now();
+  const seen = b.waitForSelector(`button.tile[value="${centre + 1}"][data-state="park"]`, { timeout: 3000 }).catch(() => null);
+  await a.click(".park-button");
+  await a.waitForSelector('[data-notice="parked"]', { timeout: 3000 }).catch(() => null);
+  check((await noticeOf(a)) === "Park open! 2 h", "Pia is told, in a line", await noticeOf(a));
+  check((await coinsOf(a)) === 40, "and pays 60 coins", String(await coinsOf(a)));
+  check((await seen) !== null && Date.now() - started < 1000, "Quin's page shows the park within a second", `${Date.now() - started} ms`);
+  const tileAt = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"]`, (el) => ({ state: (el as HTMLElement).dataset.state, h: (el as HTMLElement).dataset.height, yours: (el as HTMLElement).dataset.yours !== undefined, aria: el.getAttribute("aria-label") }));
+  check((await tileAt(a, centre + 1)).yours && !(await tileAt(b, centre + 1)).yours, "it's marked as Pia's on her page only");
+  check((await tileAt(b, centre + 2)).h === "2" && (await tileAt(a, centre)).h === "1", "it lifts Quin to height 2, and never Pia", `${(await tileAt(b, centre + 2)).h}, ${(await tileAt(a, centre)).h}`);
+  await b.waitForSelector('[data-notice="arrived"]', { timeout: 2000 }).catch(() => null);
+  check(/Pia opened a park beside you/.test(await noticeOf(b)), "Quin hears Pia opened a park beside him", await noticeOf(b));
+  const look = await a.$eval(`button.tile[value="${centre + 1}"]`, (el) => getComputedStyle(el).backgroundImage);
+  check(/radial-gradient/.test(look), "the park draws as a green lawn with a tree", look.slice(0, 60));
+  await a.locator("[data-stage]").screenshot({ path: ".shots/park-pia.png" });
+  await b.locator("[data-stage]").screenshot({ path: ".shots/park-quin.png" });
+  const clip = await a.$eval(`button.tile[value="${centre + 1}"]`, (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.x - 60), y: Math.max(0, r.y - 60), width: r.width + 120, height: r.height + 120 };
+  });
+  await a.screenshot({ path: ".shots/park-close.png", clip });
+  // clicking a park says whose it is and never posts
+  await clickTile(b, centre + 1);
+  check((await tileAt(b, centre + 1)).state === "park", "clicking someone's park doesn't claim it");
+  for (const p of [a, b]) await p.context().close();
+  const nojs = await fresh(browser, { javaScriptEnabled: false });
+  check((await nojs.$$(".park-button")).length === 0, "without JavaScript there's no Park button");
+  await nojs.context().close();
+}
+
 // --- a stranger, cold: what's on the first screen, and the first minute ---
 
 // The words a person can actually see: text in rendered elements on the
@@ -1381,6 +1431,7 @@ const SECTIONS = {
   relocation,
   renewal,
   helping,
+  parks,
   viewports,
   richBoard,
   busyBoard,

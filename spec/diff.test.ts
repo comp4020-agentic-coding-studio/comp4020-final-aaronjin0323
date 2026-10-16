@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { JSDOM } from "jsdom";
 import { boardView, heights, NOTICES, neighbourCounts, renderBoard } from "../src/board.ts";
-import { type Landmark, type Me, openStore, type Store, type Tile } from "../src/db.ts";
+import { type Landmark, type Me, openStore, type Park, type Store, type Tile } from "../src/db.ts";
 import { ECONOMY as SERVER_ECONOMY, rate as serverRate } from "../src/economy.ts";
 import {
   accepts,
   arrivals,
   canHelp,
+  canPark,
   describeTile,
   diffBoards,
   doneText,
@@ -55,7 +56,8 @@ function scene(): { store: Store; view: (pid?: string, now?: Date) => View } {
   const store = openStore(":memory:");
   return {
     store,
-    view: (pid = ME, now = NOW) => boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(8) }),
+    view: (pid = ME, now = NOW) =>
+      boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(8), parks: store.parks() }),
   };
 }
 // A view with my wallet changed, for the money rules (the store is the
@@ -278,6 +280,62 @@ describe("renewing", () => {
   });
 });
 
+describe("parks (docs/adr/0007)", () => {
+  it("are offered at a free plot beside someone else's building, while I hold land, can pay and have room", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 7), MIA, "Mia", NOW);
+    expect(canPark(view(), at(5, 6))).toMatchObject({ ok: true, cost: 60, lifts: [at(5, 7)], names: ["Mia"] });
+    // beside only my own building: it would lift nobody, so it isn't offered
+    expect(canPark(view(), at(4, 4))).toBeNull();
+    // nor on a building, nor without land
+    expect(canPark(view(), at(5, 7))).toBeNull();
+    expect(canPark(view(KAI), at(5, 6))).toBeNull();
+    expect(canPark(withMe(view(), { coins: 59 }), at(5, 6))).toMatchObject({ ok: false, reason: "coins" });
+    expect(canPark(withMe(view(), { parks: 2 }), at(5, 6))).toMatchObject({ ok: false, reason: "park-limit" });
+  });
+
+  it("show as a park on the board, mine marked, with its placer's name and how long it has", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 7), MIA, "Mia", NOW);
+    expect(store.park(ME, at(5, 6), NOW)).toBe("parked");
+    const v = view();
+    expect(v.me).toMatchObject({ parks: 1, parkLimit: 2, coins: 40 });
+    expect(v.tiles[at(5, 6)]).toMatchObject({ state: "park", label: "Me", mine: true, height: 0 });
+    expect(describeTile(v, at(5, 6), NOW)).toMatchObject({ kind: "park", title: "Your park · 2 h 0 m", action: null });
+    expect(inspect(v, at(5, 6), NOW)).toEqual({ title: "Your park", facts: [["Lifts", "Mia +20%"], ["Closes", "in 2 h 0 m"]] });
+    expect(inspect(view(MIA), at(5, 6), NOW)!.title).toBe("Me's park");
+    expect(heldText(view(MIA), at(5, 6)).text).toBe("Me's park");
+    // a park is no plot to build on: no preview, no claim
+    expect(preview(v, at(5, 6))).toBeNull();
+    // the page's own words for it, and its answer
+    expect(doneText("parked")).toEqual({ text: "Park open! 2 h", said: "Park placed for 2 hours. It lifts the buildings round it, never your own." });
+    expect(refusalText({ error: "park-limit", status: 400 }).text).toBe("2 parks at most");
+    expect(eventText({ type: "park", label: "Me", cellId: at(5, 6) })).toBe("Me opened a park at row 6, column 7");
+  });
+
+  it("tells me when someone opens a park beside my building, and when it closes, never my own", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(9, 9), MIA, "Mia", NOW);
+    const before = view();
+    store.park(MIA, at(5, 6), NOW);
+    const after = view();
+    expect(after.tiles[at(5, 5)]).toMatchObject({ neighbours: 1, height: 2 });
+    const d = diffBoards(before, after);
+    expect(d.messages[0]).toMatchObject({ key: "arrived", text: "Mia opened a park beside you · +20%" });
+    expect(d.rises).toEqual([{ id: at(5, 5), delta: 1 }]);
+    expect(arrivals(before, after)).toEqual([at(5, 6)]);
+    const closed = view(ME, new Date(NOW.getTime() + 2 * HOUR));
+    expect(diffBoards(after, closed).messages[0]).toMatchObject({ key: "left", text: "Mia's park closed · \u221220%" });
+    // my own park beside me lifts nobody I'd hear about
+    expect(store.park(ME, at(4, 4), NOW)).toBe("parked");
+    expect(view().tiles[at(4, 4)].state).toBe("park");
+    expect(diffBoards(after, view()).messages).toEqual([]);
+  });
+});
+
 describe("relocating", () => {
   it("knows from, to, cost and both incomes, or that it's cooling down", () => {
     const { store, view } = scene();
@@ -478,6 +536,67 @@ describe("the placement preview", () => {
     expect(moves).toBeGreaterThan(300);
     expect(lifts).toBeGreaterThan(300);
     expect(expiredSeen).toBeGreaterThan(20);
+  }, 30_000);
+
+  // The same, with parks (docs/adr/0007) on the board: some mine, some
+  // other people's (sometimes placed by a neighbour of the plot), some
+  // ended. The page can't see who placed a park, so the preview starts from
+  // the server's per-building counts; it must still agree exactly, mine
+  // never lifting my own building.
+  it("agrees with the server's heights and income on random boards with parks", () => {
+    let checked = 0;
+    let besideMyPark = 0;
+    let besideOthers = 0;
+    for (let seed = 101; seed <= 130; seed++) {
+      const rand = rng(seed);
+      const density = 0.15 + rand() * 0.5;
+      const mineAt = rand() < 0.8 ? Math.floor(rand() * 144) : -1;
+      const rows: Tile[] = [];
+      const parks: Park[] = [];
+      for (let id = 0; id < 144; id++) {
+        const level = 1 + Math.floor(rand() * 5);
+        if (id === mineAt) rows.push(row(id, ME, level));
+        else if (rand() < density) rows.push(row(id, `p${id}`, level, rand() < 0.1 ? -HOUR : 10 * HOUR));
+        else {
+          rows.push(row(id, null));
+          if (rand() < 0.2) {
+            const r = rand();
+            // mine, a stranger's, or the building beside it's own; a few ended
+            const by = r < 0.3 ? ME : r < 0.6 ? "stranger" : `p${id + 1}`;
+            const ends = rand() < 0.1 ? -MIN : HOUR;
+            parks.push({ cellId: id, placedBy: by, label: by.toUpperCase(), placedAt: new Date(NOW.getTime() - HOUR).toISOString(), endsAt: new Date(NOW.getTime() + ends).toISOString() });
+          }
+        }
+      }
+      const before = boardView(rows, ME, NOW, [], { parks });
+      const mine = rows.find((r) => r.claimerId === ME);
+      for (const t of before.tiles) {
+        const p: Preview | null = preview(before, t.id);
+        if (t.state !== "free") {
+          expect(p, `tile ${t.id} (${t.state})`).toBeNull();
+          continue;
+        }
+        const after = rows.map((r) =>
+          r.id === t.id ? row(r.id, ME, mine?.level ?? 1) : r.claimerId === ME ? row(r.id, null) : r,
+        );
+        const hs = heights(after, NOW, parks);
+        const live = boardView(after, ME, NOW, [], { parks }).tiles;
+        expect(p!.heights, `seed ${seed}, plot ${t.id}`).toEqual(hs);
+        expect(p!.rates, `seed ${seed}, plot ${t.id} rates`).toEqual(live.map((x) => x.rate));
+        expect(p!.neighbours).toBe(neighbourCounts(after, NOW, parks)[t.id]);
+        const held = (i: number) => before.tiles[i].state === "held";
+        expect(p!.lifted).toEqual(live.filter((x) => held(x.id) && x.rate > before.tiles[x.id].rate).map((x) => x.id));
+        expect(p!.dropped).toEqual(live.filter((x) => held(x.id) && x.rate < before.tiles[x.id].rate).map((x) => x.id));
+        const around = (pred: (x: { state: string; mine?: boolean }) => boolean) =>
+          before.tiles.some((x) => x.state === "park" && pred(x) && Math.abs(Math.floor(x.id / 12) - Math.floor(t.id / 12)) <= 1 && Math.abs((x.id % 12) - (t.id % 12)) <= 1);
+        if (around((x) => x.mine === true)) besideMyPark++;
+        if (around((x) => x.mine === false)) besideOthers++;
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+    expect(besideMyPark).toBeGreaterThan(100);
+    expect(besideOthers).toBeGreaterThan(100);
   }, 30_000);
 
   it("says what building there would earn and whose income it raises, in numbers", () => {

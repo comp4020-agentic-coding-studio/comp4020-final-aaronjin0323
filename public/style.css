@@ -35,6 +35,8 @@
   --muted: #d9c7e8;
   --accent: #ffb000; /* the wanted stars' gold */
   --money: #8de08d; /* the cash counter's green */
+  --park: #2f8f46; /* a park's hedge and tree (docs/adr/0007) */
+  --park-lawn: #6fc46a; /* and its lawn */
   --line: #000; /* every outline and hard shadow */
   --cream: #fff7ec;
   --panel: #1c0f2e;
@@ -549,6 +551,11 @@ main {
     0 0 6px 1px rgb(255 176 0 / 0.7);
 }
 
+.swatch[data-swatch="park"] {
+  background: var(--park-lawn);
+  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6), inset 0 0 0 4px var(--park);
+}
+
 .swatch[data-swatch="soon"] {
   background: var(--hatch), hsl(200 78% 60%);
   box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
@@ -972,7 +979,8 @@ main {
 }
 
 .move-button,
-.help-button {
+.help-button,
+.park-button {
   min-height: 44px;
   padding: 0.4rem 0.8rem;
   border: 3px solid var(--line);
@@ -991,8 +999,13 @@ main {
   background: var(--money);
 }
 
+.park-button {
+  background: var(--park);
+}
+
 .move-button:focus-visible,
-.help-button:focus-visible {
+.help-button:focus-visible,
+.park-button:focus-visible {
   outline-color: var(--ink);
 }
 
@@ -1199,6 +1212,27 @@ main {
     background: var(--lot-hover);
     box-shadow: inset 0 0 0 2px var(--cream);
   }
+}
+
+/* A park (docs/adr/0007): a low green lawn, a little above the lots, with
+   a darker hedge round it and a round tree in the middle, so it reads as
+   "not a building" in greyscale too (a ring and a dot, no windows). It has
+   no floors, so its walls are bare hedge. Your own park has a gold edge. */
+.tile[data-state="park"] {
+  --lift: 4px;
+  --wall: var(--park);
+  background:
+    radial-gradient(circle at 50% 50%, var(--park) 0 22%, rgb(0 0 0 / 0.55) 22% 27%, transparent 27%),
+    var(--park-lawn);
+  box-shadow:
+    inset 0 0 0 1.5px rgb(0 0 0 / 0.6),
+    inset 0 0 0 4px var(--park);
+}
+
+.tile[data-state="park"][data-yours] {
+  box-shadow:
+    inset 0 0 0 1.5px rgb(0 0 0 / 0.6),
+    inset 0 0 0 4px var(--accent);
 }
 
 /* Held and yours: a roof. A taller building's roof is a little lighter,
@@ -2072,6 +2106,11 @@ main {
 .confirm-help {
   flex: 1;
   background: var(--money);
+}
+
+.confirm-park {
+  flex: 1;
+  background: var(--park);
 }
 
 .confirm-cancel {

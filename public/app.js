@@ -2,6 +2,7 @@ import {
   accepts,
   arrivals,
   canHelp,
+  canPark,
   describeTile,
   diffBoards,
   doneText,
@@ -261,11 +262,13 @@ if (board && stage) {
     }
     if (t.hue === null) el.style.removeProperty("--hue");
     else el.style.setProperty("--hue", String(t.hue));
-    const free = t.state === "free";
+    const free = t.state === "free" || t.state === "park";
     setData(el, "level", free ? null : t.level);
     setData(el, "neighbours", free ? null : t.neighbours);
     setData(el, "rate", free ? null : t.rate);
     setData(el, "leaseEndsAt", free ? null : t.leaseEndsAt);
+    setData(el, "endsAt", t.state === "park" ? t.endsAt : null);
+    setData(el, "yours", t.state === "park" && t.mine ? "" : null);
     setData(el, "lease", leaseSoon(t, now) ? "soon" : null);
     if (t.state !== "mine") el.style.removeProperty("--lease");
     const mark = landmarkAt(shownBoard, t.id);
@@ -335,6 +338,7 @@ if (board && stage) {
         neighbours: num(el.dataset.neighbours) ?? 0,
         rate: num(el.dataset.rate) ?? 0,
         leaseEndsAt: el.dataset.leaseEndsAt ?? null,
+        ...(el.dataset.state === "park" ? { endsAt: el.dataset.endsAt ?? null, mine: el.dataset.yours !== undefined } : {}),
       })),
     };
   };
@@ -480,7 +484,11 @@ if (board && stage) {
   const helpButton = document.createElement("button");
   helpButton.type = "button";
   helpButton.className = "help-button";
-  inspectActions.append(moveButton, helpButton);
+  // Place park: at a free plot beside someone else's building (docs/adr/0007)
+  const parkButton = document.createElement("button");
+  parkButton.type = "button";
+  parkButton.className = "park-button";
+  inspectActions.append(moveButton, helpButton, parkButton);
   inspector?.append(inspectActions);
 
   const clearPreview = () => {
@@ -532,7 +540,14 @@ if (board && stage) {
       setText(helpButton, `Help ${help.label} · +${ECONOMY.helpGift}`);
       helpButton.setAttribute("aria-label", `Help ${help.label}: ${ECONOMY.helpGift} coins to them, ${ECONOMY.helpReward} to you`);
     }
-    inspectActions.hidden = moveButton.hidden && helpButton.hidden;
+    const park = canPark(shown, id);
+    show(parkButton, Boolean(park?.ok) && busy !== "park" && !touch.matches); // a phone has it in the confirm bar
+    if (park?.ok) {
+      parkButton.dataset.cell = String(id);
+      setText(parkButton, `Place park (${park.cost})`);
+      parkButton.setAttribute("aria-label", `Place a park here for ${park.cost} coins: lifts ${park.names.join(", ")} for ${ECONOMY.parkHours} hours`);
+    }
+    inspectActions.hidden = moveButton.hidden && helpButton.hidden && parkButton.hidden;
     inspector.hidden = false;
   };
   const focusedTile = () => {
@@ -904,13 +919,17 @@ if (board && stage) {
   confirmHelp.type = "button";
   confirmHelp.className = "confirm-help";
   confirmHelp.hidden = true;
+  const confirmPark = document.createElement("button");
+  confirmPark.type = "button";
+  confirmPark.className = "confirm-park";
+  confirmPark.hidden = true;
   const confirmCancel = document.createElement("button");
   confirmCancel.type = "button";
   confirmCancel.className = "confirm-cancel";
   confirmCancel.textContent = "\u2715";
   confirmCancel.setAttribute("aria-label", "Cancel");
   confirmCancel.title = "Cancel";
-  confirmBar.append(confirmText, confirmButton, confirmHelp, confirmCancel);
+  confirmBar.append(confirmText, confirmButton, confirmHelp, confirmPark, confirmCancel);
   form?.append(confirmBar);
 
   const select = (tile) => {
@@ -936,6 +955,13 @@ if (board && stage) {
     if (neighbour?.ok) {
       confirmHelp.textContent = `Help ${neighbour.label} · +${ECONOMY.helpGift}`;
       confirmHelp.dataset.cell = tile.value;
+    }
+    const park = canPark(shown, id);
+    confirmPark.hidden = !park?.ok;
+    if (park?.ok) {
+      confirmPark.textContent = `Park · ${park.cost}`;
+      confirmPark.setAttribute("aria-label", `Place a park here for ${park.cost} coins`);
+      confirmPark.dataset.cell = tile.value;
     }
     confirmBar.hidden = false;
     look();
@@ -993,11 +1019,35 @@ if (board && stage) {
   helpButton.addEventListener("click", () => sendHelp(Number(helpButton.dataset.cell)));
   confirmHelp.addEventListener("click", () => sendHelp(Number(confirmHelp.dataset.cell)));
 
+  // --- placing a park (docs/adr/0007) ---
+  const sendPark = async (cell) => {
+    if (busy) return;
+    busy = "park";
+    try {
+      const r = await post("/park", { cellId: String(cell) });
+      if (r.ok && r.body.board) {
+        applyBoard(r.body.board);
+        const m = doneText("parked");
+        showNotice("parked", m.text, { said: m.said, at: cell });
+      } else {
+        const m = refusal(r);
+        showNotice(refusalKey(r), m.text, { said: m.said, at: cell });
+      }
+    } finally {
+      busy = null;
+      showHud();
+      showInspect(looked);
+      if (selected) select(selected);
+    }
+  };
+  parkButton.addEventListener("click", () => sendPark(Number(parkButton.dataset.cell)));
+  confirmPark.addEventListener("click", () => sendPark(Number(confirmPark.dataset.cell)));
+
   // --- claiming and moving ---
   const claim = async (id) => {
     if (busy) return; // one action at a time: a second click or Enter does nothing
     const target = describeTile(shown, id, new Date());
-    if (target.kind === "held") {
+    if (target.kind === "held" || target.kind === "park") {
       const m = heldText(shown, id);
       return showNotice("held", m.text, { said: m.said, at: id });
     }
@@ -1058,13 +1108,14 @@ if (board && stage) {
         if (selected && !holding && tile.dataset.state === "free" && !nameField.value.trim()) want(id);
         return;
       }
-      // A mouse click on a building, or on a free plot while you hold land,
-      // keeps it inspected: its Help or Move button is there.
-      if (tile.dataset.state === "held" || (holding && tile.dataset.state === "free")) {
+      // A mouse click on a building or a park, or on a free plot while you
+      // hold land, keeps it inspected: its Help, Move or Park button is there.
+      const other = tile.dataset.state === "held" || tile.dataset.state === "park";
+      if (other || (holding && tile.dataset.state === "free")) {
         e.preventDefault();
         pinned = pinned === tile ? null : tile;
         look();
-        if (tile.dataset.state === "held") claim(id); // says whose it is; never posts
+        if (other) claim(id); // says whose it is; never posts
       }
     },
     true,

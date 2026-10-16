@@ -5,11 +5,12 @@
 // spec/diff.test.ts tests it directly.
 //
 // A board is { tiles, me, landmarks, events, version }. Each tile is
-// { id, state: "free" | "held" | "mine", label, hue, level, neighbours,
-// height, rate, leaseEndsAt } (docs/adr/0005). Holders are never named by id,
+// { id, state: "free" | "held" | "mine" | "park", label, hue, level,
+// neighbours, height, rate, leaseEndsAt } (docs/adr/0005); a park also has
+// `endsAt` and `mine` (docs/adr/0007). Holders are never named by id,
 // so "the same holder" means the same hue and label. `me` is this visitor's
 // own wallet: { coins, pending, rate, cellId, level, leaseEndsAt, ownedSince,
-// relocateAt, helpAt, welcome?, expired? }. Money is in coins, except
+// relocateAt, helpAt, parks, parkLimit, welcome?, expired? }. Money is in coins, except
 // `pending` and every `rate`, which are hundredths of a coin (a minute).
 
 const N = 12;
@@ -65,14 +66,19 @@ export function neighbours(id) {
   return out;
 }
 
-const claimed = (t) => t !== undefined && t !== null && t.state !== "free";
+// A building: someone's, or mine. A park is neither (docs/adr/0007).
+const claimed = (t) => t !== undefined && t !== null && (t.state === "held" || t.state === "mine");
+const isPark = (t) => t !== undefined && t !== null && t.state === "park";
+const samePark = (a, b) => isPark(a) && isPark(b) && a.label === b.label && a.endsAt === b.endsAt;
 const sameHolder = (a, b) => claimed(a) && claimed(b) && a.hue === b.hue && a.label === b.label;
 export const place = (id) => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
 const levelOf = (t) => (Number.isInteger(t?.level) && t.level >= 1 ? t.level : 1);
-// The board says how many neighbours each tile has; worked out from the
-// tiles for a board that doesn't.
+// The board says how many neighbours each building has, counting the parks
+// that count for it (only the server knows who placed each); worked out from
+// the tiles for a board that doesn't, counting every park but my own.
+const counts = (board, t) => claimed(board.tiles[t]) || (isPark(board.tiles[t]) && !board.tiles[t].mine);
 const neighboursOf = (board, t) =>
-  Number.isInteger(t.neighbours) ? t.neighbours : neighbours(t.id).filter((n) => claimed(board.tiles[n])).length;
+  Number.isInteger(t.neighbours) ? t.neighbours : neighbours(t.id).filter((n) => counts(board, n)).length;
 const mineOf = (board) => board.tiles.find((t) => t.state === "mine") ?? null;
 const meOf = (board) => board.me ?? null;
 
@@ -205,21 +211,50 @@ export function canHelp(board, id, now) {
   return { id, label: t.label, ok: msUntil(helpAt, now) <= 0 };
 }
 
+// Placing a park on free plot `id` (docs/adr/0007): possible while you hold
+// land, have fewer than the limit running and can pay, and worth offering
+// only beside someone else's building, since it never lifts your own. Null
+// when it isn't offered; `lifts` are the buildings it would lift.
+export function canPark(board, id) {
+  const mine = mineOf(board);
+  const t = board.tiles[id];
+  if (!mine || !t || t.state !== "free") return null;
+  const lifts = neighbours(id).filter((n) => board.tiles[n]?.state === "held");
+  if (lifts.length === 0) return null;
+  const me = meOf(board);
+  const cost = ECONOMY.parkCost;
+  const info = { id, cost, lifts, names: lifts.map((n) => board.tiles[n].label) };
+  if ((me?.parks ?? 0) >= (me?.parkLimit ?? ECONOMY.parkLimit)) return { ...info, ok: false, reason: "park-limit" };
+  if ((me?.coins ?? 0) < cost) return { ...info, ok: false, reason: "coins" };
+  return { ...info, ok: true, reason: null };
+}
+
 // --- the placement preview ---
 
 // What claiming (or moving to) free plot `id` would do, worked out from the
 // board as shown: every building's neighbours, height (level + neighbours)
 // and income afterwards; yours there; and whose income rises or falls. Null
-// for a plot you can't build on. Moving keeps your level and frees your old
-// plot. Never touches the board it's given; spec/diff.test.ts holds it equal
-// to the server's rule on random boards.
+// for a plot you can't build on (a building or a park stands there). Moving
+// keeps your level and frees your old plot. Every other building keeps the
+// neighbours the server counted for it, plus one beside the new plot and
+// minus one beside the old: parks don't move, and only the server knows who
+// placed each, so its count is the start. Your new building counts every
+// building round it and every park that isn't yours. Never touches the board
+// it's given; spec/diff.test.ts holds it equal to the server's rule on
+// random boards.
 export function preview(board, id) {
   const t = board.tiles[id];
   if (!t || t.state !== "free") return null;
   const mine = mineOf(board);
   const level = mine ? levelOf(mine) : 1;
   const occupied = board.tiles.map((x) => x.id === id || (claimed(x) && x !== mine));
-  const counts = board.tiles.map((x) => (occupied[x.id] ? neighbours(x.id).filter((n) => occupied[n]).length : 0));
+  const near = (a, b) => b !== null && neighbours(a).includes(b);
+  const from = mine ? mine.id : null;
+  const counts = board.tiles.map((x) => {
+    if (!occupied[x.id]) return 0;
+    if (x.id === id) return neighbours(id).filter((n) => (occupied[n] && n !== id) || (isPark(board.tiles[n]) && !board.tiles[n].mine)).length;
+    return neighboursOf(board, x) + (near(x.id, id) ? 1 : 0) - (near(x.id, from) ? 1 : 0);
+  });
   const levels = board.tiles.map((x) => (x.id === id ? level : occupied[x.id] ? levelOf(x) : 0));
   const heights = board.tiles.map((x) => (occupied[x.id] ? levels[x.id] + counts[x.id] : 0));
   const rates = board.tiles.map((x) => (occupied[x.id] ? rateOf(levels[x.id], counts[x.id]) : 0));
@@ -320,9 +355,14 @@ export function diffBoards(prev, next) {
     const arrived = [];
     const moved = [];
     const ended = [];
+    const parked = [];
+    const closed = [];
     for (const id of neighbours(nextMine.id)) {
       const before = prev.tiles[id];
       const after = next.tiles[id];
+      // a park someone else placed beside me, or one of theirs closing
+      if (isPark(after) && !after.mine && !samePark(before, after)) parked.push(after.label);
+      if (isPark(before) && !before.mine && !samePark(before, after)) closed.push(before.label);
       if (claimed(after) && !sameHolder(before, after)) arrived.push(after.label);
       if (claimed(before) && !sameHolder(before, after)) {
         if (next.tiles.some((t) => sameHolder(before, t))) moved.push(before.label);
@@ -330,9 +370,17 @@ export function diffBoards(prev, next) {
       }
     }
     const change = (neighboursOf(next, nextMine) - neighboursOf(prev, prevMine)) * PCT;
-    if (arrived.length || moved.length || ended.length) {
+    if (arrived.length || moved.length || ended.length || parked.length || closed.length) {
       const parts = [];
       const said = [];
+      if (parked.length) {
+        parts.push(`${names(parked)} opened a park beside you`);
+        said.push(`${names(parked)} opened a park beside you.`);
+      }
+      if (closed.length) {
+        parts.push(closed.length === 1 ? `${closed[0]}'s park closed` : `${closed.length} parks closed`);
+        said.push(closed.length === 1 ? `${closed[0]}'s park beside you closed.` : `${closed.length} parks beside you closed.`);
+      }
       if (arrived.length) {
         parts.push(`${names(arrived)} built beside you`);
         said.push(`${names(arrived)} built beside you.`);
@@ -352,7 +400,8 @@ export function diffBoards(prev, next) {
         parts.push(`${MINUS}${-change}%`);
         said.push(`Your income is down ${-change}%.`);
       }
-      messages.push({ key: arrived.length && !moved.length && !ended.length ? "arrived" : "left", text: parts.join(" · "), said: said.join(" ") });
+      const up = (arrived.length || parked.length) && !moved.length && !ended.length && !closed.length;
+      messages.push({ key: up ? "arrived" : "left", text: parts.join(" · "), said: said.join(" ") });
     }
   }
 
@@ -363,7 +412,11 @@ export function diffBoards(prev, next) {
 // aren't mine. The page marks these briefly.
 export function arrivals(prev, next) {
   return next.tiles
-    .filter((t) => claimed(t) && t.state !== "mine" && !sameHolder(prev.tiles[t.id] ?? { state: "free" }, t))
+    .filter((t) =>
+      isPark(t)
+        ? !t.mine && !samePark(prev.tiles[t.id], t)
+        : claimed(t) && t.state !== "mine" && !sameHolder(prev.tiles[t.id] ?? { state: "free" }, t),
+    )
     .map((t) => t.id);
 }
 
@@ -532,6 +585,10 @@ export function eventText(e) {
       return `${who}'s lease ended${where}`;
     case "help":
       return `${who} helped ${to}`;
+    case "park":
+      return `${who} opened a park${where}`;
+    case "park-end":
+      return `${who}'s park ended${where}`;
     case "landmark":
       return `Landmark raised${where}`;
     default:
@@ -547,6 +604,7 @@ export const initialsOf = (label) => Array.from(String(label ?? "").trim()).slic
 export function tileWords(t, now = new Date()) {
   const where = place(t.id).replace(/^r/, "R");
   if (t.state === "free") return `${where}, free plot`;
+  if (isPark(t)) return `${where}, ${parkName(t)}`;
   const kind = buildingName(levelOf(t));
   const who = t.state === "mine" ? `your ${kind}, ${t.label}` : `${t.label}'s ${kind}`;
   const soon = leaseSoon(t, now) ? ", lease ending soon" : "";
@@ -610,6 +668,11 @@ export function hudParts(board, now, pending = meOf(board)?.pending ?? 0) {
 
 // --- the picked plot: the confirm bar and the inspector ---
 
+const parkName = (t) => (t.mine ? "your park" : `${t.label}'s park`);
+// The buildings a park lifts: every one round it but its placer's own (the
+// page knows only that "mine" is mine).
+const parkLifts = (board, t) => neighbours(t.id).filter((n) => board.tiles[n]?.state === "held" || (board.tiles[n]?.state === "mine" && !t.mine));
+
 // The bar for a selected plot: a claim (no land yet), a move (you hold
 // land), or someone's building. `title` is a short line of numbers;
 // `action` the button's words, or null when there's nothing to do there.
@@ -618,6 +681,7 @@ export function describeTile(board, id, now = new Date()) {
   const where = place(id);
   if (t.state === "mine") return { title: `Your ${buildingName(levelOf(t))}`, action: null, open: false, kind: "mine" };
   if (t.state === "held") return { title: `${t.label}'s ${buildingName(levelOf(t))}`, action: null, open: false, kind: "held" };
+  if (isPark(t)) return { title: `${capital(parkName(t))} · ${timeLeft(t.endsAt, now) ?? "open"}`, action: null, open: false, kind: "park" };
   const p = preview(board, id);
   const gain = `+${perMinute(p.rate)}/min`;
   const lift = p.lifted.length ? ` · ${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%` : "";
@@ -636,7 +700,13 @@ export function inspect(board, id, now) {
   if (!t) return null;
   const facts = [];
   let title;
-  if (t.state === "free") {
+  if (isPark(t)) {
+    title = capital(parkName(t));
+    const lifts = parkLifts(board, t).map((n) => board.tiles[n].label);
+    facts.push(["Lifts", lifts.length ? `${names(lifts)} +${PCT}%` : "nobody yet"]);
+    const left = timeLeft(t.endsAt, now);
+    if (left) facts.push(["Closes", left === "ended" ? "now" : `in ${left}`]);
+  } else if (t.state === "free") {
     const p = preview(board, id);
     title = "Free plot";
     facts.push(["Earns", `+${perMinute(p.rate)}/min`]);
@@ -680,6 +750,11 @@ export function doneText(notice, body = {}, view = { tiles: [], me: null }, now 
       const left = timeLeft(body.leaseEndsAt ?? me?.leaseEndsAt, now) ?? "extended";
       return { text: `Lease renewed · ${left.replace(/ \d+ m$/, "")} left`, said: `Lease renewed: ${left} left.` };
     }
+    case "parked":
+      return {
+        text: `Park open! ${ECONOMY.parkHours} h`,
+        said: `Park placed for ${ECONOMY.parkHours} hours. It lifts the buildings round it, never your own.`,
+      };
     case "helped":
       return {
         text: `Helped! +${ECONOMY.helpGift} to them, +${ECONOMY.helpReward} to you`,
@@ -704,6 +779,7 @@ const REFUSALS = Object.freeze({
   "max-lease": `Lease is at the ${ECONOMY.leaseCapHours} h limit`,
   "not-neighbour": "Only buildings next to yours",
   "no-land": "Pick a plot first",
+  "park-limit": `${ECONOMY.parkLimit} parks at most`,
   hours: `Renew ${ECONOMY.renewals.map((r) => r.hours).join(", ").replace(/, (\d+)$/, " or $1")} h`,
   label: "Name: 1 to 24 characters",
   cell: "No such plot",
@@ -719,6 +795,10 @@ export function refusalText({ network = false, status = 0, error = null } = {}, 
 // Clicking a building that isn't yours: whose it is.
 export function heldText(board, id) {
   const t = board.tiles[id];
+  if (isPark(t)) {
+    const name = capital(parkName(t));
+    return { text: name, said: `${name}, ${place(id)}. Pick a free plot.` };
+  }
   const name = `${t.label}'s ${buildingName(levelOf(t))}`;
   return { text: name, said: `${name}, ${place(id)}. Pick a free plot.` };
 }
