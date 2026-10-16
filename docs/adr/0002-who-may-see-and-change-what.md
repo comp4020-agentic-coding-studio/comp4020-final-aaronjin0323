@@ -38,6 +38,7 @@ row their `pid` holds, or a row nobody is still around for.
 | You | | Keep your tile awake, by visiting | `touch(pid)` on `GET /` and `/events`; it only ever updates the row your `pid` holds |
 | Anyone | Every landmark the room has raised, and the names of the nine people who raised it | | `raise` in `src/db.ts` stores labels only, never a `pid`, when a tower reaches a tier: 3, 5 or 8 occupied neighbours ([ADR 4](0004-landmarks-and-waves.md), [ADR 6](0006-landmark-tiers.md)) |
 | You | | Help a neighbour (their building is next to yours), once an hour: +50 to them, +20 to you | `/help` checks same-origin, your active land, adjacency and `last_helped_at` inside one transaction, so a repeated or simultaneous request can't pay twice (Help replaced Wave, ADR 5) |
+| You | Whose help you can return, while you can: their plot and when the hour ends (`me.returnable`, [ADR 8](0008-return-the-favour.md)) | Help back the neighbour who helped you within the hour: +30 more each, once | `players.helped_by` (a `pid`) never leaves the store; `me()` sends only a plot and a time, to your own page and stream. `help` checks and clears the favour inside its one `BEGIN IMMEDIATE`, so simultaneous returns pay once |
 | You | | Place a park on a free plot, while you hold land: 60 coins, 2 h, at most 2 at once ([ADR 7](0007-parks.md)) | `park` in `src/db.ts` checks your active land, the plot (no running building or park), your count of running parks and your coins inside one `BEGIN IMMEDIATE`, so simultaneous posts can't make a third; `402`/`409`/`400` |
 | Anyone | Every running park: where, the placer's label and when it ends; your own marked `mine` | | `boardView` builds a park tile from label, end time and a `mine` flag only; `parks.placed_by` (a `pid`) never leaves the store |
 | Nobody | | Take a held tile that isn't dormant, or build on a running park | The same `WHERE` (and a check for a running park on the plot): `409` (JSON) or `303 /?notice=taken` (form) |
@@ -119,5 +120,7 @@ row their `pid` holds, or a row nobody is still around for.
   `constructor`.
   Parks (ADR 7): ten simultaneous parks by one person leave at most two; no
   `pid` appears in a park's view; a park can't go on a held tile.
+  Return the favour (ADR 8): `returnable` is on the helped person's page
+  only, and no `pid` is in it or in anyone's board.
 - `spec/log.test.ts`: the logs name each person by a tag that tells them
   apart, never print a `pid`, and a label can't forge a line.

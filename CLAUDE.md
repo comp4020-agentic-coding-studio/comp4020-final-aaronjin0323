@@ -106,7 +106,8 @@ it.
   Building, Skyscraper) with upgrade costs 150, 400, 900, 1800; relocation
   50 coins, 30 min cooldown; lease 24 h, renewals 6 h/100, 12 h/180,
   24 h/300, never past 48 h from the ownership start; help +50 to the
-  neighbour, +20 to the helper, once an hour; a park 60 coins, 2 h, at most
+  neighbour, +20 to the helper, once an hour; helping back within an hour
+  of being helped +30 more to each (ADR 8); a park 60 coins, 2 h, at most
   2 running per player; gold needs 3 distinct people (ADR 7). The one exception:
   `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
   import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
@@ -176,6 +177,21 @@ not a tile anyone holds.
   `endsAt` and `mine` (yours only), never a `pid`; `me` gains `parks` and
   `parkLimit`. The page offers "Place park (60)" on a free plot beside
   someone else's building. Logged as `park who=… at=… label=…`.
+
+### Return the favour (ADR 8): a decision about each other
+
+Read `docs/adr/0008-return-the-favour.md`. Help is unchanged (adjacent only;
+help at a distance was turned down).
+
+- **If B helps A within an hour of A helping B, both get +30 more**
+  (`RETURN_BONUS`, `RETURN_WINDOW_MS`). Checked and cleared inside `help()`'s
+  `BEGIN IMMEDIATE`, so it pays once; a return doesn't open a favour back.
+  Only the latest helper counts. **Migration 7** adds `players.helped_by`
+  (a `pid`, never leaves the store) and `helped_by_at`, both nullable.
+- **`me.returnable: { cellId, until } | null`**, only while the window is
+  open and the helper stands beside you. The page glows that building
+  (`data-return`) and its Help reads "Help back +30 each". City log: "Kai
+  returned Mia's help"; server log: the `help` line with `returned=true`.
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)
 
