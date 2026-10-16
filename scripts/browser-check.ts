@@ -238,8 +238,8 @@ async function viewports(browser: Browser): Promise<void> {
     await wholePage(page, `.shots/${name}.png`);
     // The goal line is one line, at every size, even with the longest name a
     // label allows in it (wide glyphs) and a two-digit count.
-    // The goal line is hidden until a building has 5 neighbours; shown here
-    // to measure its worst case, then put back as it was.
+    // The goal line is hidden until a building is one short of a tier; shown
+    // here to measure its worst case, then put back as it was.
     const wasHidden = await page.$eval("[data-goal]", (el) => (el as HTMLElement).hidden);
     const real = await page.$eval("[data-goal]", (el) => el.innerHTML);
     await page.$eval("[data-goal]", (el) => {
@@ -249,20 +249,22 @@ async function viewports(browser: Browser): Promise<void> {
       el.querySelector("[data-goal-who]")!.textContent = "WWWWWWWWWWWWWWWWWWWWWWWW";
       el.querySelector("[data-goal-tail]")!.textContent = "'s building, 6 of 8";
       el.querySelector("[data-goal-unit]")!.textContent = " neighbours";
+      el.querySelector("[data-goal-tier]")!.textContent = " for silver";
     });
     const worst = await page.$eval("[data-goal]", (el) => {
       const r = el.getBoundingClientRect();
-      const tail = el.querySelector("[data-goal-tail]")!.getBoundingClientRect();
+      const tail = el.querySelector("[data-goal-tier]")!.getBoundingClientRect();
       return { h: Math.round(r.height), tailRight: Math.round(tail.right) };
     });
     await page.locator(".hud").screenshot({ path: `.shots/goal-worst-${name}.png` });
-    check(worst.tailRight <= width, `${name}: "6 of 8" stays on screen with a 24-character name`, `${worst.h}px tall, ends at ${worst.tailRight}px`);
+    check(worst.tailRight <= width, `${name}: "6 of 8 for silver" stays on screen with a 24-character name`, `${worst.h}px tall, ends at ${worst.tailRight}px`);
     // ...and with no neighbours anywhere yet, the hint in its place.
     await page.$eval("[data-goal]", (el) => {
       el.querySelector("[data-goal-lead]")!.textContent = "Start one: build beside someone";
       el.querySelector("[data-goal-who]")!.textContent = "";
       el.querySelector("[data-goal-tail]")!.textContent = "";
       el.querySelector("[data-goal-unit]")!.textContent = "";
+      el.querySelector("[data-goal-tier]")!.textContent = "";
     });
     const hint = await page.$eval("[data-goal-lead]", (el) => ({ right: Math.round(el.getBoundingClientRect().right), cut: el.scrollWidth > el.clientWidth }));
     check(hint.right <= width, `${name}: the start-one hint stays on screen`, `ends at ${hint.right}px${hint.cut ? ", cut short with 90 raised" : ""}`);
@@ -442,7 +444,8 @@ async function preview(browser: Browser): Promise<void> {
     `${await me.$$eval("[data-preview]", (els) => els.map((e) => (e as HTMLButtonElement).value).join())}`,
   );
   const facts = await inspectText(me);
-  check((await shown(me, "[data-inspect]")) && facts === "Free plot Earns +12/min Lifts Mia +20%", "the inspector says the income there and whose it raises", facts);
+  // (plus, once the goal line is up, what it does for the nearest crown)
+  check((await shown(me, "[data-inspect]")) && /^Free plot Earns \+12\/min Lifts Mia \+20%( Landmark .+)?$/.test(facts), "the inspector says the income there and whose it raises", facts);
   await me.locator("[data-stage]").screenshot({ path: ".shots/preview-hover.png" });
   const after = await me.$$eval("button.tile", (els) => els.map((e) => `${(e as HTMLElement).dataset.state}:${(e as HTMLElement).dataset.height}`).join());
   check(after === before, "previewing changes no real state");
@@ -614,60 +617,71 @@ async function seed(p: Player, cellId: number): Promise<void> {
 }
 const around = (id: number): number[] =>
   [-13, -12, -11, -1, 1, 11, 12, 13].map((d) => id + d);
+// The neighbours a plot really has: 3 at a corner, 5 on an edge, else 8.
+const ring = (id: number): number[] => around(id).filter((x) => x >= 0 && x < 144 && Math.abs((x % 12) - (id % 12)) <= 1);
 const goalText = (page: Page): Promise<string> => page.$eval("[data-goal]", (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim());
 
 async function goalLine(browser: Browser): Promise<void> {
-  console.log("\n— the goal: the building closest to 8 neighbours, and plots that help —");
+  console.log("\n— the goal: the building nearest its next crown, and plots that help (ADR 6) —");
   const me = await fresh(browser);
   await me.waitForTimeout(400);
-  // Hidden until some building has 5 neighbours: then it appears, live.
-  const maxN = Math.max(...(await me.$$eval("button.tile", (els) => els.map((e) => Number((e as HTMLElement).dataset.neighbours ?? 0)))));
-  if (maxN < 5 && Number(await me.textContent("[data-landmarks]")) === 0) {
-    check(!(await rendered(me, "[data-goal]")), "the goal line is hidden while no building has 5 neighbours", `most is ${maxN}`);
-    const patch = await openPatch(me);
-    await seed(player("Seed"), patch);
-    for (const [i, id] of [patch - 13, patch - 12, patch - 11, patch - 1].entries()) await seed(player(`Ring${i}`), id);
-    await me.waitForSelector(`button.tile[value="${patch - 1}"][data-state="held"]`, { timeout: 3000 });
-    const most = Math.max(...(await me.$$eval("button.tile", (els) => els.map((e) => Number((e as HTMLElement).dataset.neighbours ?? 0)))));
-    check((await rendered(me, "[data-goal]")) === most >= 5, "and shown exactly when a building reaches 5", `most is now ${most}`);
-    await seed(player("Ring4"), patch + 1);
-    await me.waitForFunction(() => document.querySelector("[data-goal]")?.checkVisibility() ?? false, null, { timeout: 3000 }).catch(() => null);
-  }
-  const before = await goalText(me);
-  check((await rendered(me, "[data-goal]")) && /^\d+ landmarks? raised · Closest: .+, \d of 8 neighbours$/.test(before), "the goal line appears once one has 5", before);
-  // The closest building, worked out here from the board's own hooks:
-  // most occupied neighbours, interior, not a landmark yet.
+  const TIERS = [
+    { tier: "bronze", n: 3 },
+    { tier: "silver", n: 5 },
+    { tier: "gold", n: 8 },
+  ];
+  // The building nearest its next tier, worked out here from the board's own
+  // hooks (data-neighbours, data-tier): fewest still needed, then the higher
+  // tier, then more neighbours, then the lower cell. A tier a plot has no
+  // room for (a corner 3, an edge 5) is never its next.
   const read = async () => {
     const tiles = await me.$$eval("button.tile", (els) =>
-      els.map((e) => ({ state: (e as HTMLElement).dataset.state, n: Number((e as HTMLElement).dataset.neighbours ?? 0), mark: (e as HTMLElement).dataset.landmark !== undefined, label: e.getAttribute("title") })),
+      els.map((e) => ({ state: (e as HTMLElement).dataset.state, n: Number((e as HTMLElement).dataset.neighbours ?? 0), tier: (e as HTMLElement).dataset.tier ?? null, label: e.getAttribute("title") })),
     );
-    const interior = (id: number) => id > 11 && id < 132 && id % 12 > 0 && id % 12 < 11;
+    const room = (id: number) => ring(id).length;
+    const next = (id: number) => {
+      const t = TIERS[tiles[id].tier ? TIERS.findIndex((x) => x.tier === tiles[id].tier) + 1 : 0];
+      return t && t.n <= room(id) ? t : null;
+    };
     let top = -1;
     tiles.forEach((t, id) => {
-      if (t.state !== "free" && interior(id) && !t.mark && (top < 0 || t.n > tiles[top].n)) top = id;
+      const nx = next(id);
+      if (t.state === "free" || !nx) return;
+      if (top < 0) return void (top = id);
+      const a = { d: nx.n - t.n, r: TIERS.indexOf(nx), n: t.n };
+      const tn = next(top)!;
+      const b = { d: tn.n - tiles[top].n, r: TIERS.indexOf(tn), n: tiles[top].n };
+      if (a.d < b.d || (a.d === b.d && (a.r > b.r || (a.r === b.r && a.n > b.n)))) top = id;
     });
-    return { tiles, top };
+    return { tiles, top, next: top < 0 ? null : next(top) };
   };
-  let { tiles, top } = await read();
-  const n = tiles[top].n;
+  // Hidden until a crown stands or a building is one short of its next tier.
+  const crowns = Number(await me.textContent("[data-landmarks]"));
+  const first = await read();
+  const short = first.next ? first.next.n - first.tiles[first.top].n : Infinity;
+  if (crowns === 0 && short > 1) {
+    check(!(await rendered(me, "[data-goal]")), "the goal line is hidden while nobody is near a crown", `nearest is ${short} short`);
+    const patch = await openPatch(me);
+    await seed(player("Seed"), patch);
+    await seed(player("Ring0"), patch - 13);
+    await me.waitForSelector(`button.tile[value="${patch - 13}"][data-state="held"]`, { timeout: 3000 });
+    check(!(await rendered(me, "[data-goal]")), "and still hidden two short of bronze");
+    await seed(player("Ring1"), patch - 12);
+    await me.waitForFunction(() => document.querySelector("[data-goal]")?.checkVisibility() ?? false, null, { timeout: 3000 }).catch(() => null);
+    check(await rendered(me, "[data-goal]"), "and shown once a building is one short of bronze");
+  }
+  const before = await goalText(me);
+  check((await rendered(me, "[data-goal]")) && /^\d+ landmarks? raised · Closest: .+, \d of [358] neighbours for (bronze|silver|gold)$/.test(before), "the goal line names the next tier", before);
+  let { tiles, top, next } = await read();
   const named = tiles[top].state === "mine" ? "your building" : `${tiles[top].label}'s building`;
-  check((await goalText(me)).endsWith(`Closest: ${named}, ${n} of 8 neighbours`), "the goal line names the closest building on the board", await goalText(me));
-  const gaps = around(top).filter((id) => tiles[id].state === "free");
-  const count = Number(await me.textContent("[data-landmarks]"));
-  const watch = me
-    .waitForFunction(
-      ([t, c]) =>
-        (document.querySelector("[data-goal]")?.textContent ?? "").replace(/\s+/g, " ").endsWith(t as string) ||
-        Number(document.querySelector("[data-landmarks]")?.textContent) >= (c as number),
-      [n + 1 < 8 ? `, ${n + 1} of 8 neighbours` : "\u0000", count + 1] as const,
-      { timeout: 3000 },
-    )
-    .catch(() => null);
+  check(before.endsWith(`Closest: ${named}, ${tiles[top].n} of ${next!.n} neighbours for ${next!.tier}`), "and the nearest building on the board", before);
+  const gaps = ring(top).filter((id) => tiles[id].state === "free");
+  const watch = me.waitForFunction((was) => (document.querySelector("[data-goal]")?.textContent ?? "").replace(/\s+/g, " ").trim() !== was, before, { timeout: 3000 }).catch(() => null);
   await seed(player("Helper"), gaps[0]);
-  check((await watch) !== null, "and counts up when that building gains a neighbour", await goalText(me));
-  ({ tiles, top } = await read());
+  check((await watch) !== null, "and moves on when that building gains a neighbour", await goalText(me));
+  ({ tiles, top, next } = await read());
   const name = tiles[top].state === "mine" ? "your building" : `${tiles[top].label}'s building`;
-  const open = around(top).filter((id) => tiles[id].state === "free");
+  const open = ring(top).filter((id) => tiles[id].state === "free");
   const k = tiles[top].n;
 
   const gap = open[0];
@@ -677,7 +691,7 @@ async function goalLine(browser: Browser): Promise<void> {
   check(/255, 176, 0/.test(glow), "the glow is drawn", glow.slice(0, 60));
   await hoverTile(me, gap);
   const facts = await inspectText(me);
-  check(facts.includes(`Landmark ${name} → ${k + 1} of 8`) || facts.includes("Landmark completes one!"), "the inspector says what a glowing plot would do", facts);
+  check(facts.includes(`Landmark ${name} → ${k + 1} of ${next!.n} for ${next!.tier}`) || /Landmark completes (bronze|silver|gold)!/.test(facts), "the inspector says what a glowing plot would do", facts);
   await me.locator("[data-stage]").screenshot({ path: ".shots/goal-helps.png" });
   await me.mouse.move(2, 2);
   await me.locator(".hud").screenshot({ path: ".shots/goal-line.png" });
@@ -699,7 +713,17 @@ async function landmarks(browser: Browser): Promise<void> {
   const nine = ["Holder Hana", "Kai", "Zoe", "Ari", "Bartholomew Fitzgerald-X", "Cy", "Di", "Ed", "Flo"].map(player);
   await seed(nine[0], centre);
   const ring = around(centre);
-  for (let i = 0; i < 7; i++) await seed(nine[i + 1], ring[i]);
+  // Bronze first (ADR 6): the third neighbour crowns the centre, and every
+  // page gets the lighter line, no burst.
+  const bronze = watcher.waitForSelector('.cheer[data-tier="bronze"]:not([hidden])', { timeout: 3000 }).catch(() => null);
+  for (let i = 0; i < 3; i++) await seed(nine[i + 1], ring[i]);
+  check((await bronze) !== null, "bronze tells every page in a lighter line");
+  const light = ((await watcher.textContent(".cheer")) ?? "").trim();
+  check(/^Bronze crown at row \d+, column \d+: .+$/.test(light), "naming where and who", light);
+  check((await watcher.$(`button.tile[value="${centre}"] .burst`)) === null, "with no burst");
+  check((await watcher.getAttribute(`button.tile[value="${centre}"]`, "data-tier")) === "bronze", "and the tower wears a bronze crown");
+  await watcher.locator(".toasts").screenshot({ path: ".shots/landmark-bronze-toast.png" });
+  for (let i = 3; i < 7; i++) await seed(nine[i + 1], ring[i]);
   const burst = watcher.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
   const calmBurst = calm.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
   await seed(nine[8], ring[7]);
@@ -716,7 +740,7 @@ async function landmarks(browser: Browser): Promise<void> {
   check(await watcher.evaluate(() => document.activeElement?.id === "label"), "focus stays where it was");
   check((await watcher.$(`button.tile[value="${centre}"] .crown`)) !== null, "the tower wears a crown");
   const aria = (await watcher.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
-  check(aria.endsWith(`Landmark raised by ${nine.slice(0, 8).map((p) => p.label).join(", ")} and Flo`), "and its label names who raised it", aria);
+  check(aria.endsWith(`Gold landmark raised by ${nine.slice(0, 8).map((p) => p.label).join(", ")} and Flo`), "and its label names who raised it", aria);
   // Frozen mid-burst for the screenshot.
   await watcher.addStyleTag({ content: ".burst { animation-play-state: paused !important; animation-delay: -0.5s !important; }" });
   await watcher.screenshot({ path: ".shots/landmark.png" });
@@ -742,7 +766,7 @@ async function landmarks(browser: Browser): Promise<void> {
   }
   await hoverTile(late, centre);
   const facts = ((await late.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
-  check(/Landmark\s*raised by Holder Hana, Kai/.test(facts), "the inspector names the landmark's raisers", facts.trim());
+  check(/Landmark\s*Gold, raised by Holder Hana, Kai/.test(facts), "the inspector names the landmark's raisers", facts.trim());
   for (const p of [watcher, calm, late]) await p.context().close();
 }
 

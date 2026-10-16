@@ -264,13 +264,14 @@ const jsonForScript = (value: unknown): string =>
   JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 
 // The goal line: landmarks raised, and the building closest to the next one.
-// Shown only once some building has 5 or more neighbours (goalShown). The
-// name is its own element so a long one can be cut short on a phone without
-// losing "6 of 8". app.js rewrites the same pieces on every board.
+// Shown only once a crown stands or a building is one short of its next
+// tier (goalShown). The name is its own element so a long one can be cut
+// short on a phone without losing "4 of 5 for silver". app.js rewrites the
+// same pieces on every board.
 function goalLine(view: BoardView): string {
   const g = goal(view);
-  const p = goalParts(g) as { count: string; noun: string; lead: string; who: string; tail: string; unit: string };
-  return `<p class="landmarks" data-goal${hiddenIf(!goalShown(g))}><span class="crown-icon" aria-hidden="true"></span><span data-landmarks>${p.count}</span> <span data-goal-noun>${p.noun}</span><span class="goal-raised"> raised</span><span class="goal-sep" aria-hidden="true"> · </span><span class="goal-next"><span data-goal-lead>${escapeHtml(p.lead)}</span><span class="goal-who" data-goal-who>${escapeHtml(p.who)}</span><span data-goal-tail>${escapeHtml(p.tail)}</span><span class="goal-unit" data-goal-unit>${escapeHtml(p.unit)}</span></span></p>`;
+  const p = goalParts(g) as { count: string; noun: string; lead: string; who: string; tail: string; unit: string; tier: string };
+  return `<p class="landmarks" data-goal${hiddenIf(!goalShown(g))}><span class="crown-icon" aria-hidden="true"></span><span data-landmarks>${p.count}</span> <span data-goal-noun>${p.noun}</span><span class="goal-raised"> raised</span><span class="goal-sep" aria-hidden="true"> · </span><span class="goal-next"><span data-goal-lead>${escapeHtml(p.lead)}</span><span class="goal-who" data-goal-who>${escapeHtml(p.who)}</span><span data-goal-tail>${escapeHtml(p.tail)}</span><span class="goal-unit" data-goal-unit>${escapeHtml(p.unit)}</span><span data-goal-tier>${escapeHtml(p.tier)}</span></span></p>`;
 }
 
 // Small line icons, drawn in the page's ink. Each sits inside a control that

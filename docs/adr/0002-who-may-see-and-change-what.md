@@ -36,7 +36,7 @@ row their `pid` holds, or a row nobody is still around for.
 | You | | Rename yourself, by claiming your own tile again | `relabel`'s `WHERE id = ? AND claimer_id = ?`, in `claim` |
 | You | | Move, which releases your old tile | `release` then `take` in one `BEGIN IMMEDIATE` transaction; a lost move rolls back and you keep your tile |
 | You | | Keep your tile awake, by visiting | `touch(pid)` on `GET /` and `/events`; it only ever updates the row your `pid` holds |
-| Anyone | Every landmark the room has raised, and the names of the nine people who raised it | | `raise` in `src/db.ts` stores labels only, never a `pid`, when a tower reaches 8 ([ADR 4](0004-landmarks-and-waves.md)) |
+| Anyone | Every landmark the room has raised, and the names of the nine people who raised it | | `raise` in `src/db.ts` stores labels only, never a `pid`, when a tower reaches a tier: 3, 5 or 8 occupied neighbours ([ADR 4](0004-landmarks-and-waves.md), [ADR 6](0006-landmark-tiers.md)) |
 | You | | Help a neighbour (their building is next to yours), once an hour: +50 to them, +20 to you | `/help` checks same-origin, your active land, adjacency and `last_helped_at` inside one transaction, so a repeated or simultaneous request can't pay twice (Help replaced Wave, ADR 5) |
 | Nobody | | Take a held tile that isn't dormant | The same `WHERE`: `409` (JSON) or `303 /?notice=taken` (form) |
 | Nobody | | Hold two tiles | The move transaction, and the unique index `one_tile_each` on `claimer_id` as a backstop |

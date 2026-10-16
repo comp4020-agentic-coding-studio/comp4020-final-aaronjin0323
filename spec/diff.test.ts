@@ -548,22 +548,52 @@ describe("which board to show", () => {
 
 const line = (board: unknown): string => {
   const p = goalParts(goal(board));
-  return `${p.count} ${p.noun} raised · ${p.lead}${p.who}${p.tail}${p.unit}`;
+  return `${p.count} ${p.noun} raised · ${p.lead}${p.who}${p.tail}${p.unit}${p.tier}`;
 };
 const landmark = (cellId: number, raisers: string[], tier: Landmark["tier"] = "gold"): Landmark => ({ cellId, tier, label: raisers[0], raisers, raisedAt: NOW.toISOString() });
 const NINE = ["Mia", "Kai", "Zoe", "Ari", "Bo", "Cy", "Di", "Ed", "Flo"];
 
 describe("the goal line", () => {
-  it("names the building with the most neighbours, counted as neighbours, not height", () => {
+  it("names the building nearest its next tier, counted as neighbours, not height (ADR 6)", () => {
     const { store } = scene();
     store.claim(at(4, 4), MIA, "Mia", NOW);
     store.claim(at(4, 5), KAI, "Kai", NOW);
     store.claim(at(5, 4), ZOE, "Zoe", NOW);
     const v = boardView(store.tiles(), ME, NOW, [landmark(at(9, 9), NINE)]);
-    expect(line(v)).toBe("1 landmark raised · Closest: Mia's building, 2 of 8 neighbours");
+    expect(line(v)).toBe("1 landmark raised · Closest: Mia's building, 2 of 3 neighbours for bronze");
     // a higher level makes Kai taller, not closer
     const taller = { ...v, tiles: v.tiles.map((t) => (t.id === at(4, 5) ? { ...t, level: 5, height: 7 } : t)) };
-    expect(line(taller)).toBe("1 landmark raised · Closest: Mia's building, 2 of 8 neighbours");
+    expect(line(taller)).toBe("1 landmark raised · Closest: Mia's building, 2 of 3 neighbours for bronze");
+  });
+
+  it("names the next tier after a cell's crown: 4 of 5 for silver once bronze stands", () => {
+    const { store } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    // the four diagonals: each has only Mia beside it
+    [at(4, 4), at(4, 6), at(6, 4), at(6, 6)].forEach((id, i) => store.claim(id, `r${i}`, `R${i}`, NOW));
+    const bronze = boardView(store.tiles(), ME, NOW, store.raise(NOW));
+    expect(bronze.landmarks.cells[String(at(5, 5))].tier).toBe("bronze");
+    expect(line(bronze)).toMatch(/· Closest: Mia's building, 4 of 5 neighbours for silver$/);
+    // the next gap glows, and says it completes silver
+    expect(helpsWith(bronze, at(5, 6))).toMatchObject({ id: at(5, 5), tier: "silver", landmark: true });
+    expect(goal(bronze).helps).toContain(at(5, 6));
+    // once silver stands, Mia's next is gold: 5 of 8
+    store.claim(at(5, 6), "r4", "R4", NOW);
+    store.raise(NOW);
+    const silver = boardView(store.tiles(), ME, NOW, store.landmarks());
+    expect(silver.landmarks.cells[String(at(5, 5))].tier).toBe("silver");
+    expect(goalParts(goal(silver)).tier).toMatch(/^ for (silver|gold|bronze)$/);
+    expect(inspect(silver, at(6, 5), NOW).facts.find((f: string[]) => f[0] === "Landmark")?.[1]).toMatch(/ → \d of \d for (bronze|silver|gold)$|^completes (bronze|silver|gold)!$/);
+  });
+
+  it("never chases a tier a plot can't reach: a corner stops at bronze, an edge at silver", () => {
+    const { store, view } = scene();
+    // a corner with all 3 of its neighbours, crowned bronze
+    [at(0, 0), at(0, 1), at(1, 0), at(1, 1)].forEach((id, i) => store.claim(id, `c${i}`, `C${i}`, NOW));
+    const v = boardView(store.tiles(), ME, NOW, store.raise(NOW));
+    expect(v.landmarks.cells[String(at(0, 0))].tier).toBe("bronze");
+    expect(goal(v).closest?.id).not.toBe(at(0, 0));
+    expect(goal(view()).closest?.id).not.toBe(at(0, 0));
   });
 
   it("says how to start one when nobody has a neighbour", () => {
@@ -573,27 +603,29 @@ describe("the goal line", () => {
     expect(goal(view()).helps.sort((a: number, b: number) => a - b)).toEqual([at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6), at(6, 4), at(6, 5), at(6, 6)]);
   });
 
-  it("glows the last gap round a building and says it completes a landmark", () => {
+  it("glows the last gap round a building and says it completes gold", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), MIA, "Mia", NOW);
     let n = 0;
     for (const id of [at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6), at(6, 4), at(6, 5)]) store.claim(id, `n${n}`, `N${n++}`, NOW);
-    expect(helpsWith(view(), at(6, 6))).toMatchObject({ id: at(5, 5), landmark: true });
-    expect(goal(view()).helps).toContain(at(6, 6));
-    expect(inspect(view(), at(6, 6), NOW).facts).toContainEqual(["Landmark", "completes one!"]);
+    const v = boardView(store.tiles(), ME, NOW, store.raise(NOW));
+    expect(v.landmarks.cells[String(at(5, 5))].tier).toBe("silver");
+    expect(helpsWith(v, at(6, 6))).toMatchObject({ id: at(5, 5), tier: "gold", landmark: true });
+    expect(goal(v).helps).toContain(at(6, 6));
+    expect(inspect(v, at(6, 6), NOW).facts).toContainEqual(["Landmark", "completes gold!"]);
   });
 });
 
 describe("the goal line", () => {
-  it("stays hidden until some building has 5 neighbours, or a landmark stands", () => {
+  it("stays hidden until some building is one neighbour short of a tier, or a crown stands", () => {
     const { store, view } = scene();
     store.claim(at(5, 5), MIA, "Mia", NOW);
-    const ring = [at(4, 4), at(4, 5), at(4, 6), at(5, 4), at(5, 6)];
-    ring.slice(0, 4).forEach((id, i) => store.claim(id, `r${i}`, `R${i}`, NOW));
     expect(goalShown(goal(view()))).toBe(false);
     const hiddenDoc = new JSDOM(renderBoard(view(), "")).window.document;
     expect(hiddenDoc.querySelector("[data-goal]")!.hasAttribute("hidden")).toBe(true);
-    store.claim(ring[4], "r4", "R4", NOW);
+    store.claim(at(4, 4), "r0", "R0", NOW); // 1 of 3: two short
+    expect(goalShown(goal(view()))).toBe(false);
+    store.claim(at(4, 5), "r1", "R1", NOW); // 2 of 3: one short
     expect(goalShown(goal(view()))).toBe(true);
     const shownDoc = new JSDOM(renderBoard(view(), "")).window.document;
     expect(shownDoc.querySelector("[data-goal]")!.hasAttribute("hidden")).toBe(false);
@@ -612,15 +644,49 @@ describe("the page the server renders", () => {
     store.claim(at(5, 6), KAI, "Kai", NOW);
     const v = boardView(store.tiles(), ME, NOW, [landmark(at(5, 6), NINE)]);
     const doc = new JSDOM(renderBoard(v, "")).window.document;
-    expect(doc.querySelector("[data-goal]")!.textContent!.replace(/\s+/g, " ")).toBe("1 landmark raised · Closest: Mia's building, 1 of 8 neighbours");
+    expect(doc.querySelector("[data-goal]")!.textContent!.replace(/\s+/g, " ")).toBe("1 landmark raised · Closest: Mia's building, 1 of 3 neighbours for bronze");
     const glowing = [...doc.querySelectorAll<HTMLButtonElement>("button.tile[data-helps]")].map((b) => Number(b.value));
     expect(glowing.length).toBeGreaterThan(0);
     expect(glowing.sort((a, b) => a - b)).toEqual(goal(v).helps.sort((a: number, b: number) => a - b));
     const crowned = doc.querySelector<HTMLButtonElement>(`button.tile[value="${at(5, 6)}"]`)!;
     expect(crowned.querySelector(":scope > .crown")).not.toBeNull();
-    expect(crowned.getAttribute("aria-label")).toMatch(/\. Landmark raised by Mia, Kai, .* and Flo$/);
-    expect(raisedText({ cellId: at(3, 3), label: "Mia", raisers: NINE })).toBe("Landmark raised at row 4, column 4 by Mia, Kai, Zoe, Ari, Bo, Cy, Di, Ed and Flo!");
+    expect(crowned.dataset.tier).toBe("gold");
+    expect(crowned.getAttribute("aria-label")).toMatch(/\. Gold landmark raised by Mia, Kai, .* and Flo$/);
+    expect(raisedText({ cellId: at(3, 3), tier: "gold", label: "Mia", raisers: NINE })).toBe("Gold landmark raised at row 4, column 4 by Mia, Kai, Zoe, Ari, Bo, Cy, Di, Ed and Flo!");
     expect(tileAria("x", null)).toBe("x");
+  });
+
+  it("shows a cell's highest tier only, and counts crowned cells, not rows", () => {
+    const rows = [landmark(at(5, 5), NINE.slice(0, 4), "bronze"), landmark(at(5, 5), NINE.slice(0, 6), "silver"), landmark(at(2, 2), NINE.slice(0, 4), "bronze")];
+    const v = boardView(scene().store.tiles(), ME, NOW, rows);
+    expect(v.landmarks.count).toBe(2);
+    expect(v.landmarks.cells[String(at(5, 5))]).toEqual({ tier: "silver", label: "Mia", raisers: NINE.slice(0, 6) });
+    const doc = new JSDOM(renderBoard(v, "")).window.document;
+    const tierOf = (id: number) => doc.querySelector<HTMLButtonElement>(`button.tile[value="${id}"]`)!.dataset.tier;
+    expect([tierOf(at(5, 5)), tierOf(at(2, 2)), tierOf(at(7, 7))]).toEqual(["silver", "bronze", undefined]);
+    expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("aria-label")).toMatch(/\. Silver landmark raised by Mia, Kai, Zoe, Ari, Bo and Cy$/);
+    // bronze and silver are the lighter line: no "!", and the names cut short
+    expect(raisedText({ cellId: at(5, 5), tier: "silver", label: "Mia", raisers: NINE.slice(0, 6) })).toBe("Silver crown at row 6, column 6: Mia, Kai and 4 others");
+    expect(raisedText({ cellId: at(2, 2), tier: "bronze", label: "Mia", raisers: NINE.slice(0, 4) })).toBe("Bronze crown at row 3, column 3: Mia, Kai and 2 others");
+  });
+
+  it("agrees with the server on which tiers a building's neighbours reach, on random boards", () => {
+    let seed = 11;
+    const rand = (): number => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    let checked = 0;
+    for (let round = 0; round < 20; round++) {
+      const store = openStore(":memory:");
+      for (let id = 0; id < 144; id++) if (rand() < 0.45) store.claim(id, `p${id}`, `P${id}`, NOW);
+      const v = boardView(store.tiles(), ME, NOW, store.raise(NOW));
+      for (const t of v.tiles) {
+        if (t.state === "free") continue;
+        const reached = ECONOMY.landmarkTiers.filter((x: { neighbours: number }) => t.neighbours >= x.neighbours).map((x: { tier: string }) => x.tier);
+        expect(v.landmarks.cells[String(t.id)]?.tier).toBe(reached.at(-1));
+        checked += reached.length > 0 ? 1 : 0;
+      }
+      store.close();
+    }
+    expect(checked).toBeGreaterThan(50);
   });
 
   // What the page renders, and what it leaves out: a control that can't be

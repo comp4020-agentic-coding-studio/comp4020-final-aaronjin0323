@@ -17,8 +17,10 @@ commitments:
    and you're told whose they were; when someone settles beside you, you're
    told who. Every neighbour also adds a fifth to your building's income,
    so standing beside strangers pays. The room's goal is landmarks: a
-   building ringed by eight others. It takes nine of you, and you can help
-   whoever's beside you.
+   building earns a bronze crown with three neighbours, silver with five and
+   gold when ringed by eight others, so three of you can start one and it
+   takes nine to finish ([why tiers](docs/adr/0006-landmark-tiers.md)). You
+   can help whoever's beside you.
 2. **Land is borrowed; what you build with it is yours.** A plot is a
    24-hour lease you can renew with coins, up to two days, then it returns
    to the room. Your coins survive the tab closing, a restart, a redeploy

@@ -1779,6 +1779,25 @@ main {
   clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
 }
 
+/* Lower tiers (docs/adr/0006): the same crown in bronze or silver, smaller,
+   so a gold one still stands out. Each keeps the black outline and a
+   different lightness, so the tiers read apart in greyscale too. */
+.tile[data-tier="silver"] .crown {
+  width: 95%;
+}
+
+.tile[data-tier="silver"] .crown::before {
+  background: linear-gradient(to bottom, #ffffff, #c9d1da 60%, #7f8b97);
+}
+
+.tile[data-tier="bronze"] .crown {
+  width: 80%;
+}
+
+.tile[data-tier="bronze"] .crown::before {
+  background: linear-gradient(to bottom, #f0b27a, #b8692e 60%, #6e3a14);
+}
+
 /* A landmark's roof keeps a gold edge, so the cell reads as one even
    when the crown is behind a taller tower. */
 .tile[data-landmark]:not(:focus-visible, [data-selected], [data-raised]) {
@@ -2126,6 +2145,25 @@ body:has(.confirm:not([hidden])) main {
   vertical-align: -0.1em;
   background: var(--accent);
   clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
+}
+
+/* Bronze and silver (docs/adr/0006) are the lighter message: body-size
+   cream text, and the crown in the tier's colour. Only gold shouts. */
+.cheer[data-tier="bronze"],
+.cheer[data-tier="silver"] {
+  font-size: var(--fs-body);
+  color: var(--ink);
+  -webkit-text-stroke: 0;
+  text-shadow: none;
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cheer[data-tier="silver"]::before {
+  background: #c9d1da;
+}
+
+.cheer[data-tier="bronze"]::before {
+  background: #c97a3a;
 }
 
 @keyframes toast-in {

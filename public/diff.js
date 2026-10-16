@@ -383,30 +383,41 @@ export function accepts(shownVersion, nextVersion, streamVersion = null) {
   return streamVersion !== null && nextVersion < streamVersion;
 }
 
-// --- the room's goal: landmarks (docs/adr/0004, amended by 0005) ---
-// A building becomes a landmark when all 8 of its neighbours are occupied.
-// The board carries `landmarks: { count, cells: { [cellId]: { label,
-// raisers } } }`; a board without it counts as none raised.
+// --- the room's goal: landmarks in tiers (docs/adr/0004, 0005, 0006) ---
+// A building earns a bronze crown at 3 occupied neighbours, silver at 5 and
+// gold at 8, each once per cell, lower tiers with it. The board carries
+// `landmarks: { count, cells: { [cellId]: { tier, label, raisers } } }`,
+// each cell at its highest tier; a board without it counts as none raised.
 
-export const LANDMARK_AT = 8;
-// The goal line stays off the page until some building has this many
-// neighbours: before then it's a target nobody is near.
-export const GOAL_SHOWN_AT = 5;
-export const goalShown = (g) => g.count > 0 || (g.closest !== null && g.closest.neighbours >= GOAL_SHOWN_AT);
+export const TIERS = ECONOMY.landmarkTiers;
+const rankOf = (tier) => TIERS.findIndex((t) => t.tier === tier);
+// The goal line stays off the page until a crown stands or some building is
+// this many neighbours short of its next tier: before then it's a target
+// nobody is near.
+export const GOAL_SHOWN_WITHIN = 1;
+export const goalShown = (g) => g.count > 0 || (g.closest !== null && g.closest.target - g.closest.neighbours <= GOAL_SHOWN_WITHIN);
 
 const landmarksOf = (board) => board.landmarks ?? { count: 0, cells: {} };
 export const landmarkAt = (board, id) => {
   const cells = landmarksOf(board).cells ?? {};
   return Object.hasOwn(cells, String(id)) ? cells[String(id)] : null;
 };
-// An edge plot has at most 5 neighbours, so it can never be one.
-const interior = (id) => {
-  const r = Math.floor(id / N);
-  const c = id % N;
-  return r > 0 && r < N - 1 && c > 0 && c < N - 1;
-};
-const contender = (board, t) => claimed(t) && interior(t.id) && !landmarkAt(board, t.id);
+// The next tier the cell can still earn: the one after its crown, if the
+// cell has room for that many neighbours (a corner has 3, an edge 5), or
+// null when there's none left.
+export function nextTier(board, id) {
+  const mark = landmarkAt(board, id);
+  const room = neighbours(id).length;
+  const next = TIERS[mark ? rankOf(mark.tier) + 1 : 0];
+  return next && next.neighbours <= room ? next : null;
+}
+const contender = (board, t) => claimed(t) && nextTier(board, t.id) !== null;
 const buildingOf = (t) => (t.state === "mine" ? "your building" : `${t.label}'s building`);
+// Nearer first: fewer neighbours still needed, then the higher tier, then
+// more neighbours already, then the lower cell.
+const nearer = (a, b) =>
+  a.target - a.neighbours - (b.target - b.neighbours) || rankOf(b.tier) - rankOf(a.tier) || b.neighbours - a.neighbours || a.id - b.id;
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // Every name, for the one message that names all nine raisers.
 export function allNames(list) {
@@ -415,72 +426,80 @@ export function allNames(list) {
 }
 
 // What building on `id` would do for the goal: the building it brings
-// closest to 8 neighbours (most neighbours after, ties to the lower cell id),
-// or that settling there completes a landmark of your own. Null if it moves
-// no contender closer: moving between two gaps round one building helps it
+// nearest its next tier (fewest still needed after, then the higher tier),
+// which may be the new building itself if it would earn a crown at once.
+// `landmark` is true when that completes the tier. Null if it moves no
+// contender closer: moving between two gaps round one building helps it
 // not at all.
 export function helpsWith(board, id) {
   const p = preview(board, id);
   if (!p) return null;
-  if (p.neighbours >= LANDMARK_AT && interior(id) && !landmarkAt(board, id)) {
-    return { id, label: null, neighbours: p.neighbours, landmark: true, name: "your building" };
-  }
   let best = null;
+  const consider = (h) => {
+    if (!best || nearer(h, best) < 0) best = h;
+  };
+  const own = nextTier(board, id);
+  if (own && p.neighbours >= own.neighbours) {
+    consider({ id, label: null, neighbours: p.neighbours, tier: own.tier, target: own.neighbours, landmark: true, name: "your building" });
+  }
   for (const x of board.tiles) {
     if (x.id === id || !contender(board, x)) continue;
     const after = p.counts[x.id];
     if (after <= neighboursOf(board, x)) continue;
-    if (!best || after > best.neighbours) best = { id: x.id, label: x.label, neighbours: after, landmark: after >= LANDMARK_AT, name: buildingOf(x) };
+    const next = nextTier(board, x.id);
+    consider({ id: x.id, label: x.label, neighbours: after, tier: next.tier, target: next.neighbours, landmark: after >= next.neighbours, name: buildingOf(x) });
   }
   return best;
 }
 
-// The goal line and the glowing plots. `closest` is the contender with the
-// most occupied neighbours (ties to the lower cell id), or null when none has
-// any. `helps` are the free plots whose claim would bring a building to at
-// least that many (or complete a landmark): the gaps round the front-runners,
-// not every plot beside anyone. With no neighbours anywhere, any plot beside
-// someone helps, which is how a block starts.
+// The goal line and the glowing plots. `closest` is the contender nearest
+// its next tier (see `nearer`), or null when nobody has a neighbour. `helps`
+// are the free plots whose claim would leave a building at most as far from
+// its next tier as the leader is now (or complete one): the gaps round the
+// front-runners, not every plot beside anyone. With no neighbours anywhere,
+// any plot beside someone helps, which is how a block starts.
 export function goal(board) {
   const count = landmarksOf(board).count ?? 0;
   let top = null;
-  let topN = -1;
   for (const t of board.tiles) {
     if (!contender(board, t)) continue;
-    const n = neighboursOf(board, t);
-    if (n > topN) {
-      top = t;
-      topN = n;
-    }
+    const next = nextTier(board, t.id);
+    const c = { id: t.id, label: t.label, neighbours: neighboursOf(board, t), tier: next.tier, target: next.neighbours, mine: t.state === "mine", name: buildingOf(t) };
+    if (!top || nearer(c, top) < 0) top = c;
   }
-  const closest = top && topN > 0 ? { id: top.id, label: top.label, neighbours: topN, mine: top.state === "mine", name: buildingOf(top) } : null;
-  const peak = top ? topN : Infinity;
+  const anyNeighbours = board.tiles.some((t) => contender(board, t) && neighboursOf(board, t) > 0);
+  const closest = top && anyNeighbours ? top : null;
+  const peak = top ? top.target - top.neighbours : Infinity;
   const helps = [];
   for (const t of board.tiles) {
     const h = helpsWith(board, t.id);
-    if (h && (h.landmark || h.neighbours >= peak)) helps.push(t.id);
+    if (h && (h.landmark || h.target - h.neighbours <= peak)) helps.push(t.id);
   }
   return { count, closest, helps };
 }
 
 // The goal line's words, in pieces so a long name can be cut short on a
-// phone without losing "6 of 8 neighbours". src/board.ts renders the same
-// line. "1 landmark raised · Closest: Mia's building, 6 of 8 neighbours".
+// phone without losing "4 of 5". src/board.ts renders the same line.
+// "1 landmark raised · Closest: Mia's building, 4 of 5 neighbours for silver".
 export function goalParts(g) {
   const noun = g.count === 1 ? "landmark" : "landmarks";
-  if (!g.closest) return { count: String(g.count), noun, lead: "Start one: build beside someone", who: "", tail: "", unit: "" };
-  const tail = `${g.closest.mine ? " building" : "'s building"}, ${g.closest.neighbours} of ${LANDMARK_AT}`;
-  // " neighbours" is its own piece, so a phone can tuck it away first
-  return { count: String(g.count), noun, lead: "Closest: ", who: g.closest.mine ? "your" : g.closest.label, tail, unit: " neighbours" };
+  if (!g.closest) return { count: String(g.count), noun, lead: "Start one: build beside someone", who: "", tail: "", unit: "", tier: "" };
+  const tail = `${g.closest.mine ? " building" : "'s building"}, ${g.closest.neighbours} of ${g.closest.target}`;
+  // " neighbours" is its own piece, so a phone can tuck it away first; the
+  // tier stays, since "4 of 5" means nothing without it
+  return { count: String(g.count), noun, lead: "Closest: ", who: g.closest.mine ? "your" : g.closest.label, tail, unit: " neighbours", tier: ` for ${g.closest.tier}` };
 }
 
-// A tile's aria-label: its words, plus the landmark ever raised on that
-// cell. src/board.ts renders it the same way.
-export const tileAria = (aria, mark) => (mark ? `${aria}. Landmark raised by ${allNames(mark.raisers)}` : aria);
+// A tile's aria-label: its words, plus the highest crown ever raised on
+// that cell. src/board.ts renders it the same way.
+export const tileAria = (aria, mark) => (mark ? `${aria}. ${capital(mark.tier ?? "gold")} landmark raised by ${allNames(mark.raisers)}` : aria);
 
-// The one message every page shows when a landmark is raised, naming all nine.
+// The one message every page shows when a crown is raised. Gold, the
+// celebration, names all nine; bronze and silver are a lighter line.
+export const isGold = (raised) => (raised.tier ?? "gold") === TIERS[TIERS.length - 1].tier;
 export function raisedText(raised) {
-  return `Landmark raised at ${place(raised.cellId)} by ${allNames(raised.raisers)}!`;
+  if (isGold(raised)) return `Gold landmark raised at ${place(raised.cellId)} by ${allNames(raised.raisers)}!`;
+  return `${capital(raised.tier)} crown at ${place(raised.cellId)}: ${names(raised.raisers)}`;
 }
 
 // --- the city log ---
@@ -620,7 +639,7 @@ export function inspect(board, id, now) {
     if (p.lifted.length) facts.push(["Lifts", `${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%`]);
     if (p.dropped.length) facts.push(["Drops", `${names(p.dropped.map((i) => board.tiles[i].label))} ${MINUS}${PCT}%`]);
     const h = goalShown(goal(board)) ? helpsWith(board, id) : null;
-    if (h) facts.push(["Landmark", h.landmark ? "completes one!" : `${h.name} → ${h.neighbours} of ${LANDMARK_AT}`]);
+    if (h) facts.push(["Landmark", h.landmark ? `completes ${h.tier}!` : `${h.name} → ${h.neighbours} of ${h.target} for ${h.tier}`]);
   } else {
     const level = levelOf(t);
     const around = neighboursOf(board, t);
@@ -631,7 +650,7 @@ export function inspect(board, id, now) {
     if (lease) facts.push(["Lease", lease === "ended" ? "ended" : `${lease} left`]);
   }
   const mark = landmarkAt(board, id);
-  if (mark) facts.unshift(["Landmark", `raised by ${allNames(mark.raisers)}`]);
+  if (mark) facts.unshift(["Landmark", `${capital(mark.tier ?? "gold")}, raised by ${allNames(mark.raisers)}`]);
   return { title, facts };
 }
 

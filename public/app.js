@@ -15,6 +15,7 @@ import {
   hudParts,
   initialsOf,
   inspect,
+  isGold,
   landmarkAt,
   leaseSoon,
   pendingNow,
@@ -272,6 +273,7 @@ if (board && stage) {
     if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
     if (mark) {
       el.dataset.landmark = mark.label;
+      el.dataset.tier = mark.tier ?? "gold";
       el.dataset.landmarkRaisers = JSON.stringify(mark.raisers);
       if (!el.querySelector(".crown")) {
         const crown = document.createElement("span");
@@ -281,6 +283,7 @@ if (board && stage) {
       }
     } else if (el.dataset.landmark !== undefined) {
       delete el.dataset.landmark;
+      delete el.dataset.tier;
       delete el.dataset.landmarkRaisers;
       el.querySelector(".crown")?.remove();
     }
@@ -303,7 +306,7 @@ if (board && stage) {
       } catch {
         // unreadable: the crown still shows, with no names
       }
-      cells[String(id)] = { label: el.dataset.landmark, raisers };
+      cells[String(id)] = { tier: el.dataset.tier ?? "gold", label: el.dataset.landmark, raisers };
     });
     return { count: Number(landmarkCount?.textContent) || Object.keys(cells).length, cells };
   };
@@ -749,7 +752,7 @@ if (board && stage) {
   // --- the room's goal (docs/adr/0004): shown once it's within reach ---
   const goalLine = document.querySelector("[data-goal]");
   const goalSlots = goalLine
-    ? Object.fromEntries(["noun", "lead", "who", "tail", "unit"].map((k) => [k, goalLine.querySelector(`[data-goal-${k}]`)]))
+    ? Object.fromEntries(["noun", "lead", "who", "tail", "unit", "tier"].map((k) => [k, goalLine.querySelector(`[data-goal-${k}]`)]))
     : {};
   const showGoal = (next) => {
     const g = goal(next);
@@ -761,7 +764,8 @@ if (board && stage) {
     tiles.forEach((el, id) => setData(el, "helps", glow.has(id) ? "" : null));
   };
 
-  // --- a landmark raised: the one room-wide moment ---
+  // --- a crown raised: the room-wide moments (docs/adr/0006). Gold is the
+  // celebration, a burst and every name; bronze and silver only a toast. ---
   const celebrated = new Set();
   const cheer = document.createElement("p");
   cheer.className = "cheer";
@@ -770,9 +774,23 @@ if (board && stage) {
   let raisedNews = null; // a raising that landed while my claim was in flight
   const celebrate = (raised) => {
     const id = Number(raised.cellId);
-    if (celebrated.has(id) || !tiles[id]) return;
-    celebrated.add(id);
+    const key = `${id}:${raised.tier ?? "gold"}`;
+    if (celebrated.has(key) || !tiles[id]) return;
+    celebrated.add(key);
     const tile = tiles[id];
+    if (!isGold(raised)) {
+      // never over a gold celebration still on screen
+      if (!cheer.hidden && cheer.dataset.tier === "gold") return;
+      cheer.dataset.tier = raised.tier;
+      cheer.textContent = raisedText(raised);
+      cheer.hidden = false;
+      clearTimeout(cheerTimer);
+      cheerTimer = setTimeout(() => (cheer.hidden = true), 4000);
+      if (busy) raisedNews = raisedText(raised);
+      else announce(raisedText(raised));
+      return;
+    }
+    cheer.dataset.tier = "gold";
     tile.dataset.raised = "";
     const burst = document.createElement("span");
     burst.className = "burst";
