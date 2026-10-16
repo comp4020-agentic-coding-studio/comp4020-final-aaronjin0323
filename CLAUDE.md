@@ -145,7 +145,8 @@ it.
   display only.
 - **The city log** is a table of public events (`type`, text fields, plot,
   time; never a `pid`), the latest 8 sent on each board.
-- **Landmarks stay** (ADR 4): a building with all 8 neighbours occupied.
+- **Landmarks stay** (ADR 4): a building with all 8 neighbours occupied,
+  now the gold tier of three (ADR 6: bronze 3, silver 5, gold 8).
   **Help replaces Wave**: `/wave` is removed.
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)
@@ -249,15 +250,25 @@ whole point. So:
 Playing it found the game was one action: claim, then wait. Recorded in
 `docs/adr/0004-landmarks-and-waves.md`.
 
-- **The goal is landmarks.** A tower becomes a landmark when it reaches
-  height 8, all 8 neighbours held by people who are around. Nine people are
-  needed, so it's cooperation by definition, and every gap round a nearly
-  finished tower is a reason to move.
+- **The goal is landmarks, in tiers on the same spot** (ADR 6, amending
+  ADR 4). A tower earns a **bronze** crown at 3 occupied neighbours,
+  **silver** at 5 and **gold** at 8 (gold is ADR 4's landmark: nine people).
+  The thresholds are game numbers: `LANDMARK_TIERS` in `src/economy.ts`,
+  mirrored in `public/diff.js`'s `ECONOMY`. Bronze and silver give a room of
+  three or four something to reach; every step is on the way to gold, and
+  every gap round a nearly finished tower is still a reason to move. A
+  threshold that scales with the number of players was turned down (ADR 6):
+  a moving goal, a reason to keep people away, and untestable.
 - **Landmarks are stored, permanent, and only ever counted up.** Migration 3
   adds `landmarks (id INTEGER PRIMARY KEY, cell_id INTEGER, label TEXT,
-  raisers TEXT, raised_at TEXT)`, with `raisers` a JSON array of the nine
-  labels and no `pid`. One row per cell, ever (unique index, `INSERT OR
-  IGNORE`): a tower that drops and reaches 8 again doesn't record a second.
+  raisers TEXT, raised_at TEXT)`, with `raisers` a JSON array of the holder
+  and the occupied neighbours' labels and no `pid`. Migration 5 adds `tier`
+  (`'gold'` by default, which every earlier row was), makes the unique index
+  `(cell_id, tier)`, and backfills silver and bronze under every gold row.
+  One row per (cell, tier), ever (`INSERT OR IGNORE`): a tower that drops and
+  reaches a tier again doesn't record a second. **Reaching a tier records
+  every tier below it too**, so a cell's tiers are always a prefix of bronze,
+  silver, gold, and its crown is its highest.
   `store.raise(now)` runs inside every `broadcast()`, since every change that
   can lift a tower already broadcasts; it's the same synchronous turn as the
   change, not the same SQL transaction (inside `claim()` it slowed the
@@ -266,18 +277,26 @@ Playing it found the game was one action: claim, then wait. Recorded in
   because the people who raised one may have left.
 - **A landmark is a mark on the spot, not a lock.** Ownership rules are
   unchanged: its holder can move, and the tile can fade and be settled. It
-  shows as a crown on that cell.
-- **The only room-wide message is a landmark being raised.** Every open
-  page celebrates it briefly and names the nine. Everything else is still
-  narrated for your own tile only.
-- **The page always shows what's next:** landmarks raised so far, and the
-  tower closest to 8 ("Mia's tower, 6 of 8"). Tiles that would bring a tower
-  closer glow (`data-helps`), and the preview and inspector say so. This is
-  worked out on the page from the board, like the +1/−1, and held equal to
-  the server's heights by a test.
-- **Each `board` event carries `landmarks`** (count, plus per raised cell
-  its label and raisers) and, once, a `raised` entry for a landmark that
-  just happened, so a reconnecting page doesn't replay old celebrations.
+  shows as a crown on that cell, coloured by its highest tier.
+- **The only room-wide messages are crowns being raised.** Gold is the
+  celebration: every open page bursts and names all nine. Bronze and silver
+  are a lighter toast ("Silver crown at row 4, column 4: Mia, Kai and 4
+  others") and the live region, no burst. Only the highest new tier of a
+  change is told; the rest are logged. Everything else is still narrated for
+  your own tile only.
+- **The page always shows what's next:** crowned cells so far, and the
+  tower nearest its next tier ("Closest: Mia's building, 4 of 5 neighbours
+  for silver"; fewest neighbours still needed, ties to the higher tier). A
+  corner can only ever reach bronze and an edge silver, so neither is ever
+  shown chasing a tier it can't reach. Tiles that would bring a tower closer
+  glow (`data-helps`), and the preview and inspector say so. This is worked
+  out on the page from the board, like the +1/−1, and held equal to the
+  server's heights by a test.
+- **Each `board` event carries `landmarks`** (count of crowned cells, plus
+  per crowned cell its highest `tier`, label and raisers) and, once, a
+  `raised` entry (with `tier`) for a crown that just happened, so a
+  reconnecting page doesn't replay old celebrations. The log line is
+  `landmark at=… tier=… label=… raisers=…`, one per row recorded.
 - **Neighbours can wave.** Selecting a neighbour's tower offers a Wave
   button: `POST /wave` with `cellId`, same-origin like `/claim`. It's allowed
   only from someone holding a tile, at a held tile next to theirs, at most
@@ -347,8 +366,8 @@ board, and as few words as possible.
 - **Secondary things are tucked away until asked for.** The map key, the
   city activity list, the camera buttons and the keyboard hint sit behind
   small icon buttons (or appear after your first claim), not on the first
-  screen. The landmark goal shows only once someone's building has 5+
-  neighbours.
+  screen. The landmark goal shows only once a crown stands or some
+  building is one neighbour short of its next tier (ADR 6).
 - **Accessibility is kept, not traded away.** Every visual cue has a
   text equivalent for screen readers, keyboard and no-JS paths still work,
   and reduced motion replaces motion with a static highlight.
