@@ -1,7 +1,9 @@
 # 6. Landmarks come in tiers: bronze, silver, gold on the same spot
 
 - **Status:** accepted, week 12. Amends ADR 4 (and ADR 5's "a landmark is a
-  building with all 8 neighbours occupied").
+  building with all 8 neighbours occupied"). Amended by ADR 7: a park counts
+  as an occupied neighbour (except for its placer's own building), and gold
+  needs at least 3 distinct people.
 - **Decides:** what counts as a landmark, how it's recorded, and what the
   page says is next
 
@@ -19,7 +21,10 @@ taking away the big one.
 **A tower earns a crown in three tiers on the same spot:** bronze at 3
 occupied neighbours, silver at 5, gold at 8. Gold is exactly ADR 4's
 landmark. "Occupied" is unchanged: a neighbour whose lease is running (ADR
-5). The thresholds are game numbers, so they live in `src/economy.ts`
+5), or, since [ADR 7](0007-parks.md), a park still running that someone
+other than the building's holder placed. **Gold also needs at least 3
+distinct people** among the holder, the occupied neighbours' holders and the
+counted parks' placers (ADR 7); bronze and silver have no such rule. The thresholds are game numbers, so they live in `src/economy.ts`
 (`LANDMARK_TIERS`) and its mirror in `public/diff.js`, held equal by
 `spec/diff.test.ts`.
 

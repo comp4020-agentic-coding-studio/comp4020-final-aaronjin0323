@@ -106,7 +106,8 @@ it.
   Building, Skyscraper) with upgrade costs 150, 400, 900, 1800; relocation
   50 coins, 30 min cooldown; lease 24 h, renewals 6 h/100, 12 h/180,
   24 h/300, never past 48 h from the ownership start; help +50 to the
-  neighbour, +20 to the helper, once an hour. The one exception:
+  neighbour, +20 to the helper, once an hour; a park 60 coins, 2 h, at most
+  2 running per player; gold needs 3 distinct people (ADR 7). The one exception:
   `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
   import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
   single field. Change `src/economy.ts` first, then the mirror.
@@ -132,10 +133,12 @@ it.
 - **Each action is one POST, checked on the server, one transaction:**
   `/claim` (also relocation, when you already hold land: 50 coins,
   cooldown), `/collect`, `/upgrade`, `/renew` (`hours` 6|12|24), `/help`
-  (`cellId` of an adjacent neighbour). Same-origin, `pid` only, JSON or form
+  (`cellId` of an adjacent neighbour), `/park` (`cellId` of a free plot,
+  ADR 7). Same-origin, `pid` only, JSON or form
   (form gets a `303` with a notice key, as `/claim` does). Refusals are
   specific: `409` taken, `402` not enough coins, `429` cooldown, `400` bad
-  input or rule (`max-level`, `max-lease`, `not-neighbour`, `no-land`).
+  input or rule (`max-level`, `max-lease`, `not-neighbour`, `no-land`,
+  `park-limit`).
   Nothing the client sends is trusted except the plot and option it picks.
 - **The board event carries public state for all, private state for you.**
   Every tile: `{ state, label, hue, level, neighbours, height, rate,
@@ -148,6 +151,31 @@ it.
 - **Landmarks stay** (ADR 4): a building with all 8 neighbours occupied,
   now the gold tier of three (ADR 6: bronze 3, silver 5, gold 8).
   **Help replaces Wave**: `/wave` is removed.
+
+### Parks (ADR 7): a public good you place for your neighbours
+
+Read `docs/adr/0007-parks.md`. One building per person stays; a park is
+not a tile anyone holds.
+
+- **`POST /park {cellId}`**: you must hold land; 60 coins; lasts 2 h from
+  placement; never renewed; at most 2 running per player. One `BEGIN
+  IMMEDIATE`, settle first. Refusals: `402` coins, `409` plot not free, `400`
+  `no-land`, `park-limit`, `cell`.
+- **A park is an occupied neighbour for every building except its placer's
+  own**: height, the +20% bonus and landmark tiers all count it. It earns
+  nothing and blocks building on its plot (a claim on it is `409`).
+- **Gold also needs 3 distinct people** among the holder, the neighbours'
+  holders and the counted parks' placers. Bronze and silver don't.
+- **A park ends on the clock**: an ended park is gone on every read; the
+  sweep deletes it, writes the city log, logs `park.end` and broadcasts. Park
+  starts and ends are cut points in `integrate()`, like lease ends.
+- **Schema: migration 6** adds `parks (cell_id INTEGER PRIMARY KEY,
+  placed_by TEXT NOT NULL, label TEXT, placed_at TEXT NOT NULL, ends_at TEXT
+  NOT NULL)`. `placed_by` is a `pid` and never leaves the store.
+- **Payload:** a park tile is `state: "park"` with the placer's label,
+  `endsAt` and `mine` (yours only), never a `pid`; `me` gains `parks` and
+  `parkLimit`. The page offers "Place park (60)" on a free plot beside
+  someone else's building. Logged as `park who=… at=… label=…`.
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)
 
