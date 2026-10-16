@@ -42,6 +42,11 @@ export const LEASE_CAP_MS = 48 * HOUR;
 export const HELP_GIFT = 50; // to the neighbour helped
 export const HELP_REWARD = 20; // to the helper
 export const HELP_COOLDOWN_MS = HOUR;
+// Returning the favour (docs/adr/0008): helping back the neighbour who
+// helped you, within this long of their help, pays each of you this much
+// more on top of the help itself. Once per favour.
+export const RETURN_BONUS = 30;
+export const RETURN_WINDOW_MS = HOUR;
 
 // Landmark tiers (docs/adr/0006): a building earns each crown when this many
 // of its neighbours are occupied, lowest first. Gold is ADR 4's landmark.
@@ -145,6 +150,8 @@ export const ECONOMY = Object.freeze({
   helpGift: HELP_GIFT,
   helpReward: HELP_REWARD,
   helpCooldownMinutes: HELP_COOLDOWN_MS / MINUTE,
+  returnBonus: RETURN_BONUS, // to each, for helping back in time
+  returnWindowMinutes: RETURN_WINDOW_MS / MINUTE,
   landmarkTiers: Object.freeze(LANDMARK_TIERS.map((t) => Object.freeze({ tier: t.tier, neighbours: t.neighbours }))),
   parkCost: PARK_COST,
   parkHours: PARK_MS / HOUR,

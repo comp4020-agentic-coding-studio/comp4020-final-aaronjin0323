@@ -216,6 +216,7 @@ describe("what each action's answer says", () => {
       upgraded: "Upgraded!",
       renewed: "Lease renewed!",
       helped: "Helped! +50 to them, +20 to you",
+      returned: "Helped back! +30 each",
       parked: "Park open!",
       "park-limit": "2 parks at most.",
       coins: "Not enough coins.",

@@ -398,7 +398,7 @@ describe("migration 6 (parks) from a version-5 database", () => {
       opened.pop();
 
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
       const cols = (v.prepare("PRAGMA table_info(parks)").all() as { name: string; notnull: number; pk: number }[]).map((c) => [c.name, c.notnull, c.pk]);
       expect(cols).toEqual([
         ["cell_id", 0, 1],

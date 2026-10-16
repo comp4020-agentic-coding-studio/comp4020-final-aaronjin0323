@@ -13,6 +13,8 @@ import {
   PARK_LIMIT,
   PARK_MS,
   rate,
+  RETURN_BONUS,
+  RETURN_WINDOW_MS,
   RELOCATE_COOLDOWN_MS,
   RELOCATE_COST,
   renewal,
@@ -80,6 +82,10 @@ export type Me = {
   helpAt: string | null; // when you may help again; null if you never have
   parks: number; // your parks still running
   parkLimit: number; // how many may run at once
+  // The neighbour whose help you can return for the bonus (docs/adr/0008):
+  // their plot and when the window closes. Only while it's open and they
+  // stand next to your building, since help is adjacent-only. Never a pid.
+  returnable: { cellId: number; until: string } | null;
 };
 
 // What a visit tells you once: coins your building earned while you were
@@ -90,7 +96,8 @@ export type ClaimResult = "claimed" | "moved" | "renamed" | "taken" | "coins" | 
 export type CollectResult = { paid: number };
 export type UpgradeResult = "upgraded" | "no-land" | "max-level" | "coins";
 export type RenewResult = "renewed" | "hours" | "no-land" | "max-lease" | "coins";
-export type HelpResult = "helped" | "no-land" | "not-neighbour" | "cooldown";
+// "returned": a help that returned the favour and paid RETURN_BONUS each.
+export type HelpResult = "helped" | "returned" | "no-land" | "not-neighbour" | "cooldown";
 export type ParkResult = "parked" | "no-land" | "taken" | "park-limit" | "coins";
 
 export type Store = {
@@ -360,6 +367,13 @@ const MIGRATIONS = [
      placed_at TEXT NOT NULL,
      ends_at   TEXT NOT NULL
    );`,
+
+  // 7. Return the favour, docs/adr/0008: who last helped this player and
+  // when, so helping them back within the hour can pay a bonus once.
+  // helped_by is a pid and never leaves the store. Both nullable, so every
+  // row already there means "no favour open", which is true.
+  `ALTER TABLE players ADD COLUMN helped_by TEXT;
+   ALTER TABLE players ADD COLUMN helped_by_at TEXT;`,
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -391,6 +405,8 @@ type PlayerRow = {
   seenAt: string | null;
   seenEarnedCents: number;
   leaseLostAt: string | null;
+  helpedBy: string | null;
+  helpedByAt: string | null;
 };
 
 export function openStore(path: string): Store {
@@ -442,7 +458,8 @@ export function openStore(path: string): Store {
 
   const PLAYER = `pid, label, coins, unclaimed_cents AS unclaimedCents, last_relocated_at AS lastRelocatedAt,
     last_helped_at AS lastHelpedAt, earned_cents AS earnedCents, seen_at AS seenAt,
-    seen_earned_cents AS seenEarnedCents, lease_lost_at AS leaseLostAt`;
+    seen_earned_cents AS seenEarnedCents, lease_lost_at AS leaseLostAt, helped_by AS helpedBy,
+    helped_by_at AS helpedByAt`;
   const selectPlayer = db.prepare(`SELECT ${PLAYER} FROM players WHERE pid = ?`);
   // A player is a row from their first action on, with the starting coins.
   // A label typed with a claim is kept on the wallet too.
@@ -458,6 +475,7 @@ export function openStore(path: string): Store {
   const payOut = lazy("UPDATE players SET coins = coins + ?, unclaimed_cents = ? WHERE pid = ?");
   const relocated = lazy("UPDATE players SET coins = coins - ?, last_relocated_at = ? WHERE pid = ?");
   const helped = lazy("UPDATE players SET coins = coins + ?, last_helped_at = ? WHERE pid = ?");
+  const owe = lazy("UPDATE players SET helped_by = ?, helped_by_at = ? WHERE pid = ?");
   const clearLost = lazy("UPDATE players SET lease_lost_at = NULL WHERE pid = ?");
   const markSeen = lazy(
     "UPDATE players SET seen_at = ?, seen_earned_cents = earned_cents, lease_lost_at = NULL WHERE pid = ?",
@@ -717,10 +735,25 @@ export function openStore(path: string): Store {
         if (ago(player.lastHelpedAt, now) < HELP_COOLDOWN_MS) return "cooldown";
         const at = now.toISOString();
         ensure(them.claimerId, them.label, now);
-        addCoins().run(HELP_GIFT, them.claimerId);
-        helped().run(HELP_REWARD, at, pid);
-        insertEvent.run("help", `${label(pid, mine)} helped ${them.label ?? ""} at ${place(cellId)}`, cellId, at);
-        return "helped";
+        // Returning the favour (docs/adr/0008): they helped me within the
+        // window. Read and cleared here, in this transaction, so it pays
+        // once; a return opens no favour back, or a pair could trade the
+        // bonus every hour without either starting an exchange.
+        const returned = player.helpedBy === them.claimerId && ago(player.helpedByAt, now) < RETURN_WINDOW_MS;
+        const bonus = returned ? RETURN_BONUS : 0;
+        addCoins().run(HELP_GIFT + bonus, them.claimerId);
+        helped().run(HELP_REWARD + bonus, at, pid);
+        if (returned) owe().run(null, null, pid);
+        else owe().run(pid, at, them.claimerId);
+        insertEvent.run(
+          "help",
+          returned
+            ? `${label(pid, mine)} returned ${them.label ?? ""}'s help`
+            : `${label(pid, mine)} helped ${them.label ?? ""} at ${place(cellId)}`,
+          cellId,
+          at,
+        );
+        return returned ? "returned" : "helped";
       });
     },
 
@@ -738,6 +771,7 @@ export function openStore(path: string): Store {
         helpAt: null,
         parks: 0,
         parkLimit: PARK_LIMIT,
+        returnable: null,
       };
       if (!player) return blank;
       const held = selectHeld().all() as Tile[];
@@ -749,6 +783,11 @@ export function openStore(path: string): Store {
       const parkBy = new Map(parks.filter((x) => parkActive(x, now)).map((x) => [x.cellId, x.placedBy]));
       const n = mine ? occupiedAround(mine.id, pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length : 0;
       const after = (when: string | null, ms: number): string | null => (when === null ? null : iso(Date.parse(when) + ms));
+      // the favour I can return: open, and its helper's building beside mine
+      const helper =
+        mine && player.helpedBy !== null && ago(player.helpedByAt, now) < RETURN_WINDOW_MS
+          ? held.find((t) => t.claimerId === player.helpedBy && live.has(t.id) && adjacent(mine.id, t.id))
+          : undefined;
       return {
         coins: player.coins,
         pending: (mine ? p.pending.get(mine.id)! : 0) + player.unclaimedCents + lost,
@@ -761,6 +800,7 @@ export function openStore(path: string): Store {
         helpAt: after(player.lastHelpedAt, HELP_COOLDOWN_MS),
         parks: parks.filter((x) => x.placedBy === pid && parkActive(x, now)).length,
         parkLimit: PARK_LIMIT,
+        returnable: helper ? { cellId: helper.id, until: after(player.helpedByAt, RETURN_WINDOW_MS)! } : null,
       };
     },
 

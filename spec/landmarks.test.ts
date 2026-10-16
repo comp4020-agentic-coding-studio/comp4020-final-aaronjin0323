@@ -19,7 +19,7 @@ const pidOf = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).p
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 
 type Raised = { cellId: number; tier: string; label: string; raisers: string[] };
-type Me = { coins: number; cellId: number | null; helpAt: string | null };
+type Me = { coins: number; cellId: number | null; helpAt: string | null; returnable?: { cellId: number; until: string } | null };
 type Board = {
   tiles: { id: number; state: string; height: number; label: string | null }[];
   me: Me;
@@ -288,9 +288,35 @@ describe("helping", () => {
     const res = await help(WES.pid, XAN.id);
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({ error: "cooldown" });
-    expect((await help(TIA.pid, WES.id)).status).toBe(200); // Tia's own hour is unused
+    // Tia's own hour is unused, and Wes helped her within the hour: helping
+    // him back returns the favour, +30 more each (docs/adr/0008)
+    expect(before.me.returnable).toEqual({ cellId: WES.id, until: expect.any(String) });
+    const back = await help(TIA.pid, WES.id);
+    expect(back.status).toBe(200);
+    const backBody = (await back.json()) as { notice: string; board: Board };
+    expect(backBody.notice).toBe("returned");
+    expect(backBody.board.me.returnable).toBeNull();
     const after = JSON.parse(await tia.next("board", (d) => (JSON.parse(d) as Board).me.coins !== before.me.coins)) as Board;
-    expect(after.me.coins).toBe(before.me.coins + 20);
+    expect(after.me.coins).toBe(before.me.coins + 20 + 30);
+    expect(after.events[0]).toMatchObject({ type: "help", text: "Tia returned Wes's help", cellId: WES.id });
+    expect(logLines("help").at(-1)).toBe(`help who=${tag(TIA.pid)} at=r9c8 to=r9c7 helped=${tag(WES.pid)}:"Wes" returned=true`);
+  });
+
+  it("pays a returned favour once when the return is sent twice at once", async () => {
+    const UMA = { pid: pidOf(0x0a1), id: cell(11, 1), label: "Uma" };
+    const VIC = { pid: pidOf(0x0b2), id: cell(11, 2), label: "Vic" };
+    for (const p of [UMA, VIC]) expect((await claim(p.pid, p.id, p.label)).status).toBe(200);
+    const uma = await listen(UMA.pid);
+    const u0 = JSON.parse(await uma.next("board")) as Board;
+    expect((await help(UMA.pid, VIC.id)).status).toBe(200);
+    const results = await Promise.all([help(VIC.pid, UMA.id), help(VIC.pid, UMA.id)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 429]);
+    const notices = await Promise.all(results.map((r) => r.json() as Promise<{ notice?: string; error?: string }>));
+    expect(notices.map((n) => n.notice ?? n.error).sort()).toEqual(["cooldown", "returned"]);
+    await settle(50);
+    const u1 = JSON.parse(await (await listen(UMA.pid)).next("board")) as Board; // a fresh look, after both
+    // Uma: +20 for helping, +50 back, +30 for the return, once
+    expect(u1.me.coins).toBe(u0.me.coins + 20 + 50 + 30);
   });
 
   it("pays once when the same help is sent twice at once", async () => {

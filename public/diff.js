@@ -39,6 +39,8 @@ export const ECONOMY = Object.freeze({
   helpGift: 50, // to the neighbour helped
   helpReward: 20, // to the helper
   helpCooldownMinutes: 60,
+  returnBonus: 30, // docs/adr/0008: to each, for helping back in time
+  returnWindowMinutes: 60, // after being helped
   landmarkTiers: Object.freeze([
     Object.freeze({ tier: "bronze", neighbours: 3 }),
     Object.freeze({ tier: "silver", neighbours: 5 }),

@@ -257,3 +257,51 @@ describe("parks", () => {
     expect([poor.status, poor.headers.get("location")]).toEqual([303, "/?notice=taken"]);
   });
 });
+
+// Return the favour (docs/adr/0008): who helped you is private. Your own
+// page learns a plot and a time; nobody's page learns a pid.
+describe("returning a favour", () => {
+  const help = (pid: string, cellId: number): Promise<Response> =>
+    fetch(new URL("/help", baseUrl), {
+      method: "POST",
+      headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ cellId }),
+    });
+  type Me = { returnable?: { cellId: number; until: string } | null };
+  const meOf = async (pid?: string): Promise<Me> => {
+    const doc = new JSDOM(await page(pid)).window.document;
+    return (JSON.parse(doc.querySelector("script[data-board-data]")!.textContent!) as { me: Me }).me;
+  };
+
+  it("tells only the helped person which plot to help back, and never puts a pid in any page or reply", async () => {
+    const SAL = fresh();
+    const TOM = fresh();
+    // two free plots side by side in one row, from the far end
+    const free = new Set(await freeTiles());
+    const a = [...free].find((id) => id % 12 !== 0 && free.has(id - 1))!;
+    expect(a, "no two free plots side by side").toBeDefined();
+    expect((await claim(SAL, a, "Sal")).status).toBe(200);
+    expect((await claim(TOM, a - 1, "Tom")).status).toBe(200);
+    const res = await help(SAL, a - 1);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain(SAL);
+    expect(body).not.toContain(TOM);
+
+    const tom = await meOf(TOM);
+    expect(tom.returnable).toEqual({ cellId: a, until: expect.any(String) });
+    expect(Object.keys(tom.returnable!).sort()).toEqual(["cellId", "until"]);
+    expect((await meOf(SAL)).returnable).toBeNull();
+    expect((await meOf(IDA)).returnable).toBeNull();
+    for (const html of [await page(TOM), await page(SAL), await page(IDA), await page()]) {
+      expect(html).not.toContain(SAL);
+      expect(html).not.toContain(TOM);
+    }
+    const back = await help(TOM, a);
+    expect(back.status).toBe(200);
+    const backBody = await back.text();
+    expect(JSON.parse(backBody).notice).toBe("returned");
+    expect(backBody).not.toContain(SAL);
+    expect(backBody).not.toContain(TOM);
+  });
+});

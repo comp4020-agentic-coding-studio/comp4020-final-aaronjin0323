@@ -1,5 +1,5 @@
 import { type CityEvent, isActive, type Landmark, type Me, N, occupiedAround, type Park, parkActive, type Tile, type Visit } from "./db.ts";
-import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, PARK_LIMIT, rate, RENEWALS, type Tier, tierRank } from "./economy.ts";
+import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, PARK_LIMIT, rate, RENEWALS, RETURN_BONUS, type Tier, tierRank } from "./economy.ts";
 import { escapeHtml, page } from "./html.ts";
 // The page's own pure module (no DOM), so the goal line and the glowing
 // tiles are worked out by one function whether the server or the page draws
@@ -23,6 +23,7 @@ export const NOTICES = {
   upgraded: "Upgraded!",
   renewed: "Lease renewed!",
   helped: `Helped! +${HELP_GIFT} to them, +${HELP_REWARD} to you`,
+  returned: `Helped back! +${RETURN_BONUS} each`,
   parked: "Park open!",
   "park-limit": `${PARK_LIMIT} parks at most.`,
   coins: "Not enough coins.",
@@ -230,6 +231,7 @@ export function boardView(
     helpAt: null,
     parks: 0,
     parkLimit: PARK_LIMIT,
+    returnable: null,
   };
   const once: { welcome?: number; expired?: true } = {};
   if (visit?.welcome) once.welcome = visit.welcome;

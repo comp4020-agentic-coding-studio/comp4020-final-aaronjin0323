@@ -399,19 +399,26 @@ const postRenew = action("renew", (pid, fields, now) => {
   };
 });
 
-// Help one neighbour an hour: +50 to them, +20 to you, one transaction.
+// Help one neighbour an hour: +50 to them, +20 to you, one transaction;
+// helping back whoever helped you within the hour pays +30 more each
+// (docs/adr/0008), logged as returned=true.
 const postHelp = action("help", (pid, fields, now) => {
   const cellId = validCell(fields.cellId);
   if (cellId === null) return { ok: false, key: "cell", fields: { cell: cut(fields.cellId) } };
   const them = store.tiles()[cellId];
   const result = store.help(pid, cellId, now);
-  if (result !== "helped") return { ok: false, key: result, fields: { to: at(cellId) } };
+  if (result !== "helped" && result !== "returned") return { ok: false, key: result, fields: { to: at(cellId) } };
   const me = store.me(pid, now);
   return {
     ok: true,
-    key: "helped",
+    key: result,
     json: { cellId },
-    fields: { at: me.cellId === null ? undefined : at(me.cellId), to: at(cellId), helped: holder(them) },
+    fields: {
+      at: me.cellId === null ? undefined : at(me.cellId),
+      to: at(cellId),
+      helped: holder(them),
+      returned: result === "returned" ? true : undefined,
+    },
   };
 });
 
