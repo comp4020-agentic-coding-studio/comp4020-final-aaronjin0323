@@ -43,6 +43,10 @@ export const ECONOMY = Object.freeze({
     Object.freeze({ tier: "silver", neighbours: 5 }),
     Object.freeze({ tier: "gold", neighbours: 8 }), // ADR 4's landmark
   ]),
+  parkCost: 60, // docs/adr/0007
+  parkHours: 2, // a park ends this long after it's placed, never renewed
+  parkLimit: 2, // running at once, per player
+  goldPeople: 3, // distinct people round a gold tower
 });
 export const MAX_LEVEL = ECONOMY.levels.length;
 export const SOON_MS = HOUR; // a lease ending within this is shown as ending

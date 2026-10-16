@@ -197,23 +197,37 @@ describe("heights", () => {
     expect((await claimJson(fresh(), pair! + 1, "Bob")).status).toBe(200);
 
     const tiles = await board();
-    const claimed = (id: number): boolean => tiles[id].state !== "free";
-    const active = claimed;
+    // A building is held or mine. A park (docs/adr/0007) is no building and
+    // stands flat, but lifts every building round it except its placer's,
+    // and the page never says who placed one, so each park beside a building
+    // may or may not count: the height is exact where no park stands near.
+    const building = (id: number): boolean => tiles[id].state === "held" || tiles[id].state === "mine";
+    let exact = 0;
     for (const tile of tiles) {
       const row = Math.floor(tile.id / N);
       const col = tile.id % N;
-      let expected = claimed(tile.id) ? tile.level : 0;
-      if (claimed(tile.id)) {
+      let expected = building(tile.id) ? tile.level : 0;
+      let parks = 0;
+      if (building(tile.id)) {
         for (let dr = -1; dr <= 1; dr++) {
           for (let dc = -1; dc <= 1; dc++) {
             const r = row + dr;
             const c = col + dc;
-            if ((dr || dc) && r >= 0 && r < N && c >= 0 && c < N && active(r * N + c)) expected++;
+            if (!((dr || dc) && r >= 0 && r < N && c >= 0 && c < N)) continue;
+            if (building(r * N + c)) expected++;
+            else if (tiles[r * N + c].state === "park") parks++;
           }
         }
       }
-      expect(tile.height, `tile ${tile.id}`).toBe(expected);
+      if (parks === 0) {
+        expect(tile.height, `tile ${tile.id}`).toBe(expected);
+        exact++;
+      } else {
+        expect(tile.height, `tile ${tile.id}`).toBeGreaterThanOrEqual(expected);
+        expect(tile.height, `tile ${tile.id}`).toBeLessThanOrEqual(expected + parks);
+      }
     }
+    expect(exact).toBeGreaterThan(100);
     expect(tiles[pair!].height).toBeGreaterThan(1);
   });
 });

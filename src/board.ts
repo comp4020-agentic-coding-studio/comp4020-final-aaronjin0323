@@ -1,5 +1,5 @@
-import { type CityEvent, isActive, type Landmark, type Me, N, neighbourIds, type Tile, type Visit } from "./db.ts";
-import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, rate, RENEWALS, type Tier, tierRank } from "./economy.ts";
+import { type CityEvent, isActive, type Landmark, type Me, N, occupiedAround, type Park, parkActive, type Tile, type Visit } from "./db.ts";
+import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, PARK_LIMIT, rate, RENEWALS, type Tier, tierRank } from "./economy.ts";
 import { escapeHtml, page } from "./html.ts";
 // The page's own pure module (no DOM), so the goal line and the glowing
 // tiles are worked out by one function whether the server or the page draws
@@ -23,6 +23,8 @@ export const NOTICES = {
   upgraded: "Upgraded!",
   renewed: "Lease renewed!",
   helped: `Helped! +${HELP_GIFT} to them, +${HELP_REWARD} to you`,
+  parked: "Park open!",
+  "park-limit": `${PARK_LIMIT} parks at most.`,
   coins: "Not enough coins.",
   cooldown: "Not yet: cooling down.",
   "max-level": "Already a Skyscraper.",
@@ -41,7 +43,9 @@ export const isNotice = (s: string | null): s is Notice => s !== null && Object.
 // database says this visitor's lease ended since they were last here.
 export const EXPIRED = "Your lease ended. Pick a new plot.";
 
-export type TileState = "free" | "held" | "mine";
+// A park (docs/adr/0007) is its own state: nobody holds it, it has no
+// building, and it lifts the buildings round it.
+export type TileState = "free" | "held" | "mine" | "park";
 
 // One tile as anyone but its holder's id: everything the page needs to draw
 // it, and nothing that identifies a person. The server renders these into
@@ -64,6 +68,10 @@ export type TileView = {
   neighbours: number;
   rate: number;
   leaseEndsAt: string | null;
+  // A park only: when it ends, and whether it's yours (never who placed it
+  // otherwise, beyond the label).
+  endsAt?: string;
+  mine?: boolean;
 };
 
 // Your own wallet (src/db.ts's Me), plus what this visit tells you once.
@@ -98,19 +106,23 @@ export function landmarksView(landmarks: Landmark[]): LandmarksView {
   return { count: Object.keys(cells).length, cells };
 }
 
-// Occupied neighbours of every plot (0 for a free one), counting only
-// leases still running at `now`: an ended lease is free on read, whether or
-// not a sweep has cleared it.
-export function neighbourCounts(tiles: Tile[], now: Date): number[] {
+// Occupied neighbours of every building (0 for a free plot or a park),
+// counting only leases and parks still running at `now`: either ended is
+// gone on read, whether or not a sweep has cleared it. A park counts for
+// every building but its placer's own (docs/adr/0007).
+export function neighbourCounts(tiles: Tile[], now: Date, parks: Park[] = []): number[] {
   const active = tiles.map((t) => isActive(t, now));
-  return tiles.map((t) => (active[t.id] ? neighbourIds(t.id).filter((n) => active[n]).length : 0));
+  const parkBy = new Map(parks.filter((p) => parkActive(p, now)).map((p) => [p.cellId, p.placedBy]));
+  return tiles.map((t) =>
+    active[t.id] ? occupiedAround(t.id, t.claimerId!, (n) => active[n], (n) => parkBy.get(n) ?? null).length : 0,
+  );
 }
 
 // A building's height is its level plus its occupied neighbours (ADR 5); a
-// free plot is 0. The same for every viewer, so all pages agree. Derived,
-// never stored.
-export function heights(tiles: Tile[], now: Date): number[] {
-  const counts = neighbourCounts(tiles, now);
+// free plot or a park is 0. The same for every viewer, so all pages agree.
+// Derived, never stored.
+export function heights(tiles: Tile[], now: Date, parks: Park[] = []): number[] {
+  const counts = neighbourCounts(tiles, now, parks);
   return tiles.map((t) => (isActive(t, now) ? (t.level ?? 1) + counts[t.id] : 0));
 }
 
@@ -138,11 +150,33 @@ export function boardView(
     me = null,
     events = [],
     visit = null,
-  }: { me?: Me | null; events?: CityEvent[]; visit?: Visit | null } = {},
+    parks = [],
+  }: { me?: Me | null; events?: CityEvent[]; visit?: Visit | null; parks?: Park[] } = {},
 ): BoardView {
-  const counts = neighbourCounts(tiles, now);
+  const counts = neighbourCounts(tiles, now, parks);
+  const parkAt = new Map(parks.filter((p) => parkActive(p, now)).map((p) => [p.cellId, p]));
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
+    const park = isActive(tile, now) ? undefined : parkAt.get(tile.id);
+    if (park) {
+      const label = park.label ?? "";
+      const yours = park.placedBy === pid;
+      return {
+        id: tile.id,
+        state: "park",
+        height: 0,
+        hue: null,
+        label,
+        initials: "",
+        aria: `${where}, ${yours ? "your park" : `park by ${label}`}`,
+        level: null,
+        neighbours: 0,
+        rate: 0,
+        leaseEndsAt: null,
+        endsAt: park.endsAt,
+        mine: yours,
+      };
+    }
     if (!isActive(tile, now)) {
       return {
         id: tile.id,
@@ -194,6 +228,8 @@ export function boardView(
     ownedSince: null,
     relocateAt: null,
     helpAt: null,
+    parks: 0,
+    parkLimit: PARK_LIMIT,
   };
   const once: { welcome?: number; expired?: true } = {};
   if (visit?.welcome) once.welcome = visit.welcome;
@@ -201,7 +237,7 @@ export function boardView(
 
   return {
     tiles: views,
-    claimed: views.filter((t) => t.state !== "free").length,
+    claimed: views.filter((t) => t.state === "held" || t.state === "mine").length,
     status,
     landmarks: landmarksView(landmarks),
     events: events.slice(0, EVENTS_SHOWN).map((e) => ({ type: e.type, text: e.text, cellId: e.cellId, at: e.at })),
@@ -243,6 +279,9 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   const lease = leaseFrac === null ? "" : `;--lease:${leaseFrac.toFixed(3)}`;
   const style = t.hue === null ? `--h:${t.height}` : `--h:${t.height};--hue:${t.hue}${lease}`;
   const title = t.label === null ? "" : ` title="${escapeHtml(t.label)}"`;
+  // A park: when it ends, and whether it's yours, so the page has both
+  // before the stream connects.
+  const park = t.state === "park" ? ` data-ends-at="${escapeHtml(t.endsAt ?? "")}"${t.mine ? " data-yours" : ""}` : "";
   // The building's data, so the page has it before the stream connects;
   // data-level also picks the building type the stylesheet draws.
   const building =
@@ -255,7 +294,7 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // it), the hourglass of a lease ending. .ring is the lease ring, drawn only
   // round your own building.
   const crownMark = landmark ? `<span class="crown" aria-hidden="true"></span>` : "";
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${soon}${crown}${glow} style="${style}" aria-label="${escapeHtml(tileAria(ariaFor(t, now), landmark ?? null))}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span>${crownMark}</button>`;
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow} style="${style}" aria-label="${escapeHtml(tileAria(ariaFor(t, now), landmark ?? null))}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span>${crownMark}</button>`;
 }
 
 // JSON inside a <script> element: "<" is escaped so no string in it (a label
@@ -297,6 +336,7 @@ const LEGEND: [string, string][] = [
   ["free", "Free plot"],
   ["held", "Someone's building"],
   ["mine", "Yours"],
+  ["park", "Park: lifts the buildings round it"],
   ["soon", "Lease ending within the hour"],
 ];
 

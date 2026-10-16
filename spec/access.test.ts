@@ -149,3 +149,111 @@ describe("another site", () => {
     expect((await board()).find((t) => t.id === cell)!.state).toBe("free");
   });
 });
+
+// Parks (docs/adr/0007): a public good, placed by someone holding land.
+describe("parks", () => {
+  const park = (pid: string, cellId: unknown): Promise<Response> =>
+    fetch(new URL("/park", baseUrl), {
+      method: "POST",
+      headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ cellId }),
+    });
+  // A free plot with no free plot beside it taken by anyone this test
+  // doesn't control is hard to promise on a shared board, so these take
+  // plots from the far end and only ask what the server answers.
+  type ParkTile = { id: number; state: string; mine: boolean };
+  async function parks(pid: string): Promise<ParkTile[]> {
+    const doc = new JSDOM(await page(pid)).window.document;
+    return [...doc.querySelectorAll<HTMLButtonElement>('button.tile[data-state="park"]')].map((b) => ({
+      id: Number(b.value),
+      state: b.dataset.state ?? "",
+      mine: b.dataset.yours !== undefined,
+    }));
+  }
+
+  it("lets ten simultaneous parks by one person leave at most two, charging for each one placed", async () => {
+    const PIA = fresh();
+    const [home, ...rest] = await freeTiles();
+    expect((await claim(PIA, home, "Pia")).status).toBe(200);
+    const cells = rest.slice(0, 10);
+    const results = await Promise.all(cells.map((cell) => park(PIA, cell)));
+    const placed = results.filter((r) => r.status === 200).length;
+    // 100 coins pays for one park; the second is refused for coins or the
+    // limit, never placed beyond it
+    expect(placed).toBeGreaterThanOrEqual(1);
+    expect(placed).toBeLessThanOrEqual(2);
+    expect(results.filter((r) => r.status !== 200).every((r) => r.status === 402 || r.status === 400)).toBe(true);
+    const mine = (await parks(PIA)).filter((p) => p.mine);
+    expect(mine).toHaveLength(placed);
+    for (const p of mine) expect(cells).toContain(p.id);
+  });
+
+  it("refuses a park from someone holding no land, on a held tile, and on a bad plot", async () => {
+    const LEO = fresh();
+    const MAE = fresh();
+    const [a, b] = await freeTiles();
+    const noLand = await park(LEO, a);
+    expect(noLand.status).toBe(400);
+    expect(await noLand.json()).toEqual({ error: "no-land" });
+    expect((await claim(LEO, a, "Leo")).status).toBe(200);
+    expect((await claim(MAE, b, "Mae")).status).toBe(200);
+    // Mae's building is held: nobody can park on it, nor on Leo's own
+    expect((await park(LEO, b)).status).toBe(409);
+    expect((await park(LEO, a)).status).toBe(409);
+    expect((await board(LEO)).find((t) => t.id === b)!.state).toBe("held");
+    for (const bad of [-1, 144, "x", null]) expect((await park(LEO, bad)).status).toBe(400);
+  });
+
+  it("can't be built on while it stands: a claim onto it is a 409", async () => {
+    const NIA = fresh();
+    const OLA = fresh();
+    const [home, spot] = await freeTiles();
+    expect((await claim(NIA, home, "Nia")).status).toBe(200);
+    expect((await park(NIA, spot)).status).toBe(200);
+    expect((await claim(OLA, spot, "Ola")).status).toBe(409);
+    expect((await board(OLA)).find((t) => t.id === spot)!.state).toBe("park");
+  });
+
+  it("shows the placer's park as theirs and no one else's, and never puts a pid in the page", async () => {
+    const QUY = fresh();
+    const [home, spot] = await freeTiles();
+    expect((await claim(QUY, home, "Quy")).status).toBe(200);
+    const res = await park(QUY, spot);
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(await res.json())).not.toContain(QUY);
+    expect((await parks(QUY)).find((p) => p.id === spot)?.mine).toBe(true);
+    for (const body of [await page(IDA), await page()]) {
+      const tile = new JSDOM(body).window.document.querySelector(`button.tile[value="${spot}"]`)!;
+      expect([tile.getAttribute("data-state"), tile.getAttribute("title"), tile.hasAttribute("data-yours")]).toEqual(["park", "Quy", false]);
+      expect(body).not.toContain(QUY);
+    }
+  });
+
+  it("refuses a park from another site's page", async () => {
+    const [cell] = await freeTiles();
+    const res = await fetch(new URL("/park", baseUrl), {
+      method: "POST",
+      headers: { cookie: `pid=${IDA}`, "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+      body: new URLSearchParams({ cellId: String(cell) }).toString(),
+      redirect: "manual",
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("answers a form with a 303 and a notice key", async () => {
+    const RAY = fresh();
+    const [home, spot] = await freeTiles();
+    expect((await claim(RAY, home, "Ray")).status).toBe(200);
+    const form = (cellId: number) =>
+      fetch(new URL("/park", baseUrl), {
+        method: "POST",
+        headers: { cookie: `pid=${RAY}`, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ cellId: String(cellId) }).toString(),
+        redirect: "manual",
+      });
+    const ok = await form(spot);
+    expect([ok.status, ok.headers.get("location")]).toEqual([303, "/?notice=parked"]);
+    const poor = await form(spot); // the plot is a park now
+    expect([poor.status, poor.headers.get("location")]).toEqual([303, "/?notice=taken"]);
+  });
+});

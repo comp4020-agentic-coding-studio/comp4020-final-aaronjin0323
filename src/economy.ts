@@ -54,6 +54,30 @@ export type Tier = (typeof LANDMARK_TIERS)[number]["tier"];
 // A tier's place in LANDMARK_TIERS (higher is better), or -1 for none.
 export const tierRank = (tier: string): number => LANDMARK_TIERS.findIndex((t) => t.tier === tier);
 
+// Parks (docs/adr/0007): a public good placed on a free plot by someone
+// holding land. It counts as an occupied neighbour for every building but its
+// placer's own, earns nothing, and ends on the clock; it is never renewed.
+export const PARK_COST = 60;
+export const PARK_MS = 2 * HOUR;
+export const PARK_LIMIT = 2; // running at once, per player
+// Gold (the last tier) also needs this many distinct people among the
+// building's holder, its neighbours' holders and the counted parks' placers.
+export const GOLD_PEOPLE = 3;
+
+// The tiers a building has reached with `neighbours` occupied round it and
+// `people` distinct people among its holder, those neighbours' holders and
+// the counted parks' placers: lowest first. Gold, the last tier, also needs
+// GOLD_PEOPLE people (docs/adr/0007); bronze and silver need nobody extra.
+export function tiersReached(neighbours: number, people: number): Tier[] {
+  const out: Tier[] = [];
+  for (const [i, t] of LANDMARK_TIERS.entries()) {
+    if (neighbours < t.neighbours) break;
+    if (i === LANDMARK_TIERS.length - 1 && people < GOLD_PEOPLE) break;
+    out.push(t.tier);
+  }
+  return out;
+}
+
 // "Welcome back" counts only after an absence at least this long, so a
 // reload doesn't greet anyone.
 export const WELCOME_AFTER_MS = 5 * MINUTE;
@@ -122,4 +146,8 @@ export const ECONOMY = Object.freeze({
   helpReward: HELP_REWARD,
   helpCooldownMinutes: HELP_COOLDOWN_MS / MINUTE,
   landmarkTiers: Object.freeze(LANDMARK_TIERS.map((t) => Object.freeze({ tier: t.tier, neighbours: t.neighbours }))),
+  parkCost: PARK_COST,
+  parkHours: PARK_MS / HOUR,
+  parkLimit: PARK_LIMIT,
+  goldPeople: GOLD_PEOPLE,
 });

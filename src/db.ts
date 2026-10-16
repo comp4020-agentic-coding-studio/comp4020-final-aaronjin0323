@@ -7,9 +7,11 @@ import {
   HELP_COOLDOWN_MS,
   HELP_GIFT,
   HELP_REWARD,
-  LANDMARK_TIERS,
   LEASE_MS,
   MAX_LEVEL,
+  PARK_COST,
+  PARK_LIMIT,
+  PARK_MS,
   rate,
   RELOCATE_COOLDOWN_MS,
   RELOCATE_COST,
@@ -17,6 +19,7 @@ import {
   renewOptions,
   STARTING_COINS,
   type Tier,
+  tiersReached,
   upgradeCost,
   WELCOME_AFTER_MS,
 } from "./economy.ts";
@@ -39,6 +42,14 @@ export type Tile = {
   pendingCents: number;
   settledAt: string | null;
 };
+
+// A park as stored (docs/adr/0007): a public good on a plot nobody holds,
+// running from placedAt until endsAt. placedBy is the placer's pid, so it
+// never leaves the store; everyone else sees the label.
+export type Park = { cellId: number; placedBy: string; label: string; placedAt: string; endsAt: string };
+
+// A park that ended, as settle() found it: for the server to log.
+export type ParkEnd = { cellId: number; pid: string; label: string; at: string };
 
 // A crown a tower earned, recorded for good (docs/adr/0004, as amended by
 // ADR 5 and ADR 6): one row per (cell, tier), bronze at 3 occupied
@@ -67,6 +78,8 @@ export type Me = {
   ownedSince: string | null;
   relocateAt: string | null; // when you may move again; null if you never have
   helpAt: string | null; // when you may help again; null if you never have
+  parks: number; // your parks still running
+  parkLimit: number; // how many may run at once
 };
 
 // What a visit tells you once: coins your building earned while you were
@@ -78,6 +91,7 @@ export type CollectResult = { paid: number };
 export type UpgradeResult = "upgraded" | "no-land" | "max-level" | "coins";
 export type RenewResult = "renewed" | "hours" | "no-land" | "max-lease" | "coins";
 export type HelpResult = "helped" | "no-land" | "not-neighbour" | "cooldown";
+export type ParkResult = "parked" | "no-land" | "taken" | "park-limit" | "coins";
 
 export type Store = {
   // Every row, as stored. Use isActive(tile, now) for whether it's held.
@@ -88,6 +102,12 @@ export type Store = {
   settle(now: Date): void;
   // Leases settle() has ended since the last call, oldest first.
   takeExpired(): Expiry[];
+  // Parks settle() has deleted since the last call, oldest first.
+  takeParksEnded(): ParkEnd[];
+  // Every park row, as stored; use parkActive(park, now) for whether it runs.
+  parks(): Park[];
+  // A park on a free plot, by someone holding land (docs/adr/0007).
+  park(pid: string, cellId: number, now: Date): ParkResult;
   // A free plot when you hold none (free); your own plot again (a rename);
   // or a move when you hold land (RELOCATE_COST, cooldown).
   claim(tileId: number, pid: string, label: string, now: Date): ClaimResult;
@@ -120,6 +140,8 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 export const isActive = (t: Tile, now: Date): boolean =>
   t.claimerId !== null && t.leaseEndsAt !== null && t.leaseEndsAt > now.toISOString();
 
+export const parkActive = (p: Park, now: Date): boolean => p.placedAt <= now.toISOString() && p.endsAt > now.toISOString();
+
 // 8-neighbours: one step in any direction, never wrapping round an edge.
 export function neighbourIds(id: number): number[] {
   const row = Math.floor(id / N);
@@ -135,12 +157,32 @@ export function neighbourIds(id: number): number[] {
 export const adjacent = (a: number, b: number): boolean =>
   a !== b && Math.abs(Math.floor(a / N) - Math.floor(b / N)) <= 1 && Math.abs((a % N) - (b % N)) <= 1;
 
+// The neighbours of `id` that count as occupied for a building held by
+// `holder`: every running building, and every running park someone else
+// placed (docs/adr/0007: a park never counts for its placer's own building).
+// `building(n)` says whether a building runs on n; `parkBy(n)` names the
+// placer of a park running on n, or null.
+export function occupiedAround(
+  id: number,
+  holder: string,
+  building: (n: number) => boolean,
+  parkBy: (n: number) => string | null,
+): number[] {
+  return neighbourIds(id).filter((n) => {
+    if (building(n)) return true;
+    const by = parkBy(n);
+    return by !== null && by !== holder;
+  });
+}
+
 // "row 3, column 5", as the page says it. The city log uses the same.
 export const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
 
 // --- income, integrated piecewise ---
 
 type Building = { id: number; pid: string; label: string; level: number; end: number; pending: number; settled: number };
+// A park's running time, [start, end), and who placed it.
+export type ParkSpan = { id: number; by: string; start: number; end: number };
 type Projection = {
   pending: Map<number, number>; // still standing at `now`
   expired: (Expiry & { endMs: number })[];
@@ -148,12 +190,14 @@ type Projection = {
 };
 
 // Every building's income from its settled_at up to `now`. Rates depend on
-// who is next to whom, and that changes only when a lease ends, so the time
-// is cut at each lease end in (settled_at, now]: each piece is earned at the
-// rates that held over it, then the leases ending there are let go. A
-// building stops earning at its own lease end and at the 4-hour cap. Pure:
-// the caller writes the result (settle) or only reads it (me).
-export function integrate(buildings: Building[], now: number): Projection {
+// who is next to whom, and between actions that changes only when a lease
+// ends or a park starts or ends (docs/adr/0007), so the time is cut at each
+// of those in (settled_at, now): each piece is earned at the rates that held
+// over it, then the leases ending there are let go. A park counts over a
+// piece if it runs for the whole of it, and never for its placer's own
+// building. A building stops earning at its own lease end and at the 4-hour
+// cap. Pure: the caller writes the result (settle) or only reads it (me).
+export function integrate(buildings: Building[], now: number, parks: ParkSpan[] = []): Projection {
   const live = new Map(buildings.map((b) => [b.id, b]));
   const pending = new Map(buildings.map((b) => [b.id, b.pending]));
   const earned = new Map<string, number>();
@@ -171,14 +215,18 @@ export function integrate(buildings: Building[], now: number): Projection {
   };
   let t = Math.min(...buildings.map((b) => b.settled));
   endBy(t);
-  const cuts = [...new Set(buildings.map((b) => b.end).filter((e) => e > t && e < now)), now].sort((a, b) => a - b);
+  const times = [...buildings.map((b) => b.end), ...parks.flatMap((p) => [p.start, p.end])];
+  const cuts = [...new Set(times.filter((e) => e > t && e < now)), now].sort((a, b) => a - b);
   for (const cut of cuts) {
     if (cut > t) {
-      // Over [t, cut] nobody arrives or leaves, so every rate is fixed.
+      // Over [t, cut] nobody arrives or leaves and no park starts or ends,
+      // so every rate is fixed.
+      const parkBy = new Map<number, string>();
+      for (const p of parks) if (p.start <= t && p.end > t) parkBy.set(p.id, p.by);
       for (const b of live.values()) {
         const from = Math.max(t, b.settled);
         if (from >= cut) continue;
-        const n = neighbourIds(b.id).filter((id) => live.has(id)).length;
+        const n = occupiedAround(b.id, b.pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length;
         const before = pending.get(b.id)!;
         const after = accrue(before, rate(b.level, n), cut - from);
         pending.set(b.id, after);
@@ -300,6 +348,18 @@ const MIGRATIONS = [
      SELECT cell_id, label, raisers, raised_at, 'silver' FROM landmarks WHERE tier = 'gold' ORDER BY id;
    INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at, tier)
      SELECT cell_id, label, raisers, raised_at, 'bronze' FROM landmarks WHERE tier = 'gold' ORDER BY id;`,
+
+  // 6. Parks, docs/adr/0007: a public good placed on a free plot, one row
+  // per plot while it runs, deleted once it ends. placed_by is the placer's
+  // pid and never leaves the store. Nothing to backfill, and cells (with its
+  // one_tile_each index) is untouched: a park is not a tile anyone holds.
+  `CREATE TABLE parks (
+     cell_id   INTEGER PRIMARY KEY,
+     placed_by TEXT NOT NULL,
+     label     TEXT,
+     placed_at TEXT NOT NULL,
+     ends_at   TEXT NOT NULL
+   );`,
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -368,10 +428,12 @@ export function openStore(path: string): Store {
        lease_ends_at = NULL, owned_since = NULL, pending_cents = 0, settled_at = NULL WHERE id = ?`,
   );
   // The WHERE is the rule: a plot nobody holds (settle() has already freed
-  // every ended lease), and its change count says whether this claim won.
+  // every ended lease) and no running park stands on, and its change count
+  // says whether this claim won.
   const take = db.prepare(
     `UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ?, level = ?, lease_ends_at = ?, owned_since = ?,
-       pending_cents = ?, settled_at = ? WHERE id = ? AND claimer_id IS NULL`,
+       pending_cents = ?, settled_at = ? WHERE id = ? AND claimer_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM parks WHERE parks.cell_id = cells.id AND parks.ends_at > ?)`,
   );
   const relabelCell = db.prepare("UPDATE cells SET label = ? WHERE claimer_id = ?");
   const setLevel = lazy("UPDATE cells SET level = ? WHERE id = ?");
@@ -416,7 +478,18 @@ export function openStore(path: string): Store {
     "INSERT OR IGNORE INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, ?, ?, ?)",
   );
 
+  const PARK = "cell_id AS cellId, placed_by AS placedBy, label, placed_at AS placedAt, ends_at AS endsAt";
+  const selectParks = db.prepare(`SELECT ${PARK} FROM parks ORDER BY cell_id`);
+  const selectParkAt = lazy(`SELECT ${PARK} FROM parks WHERE cell_id = ? AND ends_at > ?`);
+  const countParks = lazy("SELECT COUNT(*) AS n FROM parks WHERE placed_by = ? AND ends_at > ?");
+  const insertPark = lazy("INSERT INTO parks (cell_id, placed_by, label, placed_at, ends_at) VALUES (?, ?, ?, ?, ?)");
+  const endParks = db.prepare(`DELETE FROM parks WHERE ends_at <= ? RETURNING ${PARK}`);
+  const parkCharge = lazy("UPDATE players SET coins = coins - ? WHERE pid = ?");
+
   let expiredSince: Expiry[] = [];
+  let parksEndedSince: ParkEnd[] = [];
+  const spans = (parks: Park[]): ParkSpan[] =>
+    parks.map((p) => ({ id: p.cellId, by: p.placedBy, start: Date.parse(p.placedAt), end: Date.parse(p.endsAt) }));
 
   const buildingsOf = (rows: Tile[]): Building[] =>
     rows.map((t) => ({
@@ -430,15 +503,26 @@ export function openStore(path: string): Store {
       settled: t.settledAt ? Date.parse(t.settledAt) : t.leaseEndsAt ? Date.parse(t.leaseEndsAt) : 0,
     }));
 
-  // In a transaction the caller holds.
+  // In a transaction the caller holds. Income first, while every park that
+  // ran in the interval is still there to count; then parks that ended by
+  // `now` are deleted, since every building is settled past their end.
   function settleIn(now: Date): void {
+    settleIncome(now);
+    const at = now.toISOString();
+    for (const p of (endParks.all(at) as Park[]).sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.cellId - b.cellId)) {
+      insertEvent.run("park-end", `${p.label ?? ""}'s park ended at ${place(p.cellId)}`, p.cellId, p.endsAt);
+      parksEndedSince.push({ cellId: p.cellId, pid: p.placedBy, label: p.label ?? "", at: p.endsAt });
+    }
+  }
+
+  function settleIncome(now: Date): void {
     const ms = now.getTime();
     const b = settleBounds.get() as { settled: string | null; ends: string | null; held: number };
     if (b.held === 0) return;
     if (b.settled !== null && Date.parse(b.settled) >= ms && b.ends !== null && Date.parse(b.ends) > ms) return;
 
     const held = buildingsOf(selectHeld().all() as Tile[]);
-    const p = integrate(held, ms);
+    const p = integrate(held, ms, spans(selectParks.all() as Park[]));
     // settled_at never moves backwards, even for a clock that does
     const settled = new Map(held.map((h) => [h.id, h.settled]));
     for (const [id, cents] of p.pending) writePending().run(cents, iso(Math.max(ms, settled.get(id)!)), id);
@@ -474,6 +558,11 @@ export function openStore(path: string): Store {
   const mineOf = (pid: string): Tile | undefined => selectMine.get(pid) as Tile | undefined;
   const label = (pid: string, cell: Tile): string => cell.label ?? playerOf(pid)?.label ?? "";
   const ago = (when: string | null, now: Date): number => (when === null ? Infinity : now.getTime() - Date.parse(when));
+  // The checks above take's WHERE should make it always win; if it ever
+  // doesn't, the whole action rolls back rather than half-move someone.
+  const took = (changes: number | bigint): void => {
+    if (Number(changes) !== 1) throw new Error("claim lost a plot its checks said was free");
+  };
 
   return {
     tiles: () => selectAll.all() as Tile[],
@@ -484,6 +573,35 @@ export function openStore(path: string): Store {
       const out = expiredSince;
       expiredSince = [];
       return out;
+    },
+
+    takeParksEnded() {
+      const out = parksEndedSince;
+      parksEndedSince = [];
+      return out;
+    },
+
+    parks: () => selectParks.all() as Park[],
+
+    // Checked in this order: your land, the plot, your running parks, your
+    // coins. Settled first, so a park that ended is gone and its plot free.
+    park(pid, cellId, now) {
+      return tx((): ParkResult => {
+        settleIn(now);
+        const mine = mineOf(pid);
+        if (!mine) return "no-land";
+        const at = now.toISOString();
+        const target = selectCell.get(cellId) as Tile | undefined;
+        if (!target || target.claimerId !== null || selectParkAt().get(cellId, at) !== undefined) return "taken";
+        if ((countParks().get(pid, at) as { n: number }).n >= PARK_LIMIT) return "park-limit";
+        const player = playerOf(pid);
+        if (!player || player.coins < PARK_COST) return "coins";
+        const who = label(pid, mine);
+        parkCharge().run(PARK_COST, pid);
+        insertPark().run(cellId, pid, who, at, iso(now.getTime() + PARK_MS));
+        insertEvent.run("park", `${who} opened a park at ${place(cellId)}`, cellId, at);
+        return "parked";
+      });
     },
 
     claim(tileId, pid, newLabel, now) {
@@ -497,11 +615,11 @@ export function openStore(path: string): Store {
           return "renamed";
         }
         const target = selectCell.get(tileId) as Tile;
-        if (target.claimerId !== null) return "taken";
+        if (target.claimerId !== null || selectParkAt().get(tileId, at) !== undefined) return "taken";
         ensure(pid, newLabel, now);
         if (!mine) {
           clearLost().run(pid); // they've chosen a new plot, so "your lease ended" is old news
-          take.run(pid, newLabel, at, 1, iso(now.getTime() + LEASE_MS), at, 0, at, tileId);
+          took(take.run(pid, newLabel, at, 1, iso(now.getTime() + LEASE_MS), at, 0, at, tileId, at).changes);
           insertEvent.run("claim", `${newLabel} built a ${buildingName(1)} at ${place(tileId)}`, tileId, at);
           return "claimed";
         }
@@ -511,7 +629,7 @@ export function openStore(path: string): Store {
         if (ago(player.lastRelocatedAt, now) < RELOCATE_COOLDOWN_MS) return "cooldown";
         if (player.coins < RELOCATE_COST) return "coins";
         free.run(mine.id);
-        take.run(pid, newLabel, mine.claimedAt, mine.level, mine.leaseEndsAt, mine.ownedSince, mine.pendingCents, at, tileId);
+        took(take.run(pid, newLabel, mine.claimedAt, mine.level, mine.leaseEndsAt, mine.ownedSince, mine.pendingCents, at, tileId, at).changes);
         relocated().run(RELOCATE_COST, at, pid);
         insertEvent.run(
           "relocate",
@@ -618,14 +736,18 @@ export function openStore(path: string): Store {
         ownedSince: null,
         relocateAt: null,
         helpAt: null,
+        parks: 0,
+        parkLimit: PARK_LIMIT,
       };
       if (!player) return blank;
       const held = selectHeld().all() as Tile[];
-      const p = integrate(buildingsOf(held), now.getTime());
+      const parks = selectParks.all() as Park[];
+      const p = integrate(buildingsOf(held), now.getTime(), spans(parks));
       const lost = p.expired.filter((e) => e.pid === pid).reduce((sum, e) => sum + e.pendingCents, 0);
       const mine = held.find((t) => t.claimerId === pid && p.pending.has(t.id));
       const live = new Set(p.pending.keys());
-      const n = mine ? neighbourIds(mine.id).filter((id) => live.has(id)).length : 0;
+      const parkBy = new Map(parks.filter((x) => parkActive(x, now)).map((x) => [x.cellId, x.placedBy]));
+      const n = mine ? occupiedAround(mine.id, pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length : 0;
       const after = (when: string | null, ms: number): string | null => (when === null ? null : iso(Date.parse(when) + ms));
       return {
         coins: player.coins,
@@ -637,6 +759,8 @@ export function openStore(path: string): Store {
         ownedSince: mine?.ownedSince ?? null,
         relocateAt: after(player.lastRelocatedAt, RELOCATE_COOLDOWN_MS),
         helpAt: after(player.lastHelpedAt, HELP_COOLDOWN_MS),
+        parks: parks.filter((x) => x.placedBy === pid && parkActive(x, now)).length,
+        parkLimit: PARK_LIMIT,
       };
     },
 
@@ -677,30 +801,36 @@ export function openStore(path: string): Store {
 
     // Not inside each action: the server runs this straight after every
     // change, in the same synchronous turn, so no other request can come
-    // between the two. A building counts as occupied while its lease runs.
+    // between the two. A building counts as occupied while its lease runs,
+    // and a park while it runs, for everyone but its placer (ADR 7).
     // Reaching a tier records every tier below it too (ADR 6), so a cell's
-    // tiers are always a prefix of bronze, silver, gold. What's recorded is
-    // read first, so a quiet broadcast writes nothing.
+    // tiers are always a prefix of bronze, silver, gold; gold also needs 3
+    // distinct people round it (ADR 7). What's recorded is read first, so a
+    // quiet broadcast writes nothing. The raisers are those people's labels,
+    // each once: the holder, then the neighbours in board order.
     raise(now) {
       const tiles = selectAll.all() as Tile[];
       const around = (t: Tile | undefined): t is Tile => t !== undefined && isActive(t, now);
+      const parkAt = new Map((selectParks.all() as Park[]).filter((x) => parkActive(x, now)).map((x) => [x.cellId, x]));
       const recorded = new Set(
         (selectRecorded().all() as { cellId: number; tier: string }[]).map((r) => `${r.cellId}:${r.tier}`),
       );
       const due: Landmark[] = [];
       for (const tile of tiles) {
         if (!around(tile)) continue;
-        const neighbours = neighbourIds(tile.id).map((id) => tiles[id]).filter(around);
-        for (const { tier, neighbours: needed } of LANDMARK_TIERS) {
-          if (neighbours.length < needed) break;
+        const counted = occupiedAround(tile.id, tile.claimerId!, (id) => around(tiles[id]), (id) => parkAt.get(id)?.placedBy ?? null);
+        // each counted neighbour as [pid, label]: its holder, or its park's placer
+        const who: [string, string][] = [
+          [tile.claimerId!, tile.label ?? ""],
+          ...counted.map((id): [string, string] =>
+            around(tiles[id]) ? [tiles[id].claimerId!, tiles[id].label ?? ""] : [parkAt.get(id)!.placedBy, parkAt.get(id)!.label ?? ""],
+          ),
+        ];
+        const people = new Map<string, string>();
+        for (const [p, l] of who) if (!people.has(p)) people.set(p, l);
+        for (const tier of tiersReached(counted.length, people.size)) {
           if (recorded.has(`${tile.id}:${tier}`)) continue;
-          due.push({
-            cellId: tile.id,
-            tier,
-            label: tile.label ?? "",
-            raisers: [tile, ...neighbours].map((t) => t.label ?? ""),
-            raisedAt: now.toISOString(),
-          });
+          due.push({ cellId: tile.id, tier, label: tile.label ?? "", raisers: [...people.values()], raisedAt: now.toISOString() });
         }
       }
       if (due.length === 0) return [];

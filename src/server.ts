@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
-import { type Expiry, isActive, type Landmark, openStore, TILES, type Visit } from "./db.ts";
+import { type Expiry, isActive, type Landmark, openStore, type ParkEnd, TILES, type Visit } from "./db.ts";
 import { type Tier, tierRank } from "./economy.ts";
 import { at, claimEffects, expiryDrops, holder, log, people, quote, raw, tag, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
@@ -37,7 +37,7 @@ const streams = new Set<Stream>();
 let version = Date.now();
 const EVENTS = 8;
 const view = (pid: string, now: Date, visit: Visit | null = null) =>
-  boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(EVENTS), visit });
+  boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(EVENTS), visit, parks: store.parks() });
 const versioned = (pid: string, now: Date, visit: Visit | null = null) => ({ ...view(pid, now, visit), version });
 
 // A crown just raised, as the one broadcast after it carries it. Only the
@@ -58,7 +58,7 @@ function sendBoard(stream: Stream, now: Date, raised?: Raised, visit: Visit | nu
 // reconnecting page doesn't celebrate it again. Leases the change's
 // settlement ended are logged here too.
 function broadcast(now = new Date()): void {
-  logExpired(store.takeExpired(), now);
+  logEnded(now);
   version = Math.max(version + 1, Date.now());
   const raised = store.raise(now);
   for (const l of raised) logLandmark(l);
@@ -83,6 +83,29 @@ function logExpired(list: Expiry[], now: Date): boolean {
   return list.length > 0;
 }
 
+// Logs parks a settlement ended (docs/adr/0007): where, whose, and the
+// buildings beside it that it was lifting.
+function logParksEnded(list: ParkEnd[], now: Date): boolean {
+  const tiles = store.tiles();
+  for (const p of list) {
+    log("park.end", {
+      at: at(p.cellId),
+      who: who(p.pid),
+      label: p.label,
+      ended: p.at,
+      dropped: people(expiryDrops(tiles, p.cellId, now).filter((t) => t.claimerId !== p.pid)),
+    });
+  }
+  return list.length > 0;
+}
+
+// Everything a settlement ended (leases and parks), logged; true if any, so
+// a read that ended one can broadcast it.
+function logEnded(now: Date): boolean {
+  const leases = logExpired(store.takeExpired(), now);
+  return logParksEnded(store.takeParksEnded(), now) || leases;
+}
+
 function logLandmark(l: Landmark): void {
   log("landmark", { at: at(l.cellId), tier: raw(l.tier), label: l.label, raisers: raw(l.raisers.map(quote).join(",")) });
 }
@@ -105,7 +128,7 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
   // and lease-ended notices, if the page load didn't already show them.
   const visit = store.visit(pid, now);
   // A lease that ended before anyone looked ends on this read: everyone hears.
-  if (logExpired(store.takeExpired(), now)) broadcast(now);
+  if (logEnded(now)) broadcast(now);
   sendBoard(stream, now, undefined, visit);
   req.on("close", () => {
     // A shutdown already cleared the set; don't log every stream twice.
@@ -127,11 +150,7 @@ setInterval(() => {
 function sweep(now: Date): void {
   store.settle(now);
   for (const pid of new Set([...streams].map((s) => s.pid))) store.seen(pid, now);
-  const ended = store.takeExpired();
-  if (ended.length) {
-    logExpired(ended, now);
-    broadcast(now);
-  }
+  if (logEnded(now)) broadcast(now);
 }
 setInterval(() => sweep(new Date()), SWEEP_MS).unref();
 
@@ -142,7 +161,7 @@ setInterval(() => sweep(new Date()), SWEEP_MS).unref();
 {
   const now = new Date();
   store.settle(now);
-  logExpired(store.takeExpired(), now);
+  logEnded(now);
   for (const l of store.raise(now)) logLandmark(l);
 }
 
@@ -267,6 +286,7 @@ const STATUS: Record<string, number> = {
   "max-lease": 400,
   "not-neighbour": 400,
   "no-land": 400,
+  "park-limit": 400,
 };
 
 // One POST action, the same shape for each route: same-origin, the
@@ -301,7 +321,7 @@ function action(name: string, act: Act) {
       const status = STATUS[out.key] ?? 400;
       refused(pid, status, out.key, out.fields);
       // the settlement still ran; a lease it ended is news for everyone
-      if (logExpired(store.takeExpired(), now)) broadcast(now);
+      if (logEnded(now)) broadcast(now);
       return wantsJson ? sendJson(res, status, { error: out.key }) : redirect(res, `/?notice=${out.key}`);
     }
     if (out.fields) log(name === "claim" && out.key === "moved" ? "relocate" : name, { who: who(pid), ...out.fields });
@@ -395,6 +415,27 @@ const postHelp = action("help", (pid, fields, now) => {
   };
 });
 
+// A park on a free plot (docs/adr/0007): 60 coins, 2 hours, two at most.
+const postPark = action("park", (pid, fields, now) => {
+  const cellId = validCell(fields.cellId);
+  if (cellId === null) return { ok: false, key: "cell", fields: { cell: cut(fields.cellId) } };
+  const result = store.park(pid, cellId, now);
+  if (result !== "parked") return { ok: false, key: result, fields: { at: at(cellId) } };
+  const before = store.tiles();
+  const me = store.me(pid, now);
+  return {
+    ok: true,
+    key: "parked",
+    json: { cellId },
+    fields: {
+      at: at(cellId),
+      label: store.parks().find((p) => p.cellId === cellId)?.label ?? "",
+      coins: me.coins,
+      lifted: people(expiryDrops(before, cellId, now).filter((t) => t.claimerId !== pid)),
+    },
+  };
+});
+
 // Static files from a fixed root, never outside it.
 async function serveFile(res: ServerResponse, root: string, rel: string): Promise<void> {
   const base = resolve(root);
@@ -436,7 +477,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const visit = store.visit(pid, now);
     if (visit.welcome) log("welcome", { who: who(pid), coins: visit.welcome });
     if (visit.expired) log("expired.seen", { who: who(pid) });
-    if (logExpired(store.takeExpired(), now)) broadcast(now);
+    if (logEnded(now)) broadcast(now);
     const notice = url.searchParams.get("notice");
     const tiles = store.tiles();
     const myLabel = tiles.find((t) => t.claimerId === pid && isActive(t, now))?.label ?? store.label(pid) ?? "";
@@ -451,6 +492,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/upgrade" && req.method === "POST") return postUpgrade(req, res);
   if (path === "/renew" && req.method === "POST") return postRenew(req, res);
   if (path === "/help" && req.method === "POST") return postHelp(req, res);
+  if (path === "/park" && req.method === "POST") return postPark(req, res);
   if (path === "/events" && req.method === "GET") return openStream(req, res);
   if (path === "/readme") return redirect(res, "/readme/");
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {

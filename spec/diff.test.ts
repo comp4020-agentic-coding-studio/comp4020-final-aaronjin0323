@@ -214,6 +214,8 @@ describe("what each action's answer says", () => {
       upgraded: "Upgraded!",
       renewed: "Lease renewed!",
       helped: "Helped! +50 to them, +20 to you",
+      parked: "Park open!",
+      "park-limit": "2 parks at most.",
       coins: "Not enough coins.",
       cooldown: "Not yet: cooling down.",
       "max-level": "Already a Skyscraper.",

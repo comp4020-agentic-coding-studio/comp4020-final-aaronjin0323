@@ -605,7 +605,7 @@ describe("migration 4 from a crit-10 database (user_version 3)", () => {
       opened.push(again);
       expect(again.me("ann", now).coins).toBe(100);
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(5);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
       expect(v.prepare("SELECT COUNT(*) AS n FROM displaced").get()).toEqual({ n: 1 });
       expect(v.prepare("SELECT last_seen_at FROM cells WHERE id = 41").get()).toEqual({ last_seen_at: "2026-10-02T09:00:00.000Z" });
       expect(v.prepare("SELECT COUNT(*) AS n FROM players").get()).toEqual({ n: 2 });

@@ -113,6 +113,22 @@ describe("the server log", () => {
     ]);
   });
 
+  it("logs a park by tag, plot and label, and its refusals", async () => {
+    const post = (pid: string, body: object): Promise<Response> =>
+      fetch(new URL("/park", base), {
+        method: "POST",
+        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+    const PIP = "00000000-0000-4000-8000-000000000919";
+    expect((await claim(PIP, 50, "Pip")).status).toBe(200); // r5c3
+    expect((await post(PIP, { cellId: 51 })).status).toBe(200); // r5c4
+    expect((await post(PIP, { cellId: 51 })).status).toBe(409);
+    expect((await lines("park")).at(-1)).toMatch(new RegExp(`^park who=${tag(PIP)} at=r5c4 label="Pip" coins=40$`));
+    expect((await lines("park.refused")).at(-1)).toBe(`park.refused who=${tag(PIP)} status=409 reason=taken at=r5c4`);
+    expect(out).not.toContain(PIP);
+  });
+
   it("logs a stream opening and closing, with the open count", async () => {
     const controller = new AbortController();
     const res = await fetch(new URL("/events", base), { headers: { cookie: `pid=${KAI}` }, signal: controller.signal });
@@ -141,7 +157,7 @@ describe("the server log", () => {
       expect((await fetch(new URL("/", base), { headers: { cookie: `pid=${pid}` } })).status).toBe(200);
     }
     await new Promise((r) => setTimeout(r, 50));
-    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused"]) {
+    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused", "park", "park.refused"]) {
       expect((await lines(event)).length, `no ${event} line was printed`).toBeGreaterThan(0);
     }
     for (const pid of [MIA, KAI, ZED]) {
@@ -190,6 +206,42 @@ describe("what a claim or an expiry did", () => {
       expect(people(expiryDrops(store.tiles(), 0, end))).toEqual({ raw: `${tag("ivy-pid")}:"Ivy"` });
     } finally {
       store.close();
+    }
+  });
+});
+
+// A park ends on the clock (docs/adr/0007), two hours after it's placed, so
+// a server is started on a database whose park ended while it was off: the
+// boot's settlement deletes it, and the line has to be there, without a pid.
+describe("a park ending", () => {
+  it("is logged by plot, tag and label, naming who it stopped lifting", async () => {
+    const d = mkdtempSync(join(tmpdir(), "skyline-park-"));
+    const path = join(d, "app.db");
+    const PIP = "00000000-0000-4000-8000-000000000919";
+    const ROO = "00000000-0000-4000-8000-0000000004a0";
+    const then = new Date(Date.now() - 3 * 60 * 60 * 1000); // placed 3 h ago: ended 1 h ago
+    const s = openStore(path);
+    expect(s.claim(0, PIP, "Pip", then)).toBe("claimed");
+    expect(s.claim(2, ROO, "Roo", then)).toBe("claimed");
+    expect(s.park(PIP, 1, then)).toBe("parked");
+    s.close();
+    let text = "";
+    const child = spawn(process.execPath, ["src/server.ts"], {
+      env: { ...process.env, PORT: "0", DB_PATH: path, NODE_ENV: "test" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      child.stdout!.setEncoding("utf8").on("data", (c: string) => (text += c));
+      child.stderr!.setEncoding("utf8").on("data", (c: string) => (text += c));
+      for (let i = 0; i < 100 && !/^start /m.test(text); i++) await new Promise((r) => setTimeout(r, 50));
+      const ended = text.split("\n").filter((l) => l.startsWith("park.end "));
+      expect(ended, text).toHaveLength(1);
+      expect(ended[0]).toMatch(new RegExp(`^park\\.end at=r1c2 who=${tag(PIP)} label="Pip" ended="[^"]+" dropped=${tag(ROO)}:"Roo"$`));
+      expect(text).not.toContain(PIP);
+      expect(text).not.toContain(ROO);
+    } finally {
+      child.kill("SIGTERM");
+      rmSync(d, { recursive: true, force: true });
     }
   });
 });
