@@ -1,5 +1,5 @@
 import { type CityEvent, isActive, type Landmark, type Me, N, neighbourIds, type Tile, type Visit } from "./db.ts";
-import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, rate, RENEWALS } from "./economy.ts";
+import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, rate, RENEWALS, type Tier, tierRank } from "./economy.ts";
 import { escapeHtml, page } from "./html.ts";
 // The page's own pure module (no DOM), so the goal line and the glowing
 // tiles are worked out by one function whether the server or the page draws
@@ -73,10 +73,11 @@ export type MeView = Me & { welcome?: number; expired?: true };
 export type EventView = { type: string; text: string; cellId: number | null; at: string };
 export const EVENTS_SHOWN = 8;
 
-// Every landmark the room has raised (docs/adr/0004): how many, and per cell
-// the holder's label then and the nine who raised it. Labels only, never a
-// pid. Keyed by cell id as a string, since it travels as JSON.
-export type LandmarksView = { count: number; cells: Record<string, { label: string; raisers: string[] }> };
+// Every crown the room has raised (docs/adr/0004, 0006): how many cells
+// wear one, and per cell its highest tier, with the holder's label and the
+// raisers of that tier. Labels only, never a pid. Keyed by cell id as a
+// string, since it travels as JSON.
+export type LandmarksView = { count: number; cells: Record<string, { tier: Tier; label: string; raisers: string[] }> };
 
 export type BoardView = {
   tiles: TileView[];
@@ -89,8 +90,12 @@ export type BoardView = {
 
 export function landmarksView(landmarks: Landmark[]): LandmarksView {
   const cells: LandmarksView["cells"] = {};
-  for (const l of landmarks) cells[String(l.cellId)] = { label: l.label, raisers: l.raisers };
-  return { count: landmarks.length, cells };
+  for (const l of landmarks) {
+    const key = String(l.cellId);
+    if (Object.hasOwn(cells, key) && tierRank(cells[key].tier) >= tierRank(l.tier)) continue;
+    cells[key] = { tier: l.tier, label: l.label, raisers: l.raisers };
+  }
+  return { count: Object.keys(cells).length, cells };
 }
 
 // Occupied neighbours of every plot (0 for a free one), counting only
@@ -215,7 +220,7 @@ export function boardView(
 // Hidden things use the `hidden` attribute, so the no-script page hides
 // them too, and app.js shows each one as it becomes possible.
 
-type LandmarkCell = { label: string; raisers: string[] };
+type LandmarkCell = { tier: Tier; label: string; raisers: string[] };
 
 // A plot's label for a screen reader: the same words app.js writes, so it
 // can say a lease is ending soon without the server re-sending the board.
@@ -228,7 +233,7 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // the nine raisers as a JSON array, so the page has them before the stream.
   // It wears a crown on its roof, and its label says who raised it.
   const crown = landmark
-    ? ` data-landmark="${escapeHtml(landmark.label)}" data-landmark-raisers="${escapeHtml(JSON.stringify(landmark.raisers))}"`
+    ? ` data-landmark="${escapeHtml(landmark.label)}" data-tier="${landmark.tier}" data-landmark-raisers="${escapeHtml(JSON.stringify(landmark.raisers))}"`
     : "";
   // A free plot whose claim would bring a building closer to a landmark
   // glows (the same goal() the page recomputes on every board).

@@ -38,6 +38,11 @@ export const ECONOMY = Object.freeze({
   helpGift: 50, // to the neighbour helped
   helpReward: 20, // to the helper
   helpCooldownMinutes: 60,
+  landmarkTiers: Object.freeze([
+    Object.freeze({ tier: "bronze", neighbours: 3 }),
+    Object.freeze({ tier: "silver", neighbours: 5 }),
+    Object.freeze({ tier: "gold", neighbours: 8 }), // ADR 4's landmark
+  ]),
 });
 export const MAX_LEVEL = ECONOMY.levels.length;
 export const SOON_MS = HOUR; // a lease ending within this is shown as ending

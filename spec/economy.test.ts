@@ -521,14 +521,15 @@ describe("the city log", () => {
   });
 });
 
-describe("landmarks (ADR 4, counted by occupied neighbours)", () => {
-  it("raises one when all 8 neighbours are occupied, whatever their levels", () => {
+describe("landmarks (ADR 4, counted by occupied neighbours; gold since ADR 6)", () => {
+  const golds = (s: Store, now: Date): number[] => s.raise(now).filter((l) => l.tier === "gold").map((l) => l.cellId);
+  it("raises gold when all 8 neighbours are occupied, whatever their levels", () => {
     const s = memory();
     const ring = [cell(4, 4), cell(4, 5), cell(4, 6), cell(5, 4), cell(5, 6), cell(6, 4), cell(6, 5)];
     put(s, [cell(5, 5), ...ring]);
-    expect(s.raise(T0)).toEqual([]);
+    expect(golds(s, T0)).toEqual([]);
     put(s, [cell(6, 6)]);
-    expect(s.raise(T0).map((l) => l.cellId)).toEqual([cell(5, 5)]);
+    expect(golds(s, T0)).toEqual([cell(5, 5)]);
     expect(heights(s.tiles(), T0)[cell(5, 5)]).toBe(9); // level 1 + 8
   });
 
@@ -541,7 +542,7 @@ describe("landmarks (ADR 4, counted by occupied neighbours)", () => {
       [cell(4, 5), cell(4, 6), cell(5, 4), cell(5, 5), cell(5, 6), cell(6, 4), cell(6, 5), cell(6, 6)],
       later,
     );
-    expect(s.raise(later)).toEqual([]);
+    expect(golds(s, later)).toEqual([]);
   });
 });
 
@@ -592,7 +593,8 @@ describe("migration 4 from a crit-10 database (user_version 3)", () => {
       }
       expect(s.me("ann", now)).toMatchObject({ coins: 100, cellId: 40, level: 1 });
       expect(s.me("ben", now)).toMatchObject({ coins: 100, cellId: 41 });
-      expect(s.landmarks().map((l) => l.cellId)).toEqual([77]);
+      // and from migration 5, it's gold with the tiers below it
+      expect(s.landmarks().map((l) => `${l.cellId}:${l.tier}`).sort()).toEqual(["77:bronze", "77:gold", "77:silver"]);
       // income starts from the migration, at the neighbours' rate
       expect(s.me("ann", new Date(Date.parse(held[0].settledAt!) + 10 * MIN)).pending).toBe(10 * rate(1, 1));
       s.close();
@@ -603,7 +605,7 @@ describe("migration 4 from a crit-10 database (user_version 3)", () => {
       opened.push(again);
       expect(again.me("ann", now).coins).toBe(100);
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(5);
       expect(v.prepare("SELECT COUNT(*) AS n FROM displaced").get()).toEqual({ n: 1 });
       expect(v.prepare("SELECT last_seen_at FROM cells WHERE id = 41").get()).toEqual({ last_seen_at: "2026-10-02T09:00:00.000Z" });
       expect(v.prepare("SELECT COUNT(*) AS n FROM players").get()).toEqual({ n: 2 });

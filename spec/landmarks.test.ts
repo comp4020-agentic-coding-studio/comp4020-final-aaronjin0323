@@ -18,14 +18,14 @@ const cell = (r: number, c: number): number => r * N + c;
 const pidOf = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 
-type Raised = { cellId: number; label: string; raisers: string[] };
+type Raised = { cellId: number; tier: string; label: string; raisers: string[] };
 type Me = { coins: number; cellId: number | null; helpAt: string | null };
 type Board = {
   tiles: { id: number; state: string; height: number; label: string | null }[];
   me: Me;
   events: { type: string; text: string; cellId: number | null }[];
   version: number;
-  landmarks: { count: number; cells: Record<string, { label: string; raisers: string[] }> };
+  landmarks: { count: number; cells: Record<string, { tier: string; label: string; raisers: string[] }> };
   raised?: Raised;
 };
 type Event = { name: string; data: string };
@@ -156,45 +156,61 @@ describe("raising a landmark", () => {
   const watcherA = pidOf(0xa0);
   const watcherB = pidOf(0xb0);
 
-  it("tells every open page once, with the nine names, and the count goes up", async () => {
+  // The ring arrives in board order round the centre: r3c3, r3c4, r3c5,
+  // r4c3, ... Each claim may crown cells (ADR 6), so what this follows is
+  // the centre's own crown: bronze at its 3rd neighbour, silver at its 5th,
+  // gold at its 8th.
+  const centreTier = (b: Board): string | undefined => b.landmarks.cells[String(centre)]?.tier;
+  const news = (s: Stream): Raised[] => s.boards().flatMap((x) => (x.raised ? [x.raised] : []));
+
+  it("tells every open page of each crown once, gold with the nine names, and the count goes up", async () => {
     const a = await listen(watcherA); // holds nothing
     const b = await listen(people[0].pid); // the holder, a raiser
     await Promise.all([a.next("board"), b.next("board")]);
-    for (const p of people.slice(0, 8)) expect((await claim(p.pid, p.id, p.label)).status).toBe(200);
+    for (const p of people.slice(0, 4)) expect((await claim(p.pid, p.id, p.label)).status).toBe(200);
+    // 3 neighbours: bronze, a lighter message to every page
+    for (const s of [a, b]) {
+      const board = JSON.parse(await s.next("board", (d) => centreTier(JSON.parse(d) as Board) === "bronze")) as Board;
+      expect(board.raised).toEqual({ cellId: centre, tier: "bronze", label: "Raiser 0", raisers: raisers.slice(0, 4) });
+    }
+    for (const p of people.slice(4, 8)) expect((await claim(p.pid, p.id, p.label)).status).toBe(200);
     await settle();
     for (const s of [a, b]) {
-      expect(s.boards().every((x) => x.landmarks.count === 0 && x.raised === undefined)).toBe(true);
+      expect(s.boards().every((x) => centreTier(x) !== "gold")).toBe(true);
+      expect(news(s).filter((r) => r.cellId === centre).map((r) => r.tier)).toEqual(["bronze", "silver"]);
     }
 
     const last = people[8];
     expect((await claim(last.pid, last.id, last.label)).status).toBe(200);
-    const expected = { cellId: centre, label: "Raiser 0", raisers };
+    const expected = { cellId: centre, tier: "gold", label: "Raiser 0", raisers };
     for (const s of [a, b]) {
-      const board = JSON.parse(await s.next("board", (d) => (JSON.parse(d) as Board).landmarks.count === 1)) as Board;
+      const board = JSON.parse(await s.next("board", (d) => centreTier(JSON.parse(d) as Board) === "gold")) as Board;
       expect(board.raised).toEqual(expected);
-      expect(board.landmarks).toEqual({ count: 1, cells: { [centre]: { label: "Raiser 0", raisers } } });
+      expect(board.landmarks.cells[String(centre)]).toEqual({ tier: "gold", label: "Raiser 0", raisers });
+      expect(board.landmarks.count).toBe(Object.keys(board.landmarks.cells).length);
     }
 
     // a later change carries the landmark, but never announces it again
     expect((await claim(watcherB, cell(10, 10), "Later")).status).toBe(200);
     await Promise.all([a, b].map((s) => s.next("board", (d) => d.includes('"Later"'))));
     for (const s of [a, b]) {
-      const boards = s.boards();
-      expect(boards.filter((x) => x.raised !== undefined)).toHaveLength(1);
-      expect(boards.at(-1)!.landmarks.count).toBe(1);
-      expect(boards.at(-1)!.raised).toBeUndefined();
+      expect(news(s).filter((r) => r.tier === "gold")).toHaveLength(1);
+      expect(s.boards().at(-1)!.raised).toBeUndefined();
     }
 
-    // and the log says where and who, by label
-    expect(logLines("landmark")).toEqual([`landmark at=r4c4 label="Raiser 0" raisers=${raisers.map((r) => JSON.stringify(r)).join(",")}`]);
+    // and the log says where, which tier and who, by label: one line a row
+    const centreLines = logLines("landmark").filter((l) => l.startsWith("landmark at=r4c4 "));
+    expect(centreLines.map((l) => /tier=(\w+)/.exec(l)![1])).toEqual(["bronze", "silver", "gold"]);
+    expect(centreLines[2]).toBe(`landmark at=r4c4 tier=gold label="Raiser 0" raisers=${raisers.map((r) => JSON.stringify(r)).join(",")}`);
+    for (const l of logLines("landmark")) expect(l).toMatch(/^landmark at=r\d+c\d+ tier=(bronze|silver|gold) label="/);
   });
 
   it("doesn't tell a reconnecting page again: its first board has the landmark, not the news", async () => {
     for (const pid of [watcherA, people[0].pid, pidOf(0xc0)]) {
       const s = await listen(pid);
       const first = JSON.parse(await s.next("board")) as Board;
-      expect(first.landmarks.count).toBe(1);
-      expect(first.landmarks.cells[String(centre)].raisers).toEqual(raisers);
+      expect(first.landmarks.count).toBeGreaterThan(1); // the block crowned its ring too
+      expect(first.landmarks.cells[String(centre)]).toEqual({ tier: "gold", label: "Raiser 0", raisers });
       expect(first.raised).toBeUndefined();
     }
     // and nothing that happens on a connect replays it
@@ -205,11 +221,15 @@ describe("raising a landmark", () => {
   it("puts the landmark in the server-rendered page too: a count, and the crowned tile's names", async () => {
     const html = await (await fetch(new URL("/", base))).text();
     const doc = new JSDOM(html).window.document;
-    expect(doc.querySelector("[data-landmarks]")?.textContent).toBe("1");
     const crowned = [...doc.querySelectorAll<HTMLButtonElement>("button.tile[data-landmark]")];
-    expect(crowned.map((b) => Number(b.value))).toEqual([centre]);
-    expect(crowned[0].dataset.landmark).toBe("Raiser 0");
-    expect(JSON.parse(crowned[0].dataset.landmarkRaisers!)).toEqual(raisers);
+    expect(doc.querySelector("[data-landmarks]")?.textContent).toBe(String(crowned.length));
+    const gold = crowned.filter((b) => b.dataset.tier === "gold");
+    expect(gold.map((b) => Number(b.value))).toEqual([centre]);
+    expect(gold[0].dataset.landmark).toBe("Raiser 0");
+    expect(JSON.parse(gold[0].dataset.landmarkRaisers!)).toEqual(raisers);
+    // every crown says its tier, and the ring round a gold one has crowns too
+    expect(crowned.every((b) => ["bronze", "silver", "gold"].includes(b.dataset.tier!))).toBe(true);
+    expect(crowned.length).toBeGreaterThan(1);
   });
 
   it("records nothing new when the building loses a neighbour and fills again", async () => {
@@ -221,9 +241,9 @@ describe("raising a landmark", () => {
     expect((await claim(pidOf(0xd0), corner.id, "Filler")).status).toBe(200);
     const board = JSON.parse(await s.next("board", (d) => (JSON.parse(d) as Board).tiles[corner.id].label !== null)) as Board;
     expect(board.tiles[centre].height).toBe(1 + 8);
-    expect(board.landmarks.count).toBe(1);
-    expect(board.raised).toBeUndefined();
-    expect(logLines("landmark")).toHaveLength(1);
+    expect(board.landmarks.cells[String(centre)].tier).toBe("gold");
+    expect(board.raised?.cellId).not.toBe(centre);
+    expect(logLines("landmark").filter((l) => l.startsWith("landmark at=r4c4 tier=gold "))).toHaveLength(1);
   });
 });
 

@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
 import { type Expiry, isActive, type Landmark, openStore, TILES, type Visit } from "./db.ts";
+import { type Tier, tierRank } from "./economy.ts";
 import { at, claimEffects, expiryDrops, holder, log, people, quote, raw, tag, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 
@@ -39,9 +40,10 @@ const view = (pid: string, now: Date, visit: Visit | null = null) =>
   boardView(store.tiles(), pid, now, store.landmarks(), { me: store.me(pid, now), events: store.events(EVENTS), visit });
 const versioned = (pid: string, now: Date, visit: Visit | null = null) => ({ ...view(pid, now, visit), version });
 
-// A landmark just raised, as the one broadcast after it carries it. Only the
-// newest if two were finished by the same change; both are in `landmarks`.
-type Raised = { cellId: number; label: string; raisers: string[] };
+// A crown just raised, as the one broadcast after it carries it. Only the
+// highest tier if one change raised several (the newest of those); all of
+// them are in `landmarks` (docs/adr/0006).
+type Raised = { cellId: number; tier: Tier; label: string; raisers: string[] };
 
 function sendBoard(stream: Stream, now: Date, raised?: Raised, visit: Visit | null = null): void {
   const board = versioned(stream.pid, now, visit);
@@ -60,8 +62,8 @@ function broadcast(now = new Date()): void {
   version = Math.max(version + 1, Date.now());
   const raised = store.raise(now);
   for (const l of raised) logLandmark(l);
-  const last = raised.at(-1);
-  const news = last ? { cellId: last.cellId, label: last.label, raisers: last.raisers } : undefined;
+  const top = raised.reduce<Landmark | undefined>((best, l) => (best && tierRank(best.tier) > tierRank(l.tier) ? best : l), undefined);
+  const news = top ? { cellId: top.cellId, tier: top.tier, label: top.label, raisers: top.raisers } : undefined;
   for (const stream of streams) sendBoard(stream, now, news);
 }
 
@@ -82,7 +84,7 @@ function logExpired(list: Expiry[], now: Date): boolean {
 }
 
 function logLandmark(l: Landmark): void {
-  log("landmark", { at: at(l.cellId), label: l.label, raisers: raw(l.raisers.map(quote).join(",")) });
+  log("landmark", { at: at(l.cellId), tier: raw(l.tier), label: l.label, raisers: raw(l.raisers.map(quote).join(",")) });
 }
 
 function openStream(req: IncomingMessage, res: ServerResponse): void {

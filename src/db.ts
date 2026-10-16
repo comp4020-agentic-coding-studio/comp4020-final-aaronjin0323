@@ -7,6 +7,7 @@ import {
   HELP_COOLDOWN_MS,
   HELP_GIFT,
   HELP_REWARD,
+  LANDMARK_TIERS,
   LEASE_MS,
   MAX_LEVEL,
   rate,
@@ -15,6 +16,7 @@ import {
   renewal,
   renewOptions,
   STARTING_COINS,
+  type Tier,
   upgradeCost,
   WELCOME_AFTER_MS,
 } from "./economy.ts";
@@ -38,14 +40,12 @@ export type Tile = {
   settledAt: string | null;
 };
 
-// A tower with all 8 neighbours occupied, recorded for good (docs/adr/0004,
-// as amended by ADR 5). The raisers are labels, holder first, then the eight
-// neighbours in board order: never a pid, since the row outlives everyone in
-// it and is shown to anyone.
-export type Landmark = { cellId: number; label: string; raisers: string[]; raisedAt: string };
-
-// Occupied neighbours a building needs to be a landmark.
-export const LANDMARK_NEIGHBOURS = 8;
+// A crown a tower earned, recorded for good (docs/adr/0004, as amended by
+// ADR 5 and ADR 6): one row per (cell, tier), bronze at 3 occupied
+// neighbours, silver at 5, gold at 8. The raisers are labels, holder first,
+// then the occupied neighbours in board order: never a pid, since the row
+// outlives everyone in it and is shown to anyone.
+export type Landmark = { cellId: number; tier: Tier; label: string; raisers: string[]; raisedAt: string };
 
 // A public line in the city log. No pid, ever.
 export type CityEvent = { id: number; type: string; text: string; cellId: number | null; at: string };
@@ -106,8 +106,9 @@ export type Store = {
   // The latest `limit` public events, newest first.
   events(limit: number): CityEvent[];
   landmarks(): Landmark[];
-  // Records a landmark for every held building with all 8 neighbours
-  // occupied whose cell has never had one, and returns those just recorded.
+  // Records every tier each held building has reached (by occupied
+  // neighbours) that its cell has never had, lower tiers included, and
+  // returns those just recorded: by cell, lowest tier first.
   raise(now: Date): Landmark[];
   close(): void;
 };
@@ -284,6 +285,21 @@ const MIGRATIONS = [
    INSERT OR IGNORE INTO players (pid, label, coins, created_at, seen_at)
      SELECT claimer_id, label, 100, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      FROM cells WHERE claimer_id IS NOT NULL;`,
+
+  // 5. Landmark tiers, docs/adr/0006: bronze at 3 occupied neighbours,
+  // silver at 5, gold at 8. Every row before this was raised at 8, so the
+  // column's default makes each one gold. One row per (cell, tier) from
+  // here, not per cell. A cell's tiers are always a prefix of bronze,
+  // silver, gold, so each gold row gets its silver and bronze written in,
+  // with the same names and time. The tier names are written out here, not
+  // read from src/economy.ts: this step is a record of what was done once.
+  `ALTER TABLE landmarks ADD COLUMN tier TEXT NOT NULL DEFAULT 'gold';
+   DROP INDEX one_landmark_each;
+   CREATE UNIQUE INDEX one_landmark_per_tier ON landmarks(cell_id, tier);
+   INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at, tier)
+     SELECT cell_id, label, raisers, raised_at, 'silver' FROM landmarks WHERE tier = 'gold' ORDER BY id;
+   INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at, tier)
+     SELECT cell_id, label, raisers, raised_at, 'bronze' FROM landmarks WHERE tier = 'gold' ORDER BY id;`,
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -391,12 +407,13 @@ export function openStore(path: string): Store {
   );
 
   const selectLandmarks = lazy(
-    "SELECT cell_id AS cellId, label, raisers, raised_at AS raisedAt FROM landmarks ORDER BY id",
+    "SELECT cell_id AS cellId, tier, label, raisers, raised_at AS raisedAt FROM landmarks ORDER BY id",
   );
-  // OR IGNORE on the unique cell: a tower that drops and fills again records
-  // nothing new.
+  const selectRecorded = lazy("SELECT cell_id AS cellId, tier FROM landmarks");
+  // OR IGNORE on the unique (cell, tier): a tower that drops and fills again
+  // records nothing new.
   const recordLandmark = lazy(
-    "INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at) VALUES (?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, ?, ?, ?)",
   );
 
   let expiredSince: Expiry[] = [];
@@ -650,8 +667,9 @@ export function openStore(path: string): Store {
     events: (limit) => selectEvents().all(limit) as CityEvent[],
 
     landmarks: () =>
-      (selectLandmarks().all() as { cellId: number; label: string; raisers: string; raisedAt: string }[]).map((r) => ({
+      (selectLandmarks().all() as { cellId: number; tier: Tier; label: string; raisers: string; raisedAt: string }[]).map((r) => ({
         cellId: r.cellId,
+        tier: r.tier,
         label: r.label,
         raisers: JSON.parse(r.raisers) as string[],
         raisedAt: r.raisedAt,
@@ -660,26 +678,37 @@ export function openStore(path: string): Store {
     // Not inside each action: the server runs this straight after every
     // change, in the same synchronous turn, so no other request can come
     // between the two. A building counts as occupied while its lease runs.
+    // Reaching a tier records every tier below it too (ADR 6), so a cell's
+    // tiers are always a prefix of bronze, silver, gold. What's recorded is
+    // read first, so a quiet broadcast writes nothing.
     raise(now) {
       const tiles = selectAll.all() as Tile[];
       const around = (t: Tile | undefined): t is Tile => t !== undefined && isActive(t, now);
-      const raised: Landmark[] = [];
-      return tx(() => {
-        for (const tile of tiles) {
-          if (!around(tile)) continue;
-          const neighbours = neighbourIds(tile.id).map((id) => tiles[id]).filter(around);
-          if (neighbours.length < LANDMARK_NEIGHBOURS) continue;
-          const landmark: Landmark = {
+      const recorded = new Set(
+        (selectRecorded().all() as { cellId: number; tier: string }[]).map((r) => `${r.cellId}:${r.tier}`),
+      );
+      const due: Landmark[] = [];
+      for (const tile of tiles) {
+        if (!around(tile)) continue;
+        const neighbours = neighbourIds(tile.id).map((id) => tiles[id]).filter(around);
+        for (const { tier, neighbours: needed } of LANDMARK_TIERS) {
+          if (neighbours.length < needed) break;
+          if (recorded.has(`${tile.id}:${tier}`)) continue;
+          due.push({
             cellId: tile.id,
+            tier,
             label: tile.label ?? "",
             raisers: [tile, ...neighbours].map((t) => t.label ?? ""),
             raisedAt: now.toISOString(),
-          };
-          const added = recordLandmark().run(tile.id, landmark.label, JSON.stringify(landmark.raisers), landmark.raisedAt);
-          if (Number(added.changes) === 1) raised.push(landmark);
+          });
         }
-        return raised;
-      });
+      }
+      if (due.length === 0) return [];
+      return tx(() =>
+        due.filter(
+          (l) => Number(recordLandmark().run(l.cellId, l.tier, l.label, JSON.stringify(l.raisers), l.raisedAt).changes) === 1,
+        ),
+      );
     },
 
     close: () => db.close(),

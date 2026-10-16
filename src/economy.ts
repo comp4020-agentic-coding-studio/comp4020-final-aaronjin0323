@@ -43,6 +43,17 @@ export const HELP_GIFT = 50; // to the neighbour helped
 export const HELP_REWARD = 20; // to the helper
 export const HELP_COOLDOWN_MS = HOUR;
 
+// Landmark tiers (docs/adr/0006): a building earns each crown when this many
+// of its neighbours are occupied, lowest first. Gold is ADR 4's landmark.
+export const LANDMARK_TIERS = [
+  { tier: "bronze", neighbours: 3 },
+  { tier: "silver", neighbours: 5 },
+  { tier: "gold", neighbours: 8 },
+] as const;
+export type Tier = (typeof LANDMARK_TIERS)[number]["tier"];
+// A tier's place in LANDMARK_TIERS (higher is better), or -1 for none.
+export const tierRank = (tier: string): number => LANDMARK_TIERS.findIndex((t) => t.tier === tier);
+
 // "Welcome back" counts only after an absence at least this long, so a
 // reload doesn't greet anyone.
 export const WELCOME_AFTER_MS = 5 * MINUTE;
@@ -110,4 +121,5 @@ export const ECONOMY = Object.freeze({
   helpGift: HELP_GIFT,
   helpReward: HELP_REWARD,
   helpCooldownMinutes: HELP_COOLDOWN_MS / MINUTE,
+  landmarkTiers: Object.freeze(LANDMARK_TIERS.map((t) => Object.freeze({ tier: t.tier, neighbours: t.neighbours }))),
 });

@@ -550,7 +550,7 @@ const line = (board: unknown): string => {
   const p = goalParts(goal(board));
   return `${p.count} ${p.noun} raised · ${p.lead}${p.who}${p.tail}${p.unit}`;
 };
-const landmark = (cellId: number, raisers: string[]): Landmark => ({ cellId, label: raisers[0], raisers, raisedAt: NOW.toISOString() });
+const landmark = (cellId: number, raisers: string[], tier: Landmark["tier"] = "gold"): Landmark => ({ cellId, tier, label: raisers[0], raisers, raisedAt: NOW.toISOString() });
 const NINE = ["Mia", "Kai", "Zoe", "Ari", "Bo", "Cy", "Di", "Ed", "Flo"];
 
 describe("the goal line", () => {
