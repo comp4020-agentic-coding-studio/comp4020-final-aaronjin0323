@@ -17,6 +17,7 @@ import {
   goalParts,
   goalShown,
   heldText,
+  helpButtonText,
   helpsWith,
   hudParts,
   inspect,
@@ -28,6 +29,8 @@ import {
   refusalText,
   relocateInfo,
   renewOptions,
+  returnGlow,
+  returnTarget,
   tileAria,
   timeLeft,
   upgradeInfo,
@@ -370,12 +373,61 @@ describe("helping", () => {
     store.claim(at(5, 8), KAI, "Kai", NOW);
     expect(canHelp(view(), at(5, 6), NOW)).toBeNull(); // I hold nothing yet
     store.claim(at(5, 5), ME, "Me", NOW);
-    expect(canHelp(view(), at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: true });
+    expect(canHelp(view(), at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: true, back: false });
     expect(canHelp(view(), at(5, 8), NOW)).toBeNull();
     expect(canHelp(view(), at(5, 5), NOW)).toBeNull();
     expect(canHelp(view(), at(6, 6), NOW)).toBeNull();
     const cooling = withMe(view(), { helpAt: new Date(NOW.getTime() + 40 * MIN).toISOString() });
-    expect(canHelp(cooling, at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: false });
+    expect(canHelp(cooling, at(5, 6), NOW)).toEqual({ id: at(5, 6), label: "Mia", ok: false, back: false });
+  });
+});
+
+// docs/adr/0008: the neighbour who helped me glows, and Help says "Help back".
+describe("returning a favour", () => {
+  it("glows and offers Help back only at the neighbour who helped me, inside the hour, while I can help", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 6), MIA, "Mia", NOW);
+    store.claim(at(4, 5), KAI, "Kai", NOW);
+    expect(returnGlow(view(), NOW)).toBeNull();
+    expect(store.help(MIA, at(5, 5), NOW)).toBe("helped");
+    const v = view(ME, NOW);
+    expect(returnTarget(v, NOW)).toBe(at(5, 6));
+    expect(returnGlow(v, NOW)).toBe(at(5, 6));
+    expect(canHelp(v, at(5, 6), NOW)).toMatchObject({ ok: true, back: true });
+    expect(canHelp(v, at(4, 5), NOW)).toMatchObject({ ok: true, back: false }); // Kai never helped me
+    expect(helpButtonText(canHelp(v, at(5, 6), NOW))).toEqual({
+      text: "Help back +30 each",
+      said: "Help Mia back: 80 coins to them, 50 to you",
+    });
+    expect(helpButtonText(canHelp(v, at(4, 5), NOW)).text).toBe("Help Kai · +50");
+    // Mia's own page has nothing to return
+    expect(returnGlow(view(MIA, NOW), NOW)).toBeNull();
+    // the hour ends on the page's clock, with no new board
+    expect(returnGlow(v, new Date(NOW.getTime() + HOUR))).toBeNull();
+    // while my own help cools down, nothing glows: I couldn't act on it
+    expect(store.help(ME, at(4, 5), NOW)).toBe("helped");
+    expect(returnTarget(view(ME, NOW), NOW)).toBe(at(5, 6));
+    expect(returnGlow(view(ME, NOW), NOW)).toBeNull();
+  });
+
+  it("is drawn by the server the same way, on that one tile, with words for a screen reader", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 6), MIA, "Mia", NOW);
+    store.help(MIA, at(5, 5), NOW);
+    const doc = new JSDOM(renderBoard(view(ME, NOW), "Me", { now: NOW })).window.document;
+    const glowing = [...doc.querySelectorAll<HTMLButtonElement>("button.tile[data-return]")];
+    expect(glowing.map((b) => Number(b.value))).toEqual([at(5, 6)]);
+    expect(glowing[0].getAttribute("aria-label")).toMatch(/Helped you: help back for 30 more each$/);
+    expect(glowing[0].querySelector(".beacon")!.getAttribute("data-back")).toBe("+30");
+    expect(doc.querySelectorAll(".beacon[data-back]")).toHaveLength(1);
+    const theirs = new JSDOM(renderBoard(view(MIA, NOW), "Mia", { now: NOW })).window.document;
+    expect(theirs.querySelectorAll("button.tile[data-return]")).toHaveLength(0);
+  });
+
+  it("says the return in one short line", () => {
+    expect(doneText("returned")).toEqual({ text: "Helped back! +30 each", said: "You returned the favour: 30 more coins each." });
   });
 });
 

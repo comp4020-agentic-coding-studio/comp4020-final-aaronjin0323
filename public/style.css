@@ -1787,6 +1787,58 @@ main {
   rotate: 45deg;
 }
 
+/* The neighbour who helped you, while you can help them back for the bonus
+   (docs/adr/0008): a green halo, the money colour, breathing slowly. A
+   double outline (green inside black) so it reads in greyscale too, and
+   apart from the gold goal glow. Only ever one tile, only on your page. */
+.tile[data-return]:not([data-pending]) {
+  box-shadow:
+    inset 0 0 0 2px var(--money),
+    inset 0 0 0 4px var(--line),
+    0 0 12px 2px rgb(141 224 141 / 0.6);
+  animation: return-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes return-glow {
+  50% {
+    box-shadow:
+      inset 0 0 0 2px var(--money),
+      inset 0 0 0 4px var(--line),
+      0 0 4px 0 rgb(141 224 141 / 0.25);
+  }
+}
+
+/* Over its roof, the bonus: "+30" in cash green, facing the camera like
+   the +N/min over a ghost. Not while a preview is using the beacon. */
+.tile:not([data-preview]) .beacon[data-back]::after {
+  content: attr(data-back);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  padding: 0.15em 0.4em 0.1em;
+  border: 2px solid var(--line);
+  border-radius: 0.3em;
+  background: var(--money);
+  color: var(--night);
+  font-family: var(--display);
+  font-size: clamp(0.8rem, 1.4vw, 1rem);
+  white-space: nowrap;
+  translate: -50% -50% calc(var(--unit) * 2 + 20px);
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+}
+
+/* and its Help button (inspector or phone bar): the same green halo as the
+   tile, so the button and the building it helps read as one pair. */
+.help-button.help-back,
+.confirm-help.help-back {
+  background: var(--money);
+  color: var(--night);
+  box-shadow:
+    3px 3px 0 var(--line),
+    0 0 0 3px var(--line),
+    0 0 12px 4px rgb(141 224 141 / 0.6);
+}
+
 /* A landmark: a gold crown standing on the roof, turned to face the camera
    like the +1 floats. Black outline and a solid shape, so it reads in
    greyscale and at 1x. It sits below the player's own marker, which floats
@@ -2338,6 +2390,7 @@ body:has(.confirm:not([hidden])) main {
   .rise,
   .notice,
   .tile[data-helps]:not([data-pending]),
+  .tile[data-return]:not([data-pending]),
   [data-landmarks][data-bump],
   .cheer,
   .tile[data-built] .roof,

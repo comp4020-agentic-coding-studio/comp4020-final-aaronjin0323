@@ -189,8 +189,9 @@ help at a distance was turned down).
   Only the latest helper counts. **Migration 7** adds `players.helped_by`
   (a `pid`, never leaves the store) and `helped_by_at`, both nullable.
 - **`me.returnable: { cellId, until } | null`**, only while the window is
-  open and the helper stands beside you. The page glows that building
-  (`data-return`) and its Help reads "Help back +30 each". City log: "Kai
+  open and the helper stands beside you, and you can help now. The page
+  glows that building green (`data-return`, "+30" over its roof) and its
+  Help reads "Help back +30 each". City log: "Kai
   returned Mia's help"; server log: the `help` line with `returned=true`.
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)

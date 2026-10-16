@@ -51,8 +51,9 @@ any payload, the server log or the city log.
 **The payload:** your own `me` gains `returnable: { cellId, until } | null`:
 the plot of whoever's help you can return and when the window closes, only
 while it's open and they stand next to your building. Nobody else is sent
-it. The page glows that building (`data-return`) while you can help, and its
-Help button reads "Help back +30 each". Without JavaScript a return still
+it. The page glows that building green (`data-return`) with a "+30" floating
+over its roof while you can help, and its Help button reads "Help back +30
+each". Without JavaScript a return still
 works through the form, as Help does; the page just doesn't offer it.
 
 ## Options considered
@@ -96,4 +97,8 @@ works through the form, as Help does; the page just doesn't offer it.
 - `spec/access.test.ts`: `returnable` reaches only the helped person's page,
   and no `pid` is in it or in anyone's board.
 - `spec/diff.test.ts`: the mirror equals `src/economy.ts`; the page offers
-  "Help back" only at the returnable building while help is possible.
+  "Help back" only at the returnable building while help is possible, and
+  the server draws the same glow on that one tile.
+- `scripts/browser-check.ts` (`returning`): two browsers, Kai helps, Mia's
+  page glows Kai's building with +30, her Help reads "Help back +30 each",
+  and both wallets move by the bonus.

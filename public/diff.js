@@ -10,7 +10,7 @@
 // `endsAt` and `mine` (docs/adr/0007). Holders are never named by id,
 // so "the same holder" means the same hue and label. `me` is this visitor's
 // own wallet: { coins, pending, rate, cellId, level, leaseEndsAt, ownedSince,
-// relocateAt, helpAt, parks, parkLimit, welcome?, expired? }. Money is in coins, except
+// relocateAt, helpAt, parks, parkLimit, returnable, welcome?, expired? }. Money is in coins, except
 // `pending` and every `rate`, which are hundredths of a coin (a minute).
 
 const N = 12;
@@ -202,16 +202,44 @@ export function relocateInfo(board, id, now) {
   return { ...info, ok: true, reason: null };
 }
 
+// The plot of the neighbour whose help I can return for the bonus
+// (docs/adr/0008), or null: the server sends it only while they stand
+// beside me, and the window closes at `until` whether or not a board comes.
+export function returnTarget(board, now) {
+  const r = meOf(board)?.returnable ?? null;
+  return r && Number.isInteger(r.cellId) && msUntil(r.until, now) > 0 ? r.cellId : null;
+}
+
 // Whether I can help the building on tile `id`: it's someone else's, right
-// beside mine. `ok` is false while my hourly help is cooling down. The server
-// checks the same (docs/adr/0005); this decides what the page offers.
+// beside mine. `ok` is false while my hourly help is cooling down; `back` is
+// true when helping them returns their favour. The server checks the same
+// (docs/adr/0005, 0008); this decides what the page offers.
 export function canHelp(board, id, now) {
   const mine = mineOf(board);
   const t = board.tiles[id];
   if (!mine || !t || t.state !== "held" || !neighbours(mine.id).includes(id)) return null;
   const helpAt = meOf(board)?.helpAt ?? null;
-  return { id, label: t.label, ok: msUntil(helpAt, now) <= 0 };
+  return { id, label: t.label, ok: msUntil(helpAt, now) <= 0, back: returnTarget(board, now) === id };
 }
+
+// The plot to glow as "help back": only while I can actually help now.
+export function returnGlow(board, now) {
+  const id = returnTarget(board, now);
+  return id !== null && canHelp(board, id, now)?.ok ? id : null;
+}
+
+// The Help button's words, short on screen and whole for a screen reader.
+export function helpButtonText(help) {
+  const gift = ECONOMY.helpGift;
+  const reward = ECONOMY.helpReward;
+  const bonus = ECONOMY.returnBonus;
+  return help.back
+    ? { text: `Help back +${bonus} each`, said: `Help ${help.label} back: ${gift + bonus} coins to them, ${reward + bonus} to you` }
+    : { text: `Help ${help.label} · +${gift}`, said: `Help ${help.label}: ${gift} coins to them, ${reward} to you` };
+}
+
+// A building I can help back, for its aria-label: the glow's words.
+export const returnWords = (aria) => `${aria}. Helped you: help back for ${ECONOMY.returnBonus} more each`;
 
 // Placing a park on free plot `id` (docs/adr/0007): possible while you hold
 // land, have fewer than the limit running and can pay, and worth offering
@@ -761,6 +789,11 @@ export function doneText(notice, body = {}, view = { tiles: [], me: null }, now 
       return {
         text: `Helped! +${ECONOMY.helpGift} to them, +${ECONOMY.helpReward} to you`,
         said: `You helped your neighbour: ${ECONOMY.helpGift} coins to them, ${ECONOMY.helpReward} to you.`,
+      };
+    case "returned":
+      return {
+        text: `Helped back! +${ECONOMY.returnBonus} each`,
+        said: `You returned the favour: ${ECONOMY.returnBonus} more coins each.`,
       };
     case "renamed": {
       const label = String(body.label ?? "");

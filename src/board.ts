@@ -5,7 +5,7 @@ import { escapeHtml, page } from "./html.ts";
 // tiles are worked out by one function whether the server or the page draws
 // them. The expect-error: it's a plain browser module with no declarations.
 // @ts-expect-error
-import { eventText, expiredText, goal, goalParts, goalShown, hudParts, leaseSoon, statusText, tileAria, tileWords, welcomeText } from "../public/diff.js";
+import { eventText, expiredText, goal, goalParts, goalShown, hudParts, leaseSoon, returnGlow, returnWords, statusText, tileAria, tileWords, welcomeText } from "../public/diff.js";
 
 // Notices are chosen from this fixed set by key; nothing from the query
 // string is ever echoed into the page. One short line each (CLAUDE.md,
@@ -266,7 +266,7 @@ const ariaFor = (t: TileView, now: Date): string => tileWords(t, now) as string;
 
 const hiddenIf = (hide: boolean): string => (hide ? " hidden" : "");
 
-function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: boolean, now: Date, leaseFrac: number | null): string {
+function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: boolean, now: Date, leaseFrac: number | null, back = false): string {
   // A landmark ever raised on this cell: the label it was raised under, and
   // the nine raisers as a JSON array, so the page has them before the stream.
   // It wears a crown on its roof, and its label says who raised it.
@@ -276,6 +276,11 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // A free plot whose claim would bring a building closer to a landmark
   // glows (the same goal() the page recomputes on every board).
   const glow = helps ? " data-helps" : "";
+  // The neighbour whose help I can return now (docs/adr/0008) glows green
+  // with "+30" floating over its roof (the beacon's data-back); the same
+  // returnGlow() the page reruns.
+  const favour = back ? " data-return" : "";
+  const aria = tileAria(ariaFor(t, now), landmark ?? null) as string;
   // Your own plot carries what's left of its lease (0 to 1), which the
   // stylesheet draws as a ring draining round the building's foot.
   const lease = leaseFrac === null ? "" : `;--lease:${leaseFrac.toFixed(3)}`;
@@ -296,7 +301,7 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // it), the hourglass of a lease ending. .ring is the lease ring, drawn only
   // round your own building.
   const crownMark = landmark ? `<span class="crown" aria-hidden="true"></span>` : "";
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow} style="${style}" aria-label="${escapeHtml(tileAria(ariaFor(t, now), landmark ?? null))}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"></span>${crownMark}</button>`;
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow}${favour} style="${style}" aria-label="${escapeHtml(back ? (returnWords(aria) as string) : aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"${back ? ` data-back="+${RETURN_BONUS}"` : ""}></span>${crownMark}</button>`;
 }
 
 // JSON inside a <script> element: "<" is escaped so no string in it (a label
@@ -413,6 +418,7 @@ export function renderBoard(
   const line: [string, string] | null = notice ? [notice, NOTICES[notice]] : expired ? ["expired", expired] : welcome ? ["welcome", welcome] : null;
   const notices = line ? `<p class="notice" data-notice="${line[0]}" role="status">${escapeHtml(line[1])}</p>` : "";
   const helps = new Set<number>((goal(view) as { helps: number[] }).helps);
+  const back = returnGlow(view, now) as number | null;
   const markOf = (id: number): LandmarkCell | undefined =>
     Object.hasOwn(view.landmarks.cells, String(id)) ? view.landmarks.cells[String(id)] : undefined;
   const hud = hudParts(view, now) as Hud | null;
@@ -451,7 +457,7 @@ export function renderBoard(
           <div class="notices" data-notices>${notices}</div>
           <div class="stage" data-stage>
             <div class="board" role="group" aria-label="City map, ${N} by ${N} plots" aria-describedby="status" data-version="${version}"${land ? "" : " data-invite"}>
-          ${view.tiles.map((t) => tileButton(t, markOf(t.id), helps.has(t.id), now, t.state === "mine" && hud ? hud.lease.frac : null)).join("\n          ")}
+          ${view.tiles.map((t) => tileButton(t, markOf(t.id), helps.has(t.id), now, t.state === "mine" && hud ? hud.lease.frac : null, t.id === back)).join("\n          ")}
             </div>
           </div>
         </section>

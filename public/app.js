@@ -13,6 +13,7 @@ import {
   goalParts,
   goalShown,
   heldText,
+  helpButtonText,
   hudParts,
   initialsOf,
   inspect,
@@ -25,6 +26,8 @@ import {
   raisedText,
   refusalText,
   relocateInfo,
+  returnGlow,
+  returnWords,
   statusText,
   tileAria,
   tileWords,
@@ -272,7 +275,11 @@ if (board && stage) {
     setData(el, "lease", leaseSoon(t, now) ? "soon" : null);
     if (t.state !== "mine") el.style.removeProperty("--lease");
     const mark = landmarkAt(shownBoard, t.id);
-    const aria = tileAria(tileWords(t, now), mark);
+    const back = returnGlow(shownBoard, now) === t.id;
+    setData(el, "return", back ? "" : null);
+    const beacon = el.querySelector(".beacon");
+    setData(beacon, "back", back ? `+${ECONOMY.returnBonus}` : null);
+    const aria = back ? returnWords(tileAria(tileWords(t, now), mark)) : tileAria(tileWords(t, now), mark);
     if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
     if (mark) {
       el.dataset.landmark = mark.label;
@@ -536,9 +543,11 @@ if (board && stage) {
     }
     show(helpButton, Boolean(help?.ok));
     if (help?.ok) {
+      const words = helpButtonText(help);
       helpButton.dataset.cell = String(id);
-      setText(helpButton, `Help ${help.label} · +${ECONOMY.helpGift}`);
-      helpButton.setAttribute("aria-label", `Help ${help.label}: ${ECONOMY.helpGift} coins to them, ${ECONOMY.helpReward} to you`);
+      helpButton.classList.toggle("help-back", help.back);
+      setText(helpButton, words.text);
+      helpButton.setAttribute("aria-label", words.said);
     }
     const park = canPark(shown, id);
     show(parkButton, Boolean(park?.ok) && busy !== "park" && !touch.matches); // a phone has it in the confirm bar
@@ -953,7 +962,10 @@ if (board && stage) {
     const neighbour = canHelp(shown, id, now);
     confirmHelp.hidden = !neighbour?.ok;
     if (neighbour?.ok) {
-      confirmHelp.textContent = `Help ${neighbour.label} · +${ECONOMY.helpGift}`;
+      const words = helpButtonText(neighbour);
+      confirmHelp.textContent = words.text;
+      confirmHelp.setAttribute("aria-label", words.said);
+      confirmHelp.classList.toggle("help-back", neighbour.back);
       confirmHelp.dataset.cell = tile.value;
     }
     const park = canPark(shown, id);
@@ -1003,8 +1015,9 @@ if (board && stage) {
       const r = await post("/help", { cellId: String(cell) });
       if (r.ok && r.body.board) {
         applyBoard(r.body.board);
-        const m = doneText("helped");
-        showNotice("helped", m.text, { said: m.said, at: cell });
+        const key = r.body.notice === "returned" ? "returned" : "helped";
+        const m = doneText(key);
+        showNotice(key, m.text, { said: m.said, at: cell });
       } else {
         const m = refusal(r);
         showNotice(refusalKey(r), m.text, { said: m.said });
@@ -1139,11 +1152,12 @@ if (board && stage) {
     }
   });
 
-  // The lease marks and the inspector tick while shown.
+  // The lease marks, the help-back glow and the inspector tick while shown:
+  // a favour's hour and my help's cooldown both end with no board sent.
   setInterval(() => {
     if (looked !== null && inspector && !inspector.hidden) showInspect(looked);
     const now = new Date();
-    shown.tiles.forEach((t, i) => tiles[i] && setData(tiles[i], "lease", leaseSoon(t, now) ? "soon" : null));
+    shown.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t, shown, now));
   }, 15_000);
 
   sayOnce(shown.me);

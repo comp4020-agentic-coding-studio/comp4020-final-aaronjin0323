@@ -1072,6 +1072,69 @@ async function helping(browser: Browser): Promise<void> {
 }
 
 
+// --- returning a favour (docs/adr/0008) ---
+async function returning(browser: Browser): Promise<void> {
+  console.log("\n— returning a favour: help back inside the hour —");
+  const ana = player("Kai");
+  const ben = player("Mia");
+  const a = await freshAs(browser, ana);
+  const b = await freshAs(browser, ben);
+  const centre = await openPatch(a);
+  await claimAs(a, "Kai", centre);
+  await claimAs(b, "Mia", centre + 1);
+  await a.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
+  await b.waitForSelector(`button.tile[value="${centre}"][data-state="held"]`, { timeout: 3000 });
+  check((await a.$$("button.tile[data-return]")).length === 0, "nothing glows before anyone has helped");
+  // Kai helps Mia; Mia's page lights Kai's building
+  const glow = b.waitForSelector(`button.tile[value="${centre}"][data-return]`, { timeout: 3000 }).catch(() => null);
+  await clickTile(a, centre + 1);
+  await a.click(".help-button");
+  await a.waitForSelector('[data-notice="helped"]', { timeout: 3000 }).catch(() => null);
+  check((await glow) !== null, "Mia's page glows Kai's building once he's helped her");
+  check((await b.$$("button.tile[data-return]")).length === 1, "and only that one");
+  check((await a.$$("button.tile[data-return]")).length === 0, "Kai's own page glows nothing");
+  const aria = (await b.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
+  check(/Helped you: help back for 30 more each$/.test(aria), "the glow has words for a screen reader", aria);
+  const ring = await b.$eval(`button.tile[value="${centre}"]`, (el) => getComputedStyle(el).boxShadow);
+  check(/141, 224, 141/.test(ring), "the glow is drawn green", ring.slice(0, 60));
+  const badge = await b.$eval(`button.tile[value="${centre}"] .beacon`, (el) => getComputedStyle(el, "::after").content);
+  check(badge === '"+30"', "with +30 floating over the roof", badge);
+  // the glow alone, close up and still, before the tile is selected
+  const sharp = await freshAs(browser, ben, { deviceScaleFactor: 4, reducedMotion: "reduce" });
+  await sharp.waitForSelector(`button.tile[value="${centre}"][data-return]`, { timeout: 3000 }).catch(() => null);
+  const box = await sharp.$eval(`button.tile[value="${centre}"]`, (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.x - 50), y: Math.max(0, r.y - 70), width: r.width + 140, height: r.height + 110 };
+  });
+  await sharp.screenshot({ path: ".shots/return-glow-4x.png", clip: box });
+  await sharp.context().close();
+  await clickTile(b, centre);
+  const label = (await b.textContent(".help-button")) ?? "";
+  const name = (await b.getAttribute(".help-button", "aria-label")) ?? "";
+  check(label === "Help back +30 each" && (await rendered(b, ".help-button")), "Mia's Help reads Help back +30 each", label);
+  check(name === "Help Kai back: 80 coins to them, 50 to you", "with a full accessible name", name);
+  await b.locator("[data-stage]").screenshot({ path: ".shots/return-glow.png" });
+  const clip = await b.$eval(`button.tile[value="${centre}"]`, (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.x - 80), y: Math.max(0, r.y - 80), width: r.width + 160, height: r.height + 160 };
+  });
+  await b.screenshot({ path: ".shots/return-close.png", clip });
+  await b.screenshot({ path: ".shots/return-inspector.png" });
+  const kai = await coinsOf(a);
+  const mia = await coinsOf(b);
+  const paid = a.waitForFunction((c) => Number(document.querySelector("[data-hud-coins]")?.textContent) === c + 80, kai, { timeout: 3000 }).catch(() => null);
+  await b.click(".help-button");
+  await b.waitForSelector('[data-notice="returned"]', { timeout: 3000 }).catch(() => null);
+  check((await noticeOf(b)) === "Helped back! +30 each", "Mia is told, in a line", await noticeOf(b));
+  check((await coinsOf(b)) === mia + 50, "and gets 20 + 30", `${mia} -> ${await coinsOf(b)}`);
+  check((await paid) !== null, "Kai's page shows his 50 + 30");
+  check((await b.$$("button.tile[data-return]")).length === 0, "the glow goes once the favour is returned");
+  await a.click('[data-tool="log"] > button, button[aria-controls*="log"], [data-tools] button[title="City activity"]').catch(() => undefined);
+  const log = await a.$eval("[data-events]", (el) => el.textContent ?? "").catch(() => "");
+  check(log.includes("Mia returned Kai's help"), "the city log says Mia returned Kai's help", log.slice(0, 80));
+  for (const p of [a, b]) await p.context().close();
+}
+
 // --- parks (docs/adr/0007) ---
 async function parks(browser: Browser): Promise<void> {
   console.log("\n— parks: a public good placed beside a neighbour —");
@@ -1432,6 +1495,7 @@ const SECTIONS = {
   renewal,
   helping,
   parks,
+  returning, // after parks: its two buildings would sit just outside parks' open patch
   viewports,
   richBoard,
   busyBoard,
