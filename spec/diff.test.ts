@@ -31,6 +31,7 @@ import {
   renewOptions,
   returnGlow,
   returnTarget,
+  rezoneOptions,
   tileAria,
   timeLeft,
   upgradeInfo,
@@ -74,6 +75,14 @@ describe("the game's numbers", () => {
 
   it("give the server's income for every level and neighbour count", () => {
     for (let level = 1; level <= 5; level++) for (let n = 0; n <= 8; n++) expect(rateOf(level, n), `level ${level}, ${n} neighbours`).toBe(serverRate(level, n));
+  });
+
+  it("give the server's income with zone terms, floor included (docs/adr/0009)", () => {
+    for (let level = 1; level <= 5; level++) {
+      for (let n = 0; n <= 8; n++) {
+        for (const bonus of [-80, -30, -10, 0, 15, 30, 35, 65]) expect(rateOf(level, n, bonus), `level ${level}, ${n}, ${bonus}`).toBe(serverRate(level, n, bonus));
+      }
+    }
   });
 });
 
@@ -434,6 +443,90 @@ describe("returning a favour", () => {
   });
 });
 
+describe("zoning (docs/adr/0009)", () => {
+  it("offers my own building the other zones with their cost, only while I can pay and am not cooling down", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    expect(rezoneOptions(view(), NOW).map((o: { zone: string; text: string }) => [o.zone, o.text])).toEqual([
+      ["market", "Market · 40"],
+      ["factory", "Factory · 40"],
+    ]);
+    expect(rezoneOptions(view(), NOW)[1].said).toBe("Zone your building a factory for 40 coins: +35% you, \u221210% neighbours");
+    expect(rezoneOptions(withMe(view(), { coins: 39 }), NOW)).toEqual([]);
+    store.rezone(ME, "factory", NOW);
+    expect(rezoneOptions(view(), NOW)).toEqual([]); // cooling down
+    const later = new Date(NOW.getTime() + HOUR);
+    expect(rezoneOptions(view(ME, later), later).map((o: { zone: string }) => o.zone)).toEqual(["civic", "market"]);
+    // nobody else's building, and no land, offers nothing
+    expect(rezoneOptions(view(MIA), NOW)).toEqual([]);
+  });
+
+  it("shows a building's zone in the inspector and its words, and leaves civic unsaid", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), KAI, "Kai", NOW);
+    store.claim(at(5, 6), MIA, "Mia", NOW);
+    expect(inspect(view(), at(5, 5), NOW).facts.map((f: string[]) => f[0])).toEqual(["Earns", "Neighbours", "Lease"]);
+    store.rezone(KAI, "factory", NOW);
+    expect(inspect(view(), at(5, 5), NOW).facts).toContainEqual(["Zone", "Factory · +35% you, \u221210% neighbours"]);
+    expect(inspect(view(), at(5, 5), NOW).facts[0]).toEqual(["Earns", "+15.5/min"]);
+    expect(inspect(view(), at(5, 6), NOW).facts[0]).toEqual(["Earns", "+11/min"]);
+    expect(view().tiles[at(5, 5)].aria).toBeDefined();
+    expect(eventText(view().events[0])).toBe("Kai zoned a factory");
+  });
+
+  it("tells me in one line when a neighbour zones a factory or a market beside me, never far away", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), ME, "Me", NOW);
+    store.claim(at(5, 6), KAI, "Kai", NOW);
+    store.claim(at(9, 9), ZOE, "Zoe", NOW);
+    let before = view();
+    store.rezone(KAI, "factory", NOW);
+    expect(diffBoards(before, view()).messages).toEqual([
+      { key: "zoned", text: "Kai built a factory beside you \u00b7 \u221210%", said: "Kai built a factory beside you. Your income is down 10%." },
+    ]);
+    before = view();
+    store.rezone(ZOE, "factory", NOW);
+    expect(diffBoards(before, view()).messages).toEqual([]);
+    const later = new Date(NOW.getTime() + HOUR);
+    before = view(ME, later);
+    store.rezone(KAI, "market", later);
+    expect(diffBoards(before, view(ME, later)).messages).toEqual([
+      { key: "zoned", text: "Kai opened a market beside you \u00b7 +25%", said: "Kai opened a market beside you. Your income is up 25%." },
+    ]);
+    // my own rezone narrates nothing about neighbours: its answer says it
+    before = view(ME, later);
+    store.rezone(ME, "factory", later);
+    expect(diffBoards(before, view(ME, later)).messages).toEqual([]);
+    expect(doneText("rezoned", { zone: "factory" }, view(ME, later))).toEqual({ text: "Factory! +17/min", said: "Zoned a factory, earning 17 coins a minute." });
+  });
+
+  it("previews a factory moving in beside someone as +10%, and a market's gift on top of the +20%", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), MIA, "Mia", NOW);
+    store.claim(at(0, 0), ME, "Me", NOW);
+    store.rezone(ME, "factory", NOW);
+    const p = preview(view(), at(5, 6));
+    expect(p.rate).toBe(1550);
+    expect(p.pct[at(5, 5)]).toBe(10);
+    expect(describeTile(view(), at(5, 6), NOW).title).toMatch(/^\+15\.5\/min · Mia \+10%/);
+    const later = new Date(NOW.getTime() + HOUR);
+    store.rezone(ME, "market", later);
+    expect(inspect(view(ME, later), at(5, 6), later).facts).toContainEqual(["Lifts", "Mia +35%"]);
+  });
+
+  it("draws each building's zone on the server's page, for the roof icon", () => {
+    const { store, view } = scene();
+    store.claim(at(5, 5), KAI, "Kai", NOW);
+    store.claim(at(5, 7), MIA, "Mia", NOW);
+    store.rezone(KAI, "market", NOW);
+    const doc = new JSDOM(renderBoard(view(), "", { now: NOW })).window.document;
+    expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("data-zone")).toBe("market");
+    expect(doc.querySelector(`button.tile[value="${at(5, 7)}"]`)!.getAttribute("data-zone")).toBe("civic");
+    expect(doc.querySelector(`button.tile[value="${at(0, 0)}"]`)!.hasAttribute("data-zone")).toBe(false);
+    expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("aria-label")).toMatch(/Kai's Small House, market, height 1/);
+  });
+});
+
 describe("money on the page", () => {
   it("counts uncollected income up from the last board, to the cap and the lease end", () => {
     const me = { pending: 500, rate: 1200, leaseEndsAt: new Date(NOW.getTime() + 10 * MIN).toISOString() };
@@ -654,6 +747,64 @@ describe("the placement preview", () => {
     expect(checked).toBeGreaterThan(1000);
     expect(besideMyPark).toBeGreaterThan(100);
     expect(besideOthers).toBeGreaterThan(100);
+  }, 30_000);
+
+  // The same with zones (docs/adr/0009) on every building, parks too, and
+  // sometimes my own building zoned: the preview's incomes must equal the
+  // server's to the cent, so its +N/min and each neighbour's +N% are true.
+  it("agrees with the server's income on random boards with zones and parks", () => {
+    const ZONES = ["civic", "market", "factory"];
+    let checked = 0;
+    let zoneMoves = 0;
+    let factoryLifts = 0;
+    for (let seed = 201; seed <= 225; seed++) {
+      const rand = rng(seed);
+      const density = 0.2 + rand() * 0.5;
+      const mineAt = rand() < 0.8 ? Math.floor(rand() * 144) : -1;
+      const myZone = ZONES[Math.floor(rand() * 3)];
+      const rows: Tile[] = [];
+      const parks: Park[] = [];
+      for (let id = 0; id < 144; id++) {
+        const level = 1 + Math.floor(rand() * 5);
+        const zone = ZONES[Math.floor(rand() * 3)];
+        if (id === mineAt) rows.push({ ...row(id, ME, level), zone: myZone });
+        else if (rand() < density) rows.push({ ...row(id, `p${id}`, level, rand() < 0.1 ? -HOUR : 10 * HOUR), zone });
+        else {
+          rows.push(row(id, null));
+          if (rand() < 0.15) {
+            const by = rand() < 0.4 ? ME : "stranger";
+            parks.push({ cellId: id, placedBy: by, label: by.toUpperCase(), placedAt: new Date(NOW.getTime() - HOUR).toISOString(), endsAt: new Date(NOW.getTime() + HOUR).toISOString() });
+          }
+        }
+      }
+      const before = boardView(rows, ME, NOW, [], { parks });
+      const mine = rows.find((r) => r.claimerId === ME);
+      for (const t of before.tiles) {
+        const p: (Preview & { pct: Record<string, number> }) | null = preview(before, t.id);
+        if (t.state !== "free") continue;
+        // a move keeps my zone; a first claim is civic
+        const after = rows.map((r) =>
+          r.id === t.id ? { ...row(r.id, ME, mine?.level ?? 1), zone: mine?.zone ?? "civic" } : r.claimerId === ME ? row(r.id, null) : r,
+        );
+        const live = boardView(after, ME, NOW, [], { parks }).tiles;
+        expect(p!.rates, `seed ${seed}, plot ${t.id} rates`).toEqual(live.map((x) => x.rate));
+        expect(p!.rate).toBe(live[t.id].rate);
+        const held = (i: number) => before.tiles[i].state === "held";
+        expect(p!.lifted).toEqual(live.filter((x) => held(x.id) && x.rate > before.tiles[x.id].rate).map((x) => x.id));
+        expect(p!.dropped).toEqual(live.filter((x) => held(x.id) && x.rate < before.tiles[x.id].rate).map((x) => x.id));
+        // each moved building's mark is its change over its base, in points
+        for (const i of [...p!.lifted, ...p!.dropped]) {
+          const base = (before.tiles[i].level ?? 1) * 1000;
+          expect(p!.pct[i], `seed ${seed}, plot ${t.id}, neighbour ${i}`).toBe((live[i].rate - before.tiles[i].rate) / (base / 100));
+          if (p!.pct[i] !== 20 && p!.pct[i] !== -20) zoneMoves++;
+          if (mine?.zone === "factory" && p!.lifted.includes(i)) factoryLifts++;
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(800);
+    expect(zoneMoves).toBeGreaterThan(300);
+    expect(factoryLifts).toBeGreaterThan(20);
   }, 30_000);
 
   it("says what building there would earn and whose income it raises, in numbers", () => {

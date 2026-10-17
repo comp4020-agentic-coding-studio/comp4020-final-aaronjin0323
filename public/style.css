@@ -37,6 +37,19 @@
   --money: #8de08d; /* the cash counter's green */
   --park: #2f8f46; /* a park's hedge and tree (docs/adr/0007) */
   --park-lawn: #6fc46a; /* and its lawn */
+  /* The zone icons (docs/adr/0009), drawn with gradients only (never
+     clip-path on a 3D face). A market is a striped awning over a green shop
+     front with a door; a factory a dark block with a sawtooth roof and a red
+     chimney. Stripes against solid dark read apart in greyscale. */
+  --zone-market:
+    linear-gradient(var(--night), var(--night)) 50% 100% / 26% 34% no-repeat,
+    repeating-linear-gradient(90deg, var(--danger) 0 20%, var(--cream) 20% 40%) 0 0 / 100% 42% no-repeat,
+    var(--money);
+  --zone-factory:
+    linear-gradient(var(--danger), var(--danger)) 78% 0 / 18% 62% no-repeat,
+    linear-gradient(to top right, #b9b4cc 49%, transparent 51%) 0 62% / 34% 30% repeat-x,
+    linear-gradient(#b9b4cc, #b9b4cc) 0 100% / 100% 40% no-repeat,
+    #3a3450;
   --line: #000; /* every outline and hard shadow */
   --cream: #fff7ec;
   --panel: #1c0f2e;
@@ -554,6 +567,20 @@ main {
 .swatch[data-swatch="park"] {
   background: var(--park-lawn);
   box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6), inset 0 0 0 4px var(--park);
+}
+
+.swatch[data-swatch="market"],
+.swatch[data-swatch="factory"] {
+  border: 2px solid var(--line);
+  border-radius: 3px;
+}
+
+.swatch[data-swatch="market"] {
+  background: var(--zone-market);
+}
+
+.swatch[data-swatch="factory"] {
+  background: var(--zone-factory);
 }
 
 .swatch[data-swatch="soon"] {
@@ -1757,6 +1784,13 @@ main {
   color: var(--danger);
 }
 
+/* each neighbour's own change, zones included (docs/adr/0009): +10% beside
+   a factory, +35% beside a market */
+.tile[data-preview="lift"] .beacon[data-pct]::after,
+.tile[data-preview="drop"] .beacon[data-pct]::after {
+  content: attr(data-pct);
+}
+
 /* --- the goal on the board --- */
 
 /* A tile whose claim would bring a tower closer to a landmark glows: a gold
@@ -1882,6 +1916,70 @@ main {
 
 .tile[data-tier="bronze"] .crown::before {
   background: linear-gradient(to bottom, #f0b27a, #b8692e 60%, #6e3a14);
+}
+
+/* A building's zone (docs/adr/0009): a small sign standing on the roof's
+   peak, facing the camera like the crown, so it reads as that building's
+   from any angle. Beside a crown it steps aside to the roof's edge. Civic
+   draws nothing: it's the baseline. Hidden while a preview uses the roof. */
+.zone-mark {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52%;
+  aspect-ratio: 1;
+  box-sizing: border-box;
+  border: 2px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 1px 1px 0 var(--line);
+  pointer-events: none;
+  translate: -50% -100% calc(var(--unit) * 1.2 + 8px);
+  transform-origin: 50% 100%;
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+}
+
+.tile[data-landmark] .zone-mark {
+  left: 92%;
+}
+
+.tile[data-zone="market"]:not([data-preview]) .zone-mark,
+.tile[data-zone="factory"]:not([data-preview]) .zone-mark {
+  display: block;
+}
+
+.tile[data-zone="market"] .zone-mark {
+  background: var(--zone-market);
+}
+
+.tile[data-zone="factory"] .zone-mark {
+  background: var(--zone-factory);
+}
+
+/* the rezone buttons in your own building's inspector */
+.zone-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.zone-button {
+  min-height: 44px;
+  padding: 0.4rem 0.8rem;
+  border: 3px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--cream);
+  color: var(--night);
+  box-shadow: 3px 3px 0 var(--line);
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.zone-button:focus-visible {
+  outline-color: var(--ink);
 }
 
 /* A landmark's roof keeps a gold edge, so the cell reads as one even

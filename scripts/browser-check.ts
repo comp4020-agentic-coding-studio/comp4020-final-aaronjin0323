@@ -1185,6 +1185,76 @@ async function parks(browser: Browser): Promise<void> {
   await nojs.context().close();
 }
 
+// --- zoning (docs/adr/0009) ---
+async function zoning(browser: Browser): Promise<void> {
+  console.log("\n— zoning: a factory beside a neighbour, shown on the roof —");
+  const kai = player("Kai");
+  const mia = player("Mia");
+  const a = await freshAs(browser, kai);
+  const b = await freshAs(browser, mia);
+  const centre = await openPatch(a);
+  await claimAs(a, "Kai", centre);
+  await claimAs(b, "Mia", centre + 1);
+  await a.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
+  check((await a.getAttribute(`button.tile[value="${centre}"]`, "data-zone")) === "civic", "a new building is civic");
+  const markShown = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"] .zone-mark`, (el) => getComputedStyle(el).display !== "none");
+  check(!(await markShown(a, centre)), "a civic building draws no zone icon");
+  // Kai's own building offers the other zones with their cost
+  await clickTile(a, centre);
+  const buttons = await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).map((e) => [e.textContent, e.getAttribute("aria-label")]));
+  check(
+    JSON.stringify(buttons.map((x) => x[0])) === JSON.stringify(["Market · 40", "Factory · 40"]),
+    "Kai's inspector offers Market · 40 and Factory · 40",
+    JSON.stringify(buttons.map((x) => x[0])),
+  );
+  check(buttons[1]?.[1] === "Zone your building a factory for 40 coins: +35% you, \u221210% neighbours", "with a full accessible name", buttons[1]?.[1] ?? "");
+  // nobody else's building offers a rezone
+  await clickTile(a, centre + 1);
+  check((await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).length)) === 0, "Mia's building offers Kai no rezone");
+  await clickTile(a, centre);
+  const before = await coinsOf(a);
+  const heard = b.waitForSelector('[data-notice="zoned"]', { timeout: 3000 }).catch(() => null);
+  const started = Date.now();
+  await a.click('.zone-button[data-zone="factory"]');
+  await a.waitForSelector('[data-notice="rezoned"]', { timeout: 3000 }).catch(() => null);
+  check((await noticeOf(a)) === "Factory! +15.5/min", "Kai is told, in a line", await noticeOf(a));
+  check((await coinsOf(a)) === before - 40, "and pays 40 coins", `${before} -> ${await coinsOf(a)}`);
+  check((await heard) !== null && Date.now() - started < 1500, "Mia hears it within a second or so", `${Date.now() - started} ms`);
+  check((await noticeOf(b)) === "Kai built a factory beside you \u00b7 \u221210%", "in one line, with what it costs her", await noticeOf(b));
+  await b.waitForSelector(`button.tile[value="${centre}"][data-zone="factory"]`, { timeout: 2000 }).catch(() => null);
+  check(await markShown(b, centre), "Mia's page draws the factory on Kai's roof");
+  check(await markShown(a, centre), "and so does Kai's");
+  check((await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).length)) === 0, "the rezone buttons go while it cools down");
+  const aria = (await b.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
+  check(/Kai's Small House, factory, height/.test(aria), "the icon has words for a screen reader", aria);
+  check((await hudText(b, "rate")) === "+11/min", "Mia's income shows the factory's −10%", await hudText(b, "rate"));
+  // the preview counts zones: Zoe, with no land yet, looks at the plot
+  // below Kai's factory and beside Mia. Kai gains a civic neighbour (+20%);
+  // Mia gains one but already has the factory, so +20% too; and Zoe's own
+  // +N/min has the factory's −10% in it: 100 + 40 − 10.
+  const zoe = player("Zoe");
+  const c = await freshAs(browser, zoe);
+  await hoverTile(c, centre + 12);
+  const pct = (id: number) => c.$eval(`button.tile[value="${id}"] .beacon`, (el) => (el as HTMLElement).dataset.pct ?? "");
+  check((await pct(centre)) === "+20%" && (await pct(centre + 1)) === "+20%", "the preview marks each neighbour's own change", `${await pct(centre)}, ${await pct(centre + 1)}`);
+  const gain = await c.$eval(`button.tile[value="${centre + 12}"] .beacon`, (el) => (el as HTMLElement).dataset.gain ?? "");
+  check(gain === "+13/min", "and the plot's +N/min counts the factory's −10%", gain);
+  // the icons, close up and still: a market too, from Zoe
+  await claimAs(c, "Zoe", centre + 12);
+  await postAs(zoe, "/rezone", { zone: "market" });
+  for (const p of [a, b, c]) await p.context().close();
+  const sharp = await freshAs(browser, mia, { deviceScaleFactor: 4, reducedMotion: "reduce" });
+  await sharp.waitForSelector(`button.tile[value="${centre + 12}"][data-zone="market"]`, { timeout: 3000 }).catch(() => null);
+  check(await markShown(sharp, centre + 12), "a market draws its own icon");
+  const box = await sharp.$eval(`button.tile[value="${centre}"]`, (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.x - 70), y: Math.max(0, r.y - 80), width: r.width + 180, height: r.height + 170 };
+  });
+  await sharp.screenshot({ path: ".shots/zoning-4x.png", clip: box });
+  await sharp.locator("[data-stage]").screenshot({ path: ".shots/zoning.png" });
+  await sharp.context().close();
+}
+
 // --- a stranger, cold: what's on the first screen, and the first minute ---
 
 // The words a person can actually see: text in rendered elements on the
@@ -1496,6 +1566,7 @@ const SECTIONS = {
   helping,
   parks,
   returning, // after parks: its two buildings would sit just outside parks' open patch
+  zoning,
   viewports,
   richBoard,
   busyBoard,

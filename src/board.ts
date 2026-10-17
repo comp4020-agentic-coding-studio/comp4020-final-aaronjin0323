@@ -322,12 +322,13 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
       ? ""
       : ` data-level="${t.level}" data-neighbours="${t.neighbours}" data-rate="${t.rate}" data-zone="${escapeHtml(t.zone ?? "civic")}"${t.leaseEndsAt ? ` data-lease-ends-at="${escapeHtml(t.leaseEndsAt)}"` : ""}`;
   const soon = leaseSoon(t, now) ? ` data-lease="soon"` : "";
-  // .roof carries the building's roofline; .beacon floats over it: your
+  // .roof carries the building's roofline; .zone-mark the zone's icon on
+  // it (market or factory, docs/adr/0009; civic none); .beacon floats over it: your
   // marker, the ghost of a plot you're about to build on (with its income on
   // it), the hourglass of a lease ending. .ring is the lease ring, drawn only
   // round your own building.
   const crownMark = landmark ? `<span class="crown" aria-hidden="true"></span>` : "";
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow}${favour} style="${style}" aria-label="${escapeHtml(back ? (returnWords(aria) as string) : aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"${back ? ` data-back="+${RETURN_BONUS}"` : ""}></span>${crownMark}</button>`;
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow}${favour} style="${style}" aria-label="${escapeHtml(back ? (returnWords(aria) as string) : aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"${back ? ` data-back="+${RETURN_BONUS}"` : ""}></span><span class="zone-mark" aria-hidden="true"></span>${crownMark}</button>`;
 }
 
 // JSON inside a <script> element: "<" is escaped so no string in it (a label
@@ -370,6 +371,8 @@ const LEGEND: [string, string][] = [
   ["held", "Someone's building"],
   ["mine", "Yours"],
   ["park", "Park: lifts the buildings round it"],
+  ["market", "Market: +15% to neighbours"],
+  ["factory", "Factory: +35% itself, −10% neighbours"],
   ["soon", "Lease ending within the hour"],
 ];
 

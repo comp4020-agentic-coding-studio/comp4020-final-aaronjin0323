@@ -22,12 +22,14 @@ import {
   leaseSoon,
   pendingNow,
   perMinute,
+  pctText,
   preview,
   raisedText,
   refusalText,
   relocateInfo,
   returnGlow,
   returnWords,
+  rezoneOptions,
   statusText,
   tileAria,
   tileWords,
@@ -270,6 +272,8 @@ if (board && stage) {
     setData(el, "neighbours", free ? null : t.neighbours);
     setData(el, "rate", free ? null : t.rate);
     setData(el, "leaseEndsAt", free ? null : t.leaseEndsAt);
+    // the zone picks the roof icon (docs/adr/0009); civic draws none
+    setData(el, "zone", free ? null : (t.zone ?? "civic"));
     setData(el, "endsAt", t.state === "park" ? t.endsAt : null);
     setData(el, "yours", t.state === "park" && t.mine ? "" : null);
     setData(el, "lease", leaseSoon(t, now) ? "soon" : null);
@@ -345,6 +349,7 @@ if (board && stage) {
         neighbours: num(el.dataset.neighbours) ?? 0,
         rate: num(el.dataset.rate) ?? 0,
         leaseEndsAt: el.dataset.leaseEndsAt ?? null,
+        ...(el.dataset.zone ? { zone: el.dataset.zone } : {}),
         ...(el.dataset.state === "park" ? { endsAt: el.dataset.endsAt ?? null, mine: el.dataset.yours !== undefined } : {}),
       })),
     };
@@ -495,7 +500,11 @@ if (board && stage) {
   const parkButton = document.createElement("button");
   parkButton.type = "button";
   parkButton.className = "park-button";
-  inspectActions.append(moveButton, helpButton, parkButton);
+  // Rezone: on your own building, one button per other zone (docs/adr/0009)
+  const zoneButtons = document.createElement("div");
+  zoneButtons.className = "zone-buttons";
+  zoneButtons.hidden = true;
+  inspectActions.append(moveButton, helpButton, parkButton, zoneButtons);
   inspector?.append(inspectActions);
 
   const clearPreview = () => {
@@ -504,6 +513,7 @@ if (board && stage) {
       delete el.dataset.previewHeight;
     }
     for (const el of board.querySelectorAll(".beacon[data-gain]")) delete el.dataset.gain;
+    for (const el of board.querySelectorAll(".beacon[data-pct]")) delete el.dataset.pct;
   };
   const showPreview = (id) => {
     clearPreview();
@@ -515,6 +525,11 @@ if (board && stage) {
     if (ghost) ghost.dataset.gain = `+${perMinute(p.rate)}/min`;
     for (const n of p.lifted) tiles[n].dataset.preview = "lift";
     for (const n of p.dropped) tiles[n].dataset.preview = "drop";
+    // each neighbour's own change, zones included: +20%, +10%, +35%
+    for (const n of [...p.lifted, ...p.dropped]) {
+      const b = tiles[n].querySelector(".beacon");
+      if (b && Number.isFinite(p.pct?.[n])) b.dataset.pct = pctText(p.pct[n]);
+    }
   };
   const showInspect = (id) => {
     if (!inspector) return;
@@ -556,7 +571,25 @@ if (board && stage) {
       setText(parkButton, `Place park (${park.cost})`);
       parkButton.setAttribute("aria-label", `Place a park here for ${park.cost} coins: lifts ${park.names.join(", ")} for ${ECONOMY.parkHours} hours`);
     }
-    inspectActions.hidden = moveButton.hidden && helpButton.hidden && parkButton.hidden;
+    const zones = shown.tiles[id]?.state === "mine" && busy !== "rezone" ? rezoneOptions(shown, now) : [];
+    const key = zones.map((o) => o.zone).join(",");
+    if (zoneButtons.dataset.zones !== key) {
+      zoneButtons.dataset.zones = key;
+      zoneButtons.replaceChildren(
+        ...zones.map((o) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "zone-button";
+          b.dataset.zone = o.zone;
+          b.textContent = o.text;
+          b.setAttribute("aria-label", o.said);
+          b.addEventListener("click", () => runAction("rezone", "/rezone", { zone: o.zone }).then(() => showInspect(looked)));
+          return b;
+        }),
+      );
+    }
+    show(zoneButtons, zones.length > 0);
+    inspectActions.hidden = moveButton.hidden && helpButton.hidden && parkButton.hidden && zoneButtons.hidden;
     inspector.hidden = false;
   };
   const focusedTile = () => {
@@ -1129,6 +1162,11 @@ if (board && stage) {
         pinned = pinned === tile ? null : tile;
         look();
         if (other) claim(id); // says whose it is; never posts
+      } else if (tile.dataset.state === "mine") {
+        // your own building stays inspected for its zone buttons (ADR 9);
+        // the click still submits, so a new name typed first renames
+        pinned = tile;
+        look();
       }
     },
     true,

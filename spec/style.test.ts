@@ -102,7 +102,7 @@ describe("the stylesheet's hooks", () => {
   // pulsing; gain: the +N/min over a ghost; at/gone: a line placed by its
   // subject, then fading.)
   it("styles every goal, landmark, building, wallet and teaching hook the script sets", () => {
-    const hooks = ["helps", "return", "back", "landmark", "raised", "bump", "built", "fresh", "lease", "invite", "want", "wanted", "selected", "gain", "at", "gone", "pending"];
+    const hooks = ["helps", "return", "back", "landmark", "raised", "bump", "built", "fresh", "lease", "invite", "want", "wanted", "selected", "gain", "at", "gone", "pending", "zone", "pct"];
     const set = [
       ...app.matchAll(new RegExp(`dataset\\.(${hooks.join("|")})\\b\\s*=`, "g")),
       ...app.matchAll(new RegExp(`setData\\([\\w.\\[\\]]+, "(${hooks.join("|")})"`, "g")),

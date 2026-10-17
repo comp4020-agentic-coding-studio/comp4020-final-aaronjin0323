@@ -6,14 +6,15 @@
 //
 // A board is { tiles, me, landmarks, events, version }. Each tile is
 // { id, state: "free" | "held" | "mine" | "park", label, hue, level,
-// neighbours, height, rate, leaseEndsAt } (docs/adr/0005); a park also has
+// neighbours, height, rate, leaseEndsAt, zone } (docs/adr/0005, 0009); a park also has
 // `endsAt` and `mine` (docs/adr/0007). Holders are never named by id,
 // so "the same holder" means the same hue and label. `me` is this visitor's
 // own wallet: { coins, pending, rate, cellId, level, leaseEndsAt, ownedSince,
-// relocateAt, helpAt, parks, parkLimit, returnable, welcome?, expired? }. Money is in coins, except
+// relocateAt, helpAt, rezoneAt, parks, parkLimit, returnable, welcome?, expired? }. Money is in coins, except
 // `pending` and every `rate`, which are hundredths of a coin (a minute).
 
 const N = 12;
+const MINUS = "−";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
@@ -188,11 +189,12 @@ export function upgradeInfo(board) {
   if (!mine) return { ok: false, reason: "no-land" };
   const level = levelOf(mine);
   const n = neighboursOf(board, mine);
-  const base = { level, name: buildingName(level), rate: rateOf(level, n) };
+  const bonus = zoneTerms(board)[mine.id];
+  const base = { level, name: buildingName(level), rate: rateOf(level, n, bonus) };
   if (level >= MAX_LEVEL) return { ...base, ok: false, reason: "max-level" };
   const next = level + 1;
   const cost = ECONOMY.upgradeCosts[level - 1];
-  const info = { ...base, next, nextName: buildingName(next), cost, nextRate: rateOf(next, n) };
+  const info = { ...base, next, nextName: buildingName(next), cost, nextRate: rateOf(next, n, bonus) };
   if (coins < cost) return { ...info, ok: false, reason: "coins" };
   return { ...info, ok: true, reason: null };
 }
@@ -231,7 +233,7 @@ export function relocateInfo(board, id, now) {
     from: mine.id,
     to: id,
     cost,
-    rate: rateOf(levelOf(mine), neighboursOf(board, mine)),
+    rate: shownRate(board, mine),
     nextRate: p.rate,
     neighbours: p.neighbours,
   };
@@ -297,6 +299,36 @@ export function canPark(board, id) {
   return { ...info, ok: true, reason: null };
 }
 
+// --- zoning (docs/adr/0009) ---
+
+// What a zone does, in a few words: "+15% to neighbours".
+export function zoneEffect(zone) {
+  const z = ECONOMY.zones[zone];
+  if (!z) return "";
+  const signed = (n) => (n > 0 ? `+${n}%` : `${MINUS}${-n}%`);
+  if (zone === "market") return `${signed(z.neighbour)} to neighbours`;
+  if (zone === "factory") return `${signed(z.self)} you, ${signed(z.neighbour)} neighbours`;
+  return "no effect";
+}
+export const zoneName = (zone) => capital(zone);
+
+// The zones I can change my own building to now: every other zone, while I
+// can pay and my rezone isn't cooling down. Empty when nothing is offered:
+// the inspector shows the buttons only when they can be used.
+export function rezoneOptions(board, now) {
+  const mine = mineOf(board);
+  if (!mine) return [];
+  const me = meOf(board);
+  const cost = ECONOMY.rezoneCost;
+  if ((me?.coins ?? 0) < cost || msUntil(me?.rezoneAt, now) > 0) return [];
+  return ZONE_NAMES.filter((z) => z !== zoneOf(mine)).map((zone) => ({
+    zone,
+    cost,
+    text: `${zoneName(zone)} · ${cost}`,
+    said: `Zone your building ${zone === "civic" ? "civic" : `a ${zone}`} for ${cost} coins: ${zoneEffect(zone)}`,
+  }));
+}
+
 // --- the placement preview ---
 
 // What claiming (or moving to) free plot `id` would do, worked out from the
@@ -325,14 +357,26 @@ export function preview(board, id) {
   });
   const levels = board.tiles.map((x) => (x.id === id ? level : occupied[x.id] ? levelOf(x) : 0));
   const heights = board.tiles.map((x) => (occupied[x.id] ? levels[x.id] + counts[x.id] : 0));
-  const rates = board.tiles.map((x) => (occupied[x.id] ? rateOf(levels[x.id], counts[x.id]) : 0));
+  // Zones after (docs/adr/0009): a new building is civic; a moved one keeps
+  // its zone. Every building is a different person's, so each neighbour's
+  // zone counts; parks have none.
+  const zones = board.tiles.map((x) => (x.id === id ? (mine ? zoneOf(mine) : "civic") : occupied[x.id] ? zoneOf(x) : null));
+  const terms = board.tiles.map((x) =>
+    occupied[x.id] ? zoneBonus(zones[x.id], neighbours(x.id).filter((n) => occupied[n]).map((n) => zones[n])) : 0,
+  );
+  const rates = board.tiles.map((x) => (occupied[x.id] ? rateOf(levels[x.id], counts[x.id], terms[x.id]) : 0));
+  // Whose income goes up or down, by income, so a factory arriving (+20
+  // −10) still lifts and one leaving drops; `pct` is each one's change in
+  // percentage points, for the mark over its roof.
   const lifted = [];
   const dropped = [];
+  const pct = {};
   for (const x of board.tiles) {
     if (x.id === id || !claimed(x) || x === mine) continue;
-    const delta = counts[x.id] - neighboursOf(board, x);
-    if (delta > 0) lifted.push(x.id);
-    else if (delta < 0) dropped.push(x.id);
+    const before = shownRate(board, x);
+    if (rates[x.id] === before) continue;
+    (rates[x.id] > before ? lifted : dropped).push(x.id);
+    pct[x.id] = pctOf(rates[x.id], levels[x.id]) - pctOf(before, levelOf(x));
   }
   return {
     id,
@@ -345,8 +389,23 @@ export function preview(board, id) {
     rates,
     lifted,
     dropped,
+    pct,
     from: mine ? mine.id : null,
   };
+}
+
+// "+20%", "−10%": a change in percentage points, as shown over a roof.
+export const pctText = (n) => (n >= 0 ? `+${n}%` : `${MINUS}${-n}%`);
+
+// "Mia and Kai +20%", "Mia +35% · Kai +20%": the buildings a preview moves,
+// grouped by how much, in board order.
+export function moveWords(board, p, ids) {
+  const groups = new Map();
+  for (const i of ids) {
+    const k = p.pct?.[i] ?? PCT;
+    groups.set(k, [...(groups.get(k) ?? []), board.tiles[i].label]);
+  }
+  return [...groups].map(([k, list]) => `${names(list)} ${pctText(k)}`).join(" · ");
 }
 
 // "Mia", "Mia and Kai", "Mia, Kai and Zoe", "Mia, Kai and 2 others"
@@ -356,8 +415,7 @@ function names(list) {
   return `${list[0]}, ${list[1]} and ${list.length - 2} others`;
 }
 
-const MINUS = "−";
-const PCT = Math.round(ECONOMY.neighbourBonus * 100); // 20: what one neighbour adds
+const PCT = NEIGHBOUR_PCT; // 20: what one neighbour adds
 const coinsAMinute = (cents) => `${perMinute(cents)} coin${cents === 100 ? "" : "s"} a minute`;
 
 // --- narration: one short line, about your own building only ---
@@ -390,6 +448,10 @@ export function builtMessage({ moved, rate, raised = [], where = null }) {
     : { key: "claimed", text: `Your building is up! +${perMinute(rate)}/min${lift}`, said: `Your building is up, earning ${coinsAMinute(rate)}.${liftSaid}` };
 }
 
+// What a neighbour did by rezoning: "built a factory", "opened a market",
+// "went civic".
+const zoneDeed = (zone) => (zone === "factory" ? "built a factory" : zone === "market" ? "opened a market" : "went civic");
+
 export function diffBoards(prev, next) {
   // Buildings whose height changed while keeping the same holder: everyone
   // sees these float a +1 or −1. A plot that changed hands is an arrival.
@@ -412,7 +474,7 @@ export function diffBoards(prev, next) {
     const raised = neighbours(nextMine.id)
       .filter((id) => sameHolder(prev.tiles[id], next.tiles[id]) && counted(next, next.tiles[id]) > counted(prev, prev.tiles[id]))
       .map((id) => next.tiles[id].label);
-    const rate = Number.isFinite(nextMine.rate) && nextMine.rate > 0 ? nextMine.rate : rateOf(levelOf(nextMine), counted(next, nextMine));
+    const rate = shownRate(next, nextMine);
     messages.push(builtMessage({ moved: Boolean(prevMine), rate, raised, where: nextMine.id }));
   } else if (prevMine && !nextMine) {
     messages.push({ key: "expired", text: EXPIRED_TEXT, said: EXPIRED_TEXT });
@@ -425,9 +487,11 @@ export function diffBoards(prev, next) {
     const ended = [];
     const parked = [];
     const closed = [];
+    const zoned = []; // a neighbour who stayed and changed zone (docs/adr/0009)
     for (const id of neighbours(nextMine.id)) {
       const before = prev.tiles[id];
       const after = next.tiles[id];
+      if (sameHolder(before, after) && zoneOf(before) !== zoneOf(after)) zoned.push({ label: after.label, zone: zoneOf(after) });
       // a park someone else placed beside me, or one of theirs closing
       if (isPark(after) && !after.mine && !samePark(before, after)) parked.push(after.label);
       if (isPark(before) && !before.mine && !samePark(before, after)) closed.push(before.label);
@@ -437,10 +501,17 @@ export function diffBoards(prev, next) {
         else ended.push(before.label);
       }
     }
-    const change = (neighboursOf(next, nextMine) - neighboursOf(prev, prevMine)) * PCT;
-    if (arrived.length || moved.length || ended.length || parked.length || closed.length) {
+    // what it did to my income, in percentage points over my base, so a
+    // factory beside me reads as −10% and one arriving as +10%
+    const change = pctOf(shownRate(next, nextMine), levelOf(nextMine)) - pctOf(shownRate(prev, prevMine), levelOf(prevMine));
+    if (arrived.length || moved.length || ended.length || parked.length || closed.length || zoned.length) {
       const parts = [];
       const said = [];
+      for (const z of zoned) {
+        const what = zoneDeed(z.zone);
+        parts.push(`${z.label} ${what} beside you`);
+        said.push(`${z.label} ${what} beside you.`);
+      }
       if (parked.length) {
         parts.push(`${names(parked)} opened a park beside you`);
         said.push(`${names(parked)} opened a park beside you.`);
@@ -469,7 +540,8 @@ export function diffBoards(prev, next) {
         said.push(`Your income is down ${-change}%.`);
       }
       const up = (arrived.length || parked.length) && !moved.length && !ended.length && !closed.length;
-      messages.push({ key: up ? "arrived" : "left", text: parts.join(" · "), said: said.join(" ") });
+      const onlyZoned = zoned.length && !arrived.length && !moved.length && !ended.length && !parked.length && !closed.length;
+      messages.push({ key: onlyZoned ? "zoned" : up ? "arrived" : "left", text: parts.join(" · "), said: said.join(" ") });
     }
   }
 
@@ -657,6 +729,8 @@ export function eventText(e) {
       return `${who} opened a park${where}`;
     case "park-end":
       return `${who}'s park ended${where}`;
+    case "rezone":
+      return `${who} zoned ${e.zone === "civic" || !e.zone ? "civic" : `a ${e.zone}`}`;
     case "landmark":
       return `Landmark raised${where}`;
     default:
@@ -676,7 +750,8 @@ export function tileWords(t, now = new Date()) {
   const kind = buildingName(levelOf(t));
   const who = t.state === "mine" ? `your ${kind}, ${t.label}` : `${t.label}'s ${kind}`;
   const soon = leaseSoon(t, now) ? ", lease ending soon" : "";
-  return `${where}, ${who}, height ${t.height}${soon}`;
+  const zone = zoneOf(t) === "civic" ? "" : `, ${zoneOf(t)}`;
+  return `${where}, ${who}${zone}, height ${t.height}${soon}`;
 }
 
 // The status line: never on screen, but it describes the board to a screen
@@ -702,7 +777,7 @@ export function hudParts(board, now, pending = meOf(board)?.pending ?? 0) {
   const coins = me?.coins ?? 0;
   const owed = collectable(pending);
   const n = neighboursOf(board, mine);
-  const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n);
+  const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n, zoneTerms(board)[mine.id]);
   const leaseIso = me?.leaseEndsAt ?? mine.leaseEndsAt ?? null;
   const left = Math.max(0, msUntil(leaseIso, now));
   const since = me?.ownedSince ? new Date(me.ownedSince).getTime() : NaN;
@@ -752,7 +827,7 @@ export function describeTile(board, id, now = new Date()) {
   if (isPark(t)) return { title: `${capital(parkName(t))} · ${timeLeft(t.endsAt, now) ?? "open"}`, action: null, open: false, kind: "park" };
   const p = preview(board, id);
   const gain = `+${perMinute(p.rate)}/min`;
-  const lift = p.lifted.length ? ` · ${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%` : "";
+  const lift = p.lifted.length ? ` · ${moveWords(board, p, p.lifted)}` : "";
   const move = relocateInfo(board, id, now);
   if (move) {
     const wait = move.reason === "cooldown" ? ` · move in ${timeLeft(meOf(board).relocateAt, now)}` : move.reason === "coins" ? ` · moving costs ${move.cost}` : "";
@@ -778,16 +853,18 @@ export function inspect(board, id, now) {
     const p = preview(board, id);
     title = "Free plot";
     facts.push(["Earns", `+${perMinute(p.rate)}/min`]);
-    if (p.lifted.length) facts.push(["Lifts", `${names(p.lifted.map((i) => board.tiles[i].label))} +${PCT}%`]);
-    if (p.dropped.length) facts.push(["Drops", `${names(p.dropped.map((i) => board.tiles[i].label))} ${MINUS}${PCT}%`]);
+    if (p.lifted.length) facts.push(["Lifts", moveWords(board, p, p.lifted)]);
+    if (p.dropped.length) facts.push(["Drops", moveWords(board, p, p.dropped)]);
     const h = goalShown(goal(board)) ? helpsWith(board, id) : null;
     if (h) facts.push(["Landmark", h.landmark ? `completes ${h.tier}!` : `${h.name} → ${h.neighbours} of ${h.target} for ${h.tier}`]);
   } else {
     const level = levelOf(t);
     const around = neighboursOf(board, t);
     title = t.state === "mine" ? `Your ${buildingName(level)}` : `${t.label}'s ${buildingName(level)}`;
-    facts.push(["Earns", `+${perMinute(Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(level, around))}/min`]);
+    facts.push(["Earns", `+${perMinute(shownRate(board, t))}/min`]);
     facts.push(["Neighbours", `${around} of ${neighbours(id).length}`]);
+    // a zone that does something (docs/adr/0009); civic is the baseline
+    if (zoneOf(t) !== "civic") facts.push(["Zone", `${zoneName(zoneOf(t))} · ${zoneEffect(zoneOf(t))}`]);
     const lease = timeLeft(t.leaseEndsAt, now);
     if (lease) facts.push(["Lease", lease === "ended" ? "ended" : `${lease} left`]);
   }
@@ -823,6 +900,11 @@ export function doneText(notice, body = {}, view = { tiles: [], me: null }, now 
         text: `Park open! ${ECONOMY.parkHours} h`,
         said: `Park placed for ${ECONOMY.parkHours} hours. It lifts the buildings round it, never your own.`,
       };
+    case "rezoned": {
+      const zone = String(body.zone ?? "civic");
+      const rate = me?.rate ?? 0;
+      return { text: `${zoneName(zone)}! +${perMinute(rate)}/min`, said: `Zoned ${zone === "civic" ? "civic" : `a ${zone}`}, earning ${coinsAMinute(rate)}.` };
+    }
     case "helped":
       return {
         text: `Helped! +${ECONOMY.helpGift} to them, +${ECONOMY.helpReward} to you`,
@@ -853,6 +935,8 @@ const REFUSALS = Object.freeze({
   "not-neighbour": "Only buildings next to yours",
   "no-land": "Pick a plot first",
   "park-limit": `${ECONOMY.parkLimit} parks at most`,
+  zone: "No such zone",
+  "same-zone": "Already that zone",
   hours: `Renew ${ECONOMY.renewals.map((r) => r.hours).join(", ").replace(/, (\d+)$/, " or $1")} h`,
   label: "Name: 1 to 24 characters",
   cell: "No such plot",
