@@ -112,7 +112,9 @@ it.
   0/0, market +15% to each adjacent other person's building (at most +30%
   received from markets), factory +35% self and −10% to each adjacent other
   person's building, total bonus never below 0 (the no-neighbour base);
-  rezoning 40 coins, 1 h cooldown per player (ADR 9). The one exception:
+  rezoning 40 coins, 1 h cooldown per player (ADR 9); districts 4×4 (nine),
+  a mayor needs Lv2+, the single highest level (a tie is no mayor) and 1
+  other Lv2+ building, +8% per other, at most +40% (ADR 10). The one exception:
   `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
   import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
   single field. Change `src/economy.ts` first, then the mirror.
@@ -225,6 +227,30 @@ in it, and it's public.
   rezoning is narrated on your page only, one line ("Kai built a factory
   beside you · −10%"). Logged `rezone who=… at=… zone=… from=…`; city log
   "Kai zoned a factory".
+
+### Districts and mayors (ADR 10): a contest that scales to a room
+
+Read `docs/adr/0010-districts-and-mayors.md`. No new action, no schema
+change: everything is derived from plots and levels.
+
+- **Nine 4×4 districts**, `district = floor(r/4)*3 + floor(c/4)` (0..8 in
+  the payload; people read 1..9, in the page and both logs).
+- **Mayor:** the holder of a district's single highest-level building at
+  Lv2+, if at least 1 other Lv2+ building there is someone else's. A tie at
+  the top is no mayor. Parks never count; the mayor's own buildings are
+  never "others". The mayor earns +8% per other (cap +40%), added into
+  `rate()`'s summed bonus inside the same floor.
+- **Mayors change only at cut points** (claim, move, upgrade, lease end),
+  all settle-first already; `integrate()` recomputes them per piece.
+  Never stored.
+- **Payload:** every tile has `district`; the board has `mayors: [{
+  district, cellId, label }]`, labels only. The page draws grid lines every
+  4 plots (CSS only), a gold star on the mayor's roof (opposite edge from a
+  zone sign), an inspector line, the mayor term in the preview, and one
+  line for your own building ("You're mayor! +16%" / "Kai took mayor").
+  Logged `mayor district=N who=<tag|none> label=… from=<tag|none>` by
+  comparing before and after each broadcast; city log "Kai became mayor of
+  district 5".
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)
 

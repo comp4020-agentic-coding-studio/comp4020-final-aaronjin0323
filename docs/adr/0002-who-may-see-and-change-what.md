@@ -42,6 +42,7 @@ row their `pid` holds, or a row nobody is still around for.
 | You | | Place a park on a free plot, while you hold land: 60 coins, 2 h, at most 2 at once ([ADR 7](0007-parks.md)) | `park` in `src/db.ts` checks your active land, the plot (no running building or park), your count of running parks and your coins inside one `BEGIN IMMEDIATE`, so simultaneous posts can't make a third; `402`/`409`/`400` |
 | Anyone | Every building's zone (civic, market or factory), and so what it does to the buildings beside it ([ADR 9](0009-zoning.md)) | | `boardView` puts `zone` on each building tile; nothing else about the rezone (who paid, when) leaves the store except your own `rezoneAt` |
 | You | When you may rezone again (`me.rezoneAt`) | Rezone your own building, and only your own: 40 coins, once an hour | `/rezone` takes no plot: `rezone` in `src/db.ts` changes only the row your `pid` holds, checks the zone, cooldown and coins inside one `BEGIN IMMEDIATE` that settles first, so simultaneous posts charge once; `402`/`429`/`400` |
+| Anyone | Every plot's district, and each district's mayor by label and plot ([ADR 10](0010-districts-and-mayors.md)) | | No new action: mayors are derived from the plots and levels everyone already sees. `boardView` builds `mayors` from labels and plot ids only; the store keeps nothing new |
 | Anyone | Every running park: where, the placer's label and when it ends; your own marked `mine` | | `boardView` builds a park tile from label, end time and a `mine` flag only; `parks.placed_by` (a `pid`) never leaves the store |
 | Nobody | | Take a held tile that isn't dormant, or build on a running park | The same `WHERE` (and a check for a running park on the plot): `409` (JSON) or `303 /?notice=taken` (form) |
 | Nobody | | Hold two tiles | The move transaction, and the unique index `one_tile_each` on `claimer_id` as a backstop |
@@ -127,5 +128,7 @@ row their `pid` holds, or a row nobody is still around for.
   Zoning (ADR 9): a rezone changes only the poster's own building, even with
   someone else's `cellId` in the body; ten simultaneous rezones charge once;
   a foreign `Origin` is a `403`; no `pid` in any reply.
+  Districts (ADR 10): mayors are public by label; no `pid` in `mayors`,
+  in any page or stream, or in the `mayor` log line.
 - `spec/log.test.ts`: the logs name each person by a tag that tells them
   apart, never print a `pid`, and a label can't forge a line.
