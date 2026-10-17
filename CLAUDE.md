@@ -654,6 +654,10 @@ and delete the line when one is settled.
 - **Spec files run in parallel against one app.** A test that claims many
   tiles takes them from the far end of the board, so it can't make another
   file's "first free tile" fail for the wrong reason.
+- **Only one HTTP spec file takes the first free tile.** That's
+  `claim.test.ts`; `access.test.ts` takes from the far end and
+  `realtime.test.ts` from row 7 on. Even one claim on the first free tile
+  from another file races it (`realtime.test.ts` once failed it ~1 run in 2).
 
 `spec/invariants.test.ts` ships with the template: `/` answers, and `/readme/`
 carries every README heading in order. Keep it. Everything else in `spec/` is
