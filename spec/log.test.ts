@@ -129,6 +129,27 @@ describe("the server log", () => {
     expect(out).not.toContain(PIP);
   });
 
+  it("logs a rezone by tag, plot, zone and the zone it was, and its refusals (docs/adr/0009)", async () => {
+    const post = (pid: string, body: object): Promise<Response> =>
+      fetch(new URL("/rezone", base), {
+        method: "POST",
+        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+    const ROO = "00000000-0000-4000-8000-000000000a00";
+    expect((await claim(ROO, 70, "Roo")).status).toBe(200); // r6c11
+    expect((await post(ROO, { zone: "factory" })).status).toBe(200);
+    expect((await post(ROO, { zone: "market" })).status).toBe(429);
+    expect((await post(ROO, { zone: "x\nrezone who=000000" })).status).toBe(400);
+    expect((await lines("rezone")).at(-1)).toBe(`rezone who=${tag(ROO)} at=r6c11 zone=factory from=civic coins=60`);
+    expect((await lines("rezone.refused")).slice(-2)).toEqual([
+      `rezone.refused who=${tag(ROO)} status=429 reason=cooldown zone="market"`,
+      `rezone.refused who=${tag(ROO)} status=400 reason=zone zone="x\\nrezone who=000000"`,
+    ]);
+    expect(out.split("\n").filter((l) => l.startsWith("rezone who=000000"))).toHaveLength(0);
+    expect(out).not.toContain(ROO);
+  });
+
   it("logs a stream opening and closing, with the open count", async () => {
     const controller = new AbortController();
     const res = await fetch(new URL("/events", base), { headers: { cookie: `pid=${KAI}` }, signal: controller.signal });
@@ -157,7 +178,7 @@ describe("the server log", () => {
       expect((await fetch(new URL("/", base), { headers: { cookie: `pid=${pid}` } })).status).toBe(200);
     }
     await new Promise((r) => setTimeout(r, 50));
-    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused", "park", "park.refused"]) {
+    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused", "park", "park.refused", "rezone", "rezone.refused"]) {
       expect((await lines(event)).length, `no ${event} line was printed`).toBeGreaterThan(0);
     }
     for (const pid of [MIA, KAI, ZED]) {

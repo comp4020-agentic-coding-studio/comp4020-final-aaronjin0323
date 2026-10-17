@@ -221,6 +221,9 @@ describe("what each action's answer says", () => {
       helped: "Helped! +50 to them, +20 to you",
       returned: "Helped back! +30 each",
       parked: "Park open!",
+      rezoned: "Rezoned!",
+      zone: "No such zone.",
+      "same-zone": "Already that zone.",
       "park-limit": "2 parks at most.",
       coins: "Not enough coins.",
       cooldown: "Not yet: cooling down.",
@@ -530,6 +533,7 @@ const row = (id: number, pid: string | null, level = 1, leaseMs = 10 * HOUR): Ti
   ownedSince: pid ? NOW.toISOString() : null,
   pendingCents: 0,
   settledAt: pid ? NOW.toISOString() : null,
+  zone: "civic",
 });
 
 type Preview = { id: number; level: number; neighbours: number; height: number; rate: number; heights: number[]; rates: number[]; lifted: number[]; dropped: number[]; from: number | null };

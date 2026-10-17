@@ -22,8 +22,8 @@ function boardOf(claimed: Iterable<number>, start = T0): Tile[] {
   const ends = new Date(start.getTime() + LEASE_MS).toISOString();
   return Array.from({ length: TILES }, (_, id) =>
     set.has(id)
-      ? { id, claimerId: `p${id}`, label: `L${id}`, claimedAt: since, level: 1, leaseEndsAt: ends, ownedSince: since, pendingCents: 0, settledAt: since }
-      : { id, claimerId: null, label: null, claimedAt: null, level: null, leaseEndsAt: null, ownedSince: null, pendingCents: 0, settledAt: null },
+      ? { id, claimerId: `p${id}`, label: `L${id}`, claimedAt: since, level: 1, leaseEndsAt: ends, ownedSince: since, pendingCents: 0, settledAt: since, zone: "civic" }
+      : { id, claimerId: null, label: null, claimedAt: null, level: null, leaseEndsAt: null, ownedSince: null, pendingCents: 0, settledAt: null, zone: "civic" },
   );
 }
 const id = (r: number, c: number): number => r * N + c;

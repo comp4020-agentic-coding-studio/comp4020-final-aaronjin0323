@@ -186,7 +186,7 @@ describe("migration 7 (return the favour) from a version-6 database", () => {
       opened.pop();
 
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
       const cols = (v.prepare("PRAGMA table_info(players)").all() as { name: string; type: string; notnull: number }[])
         .filter((c) => c.name.startsWith("helped_by"))
         .map((c) => [c.name, c.type, c.notnull]);

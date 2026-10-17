@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { boardView, heights, neighbourCounts } from "../src/board.ts";
 import { integrate, N, neighbourIds, openStore, type ParkSpan, type Store, TILES } from "../src/db.ts";
-import { accrue, GOLD_PEOPLE, LEASE_MS, PARK_COST, PARK_LIMIT, PARK_MS, rate, STARTING_COINS, tiersReached } from "../src/economy.ts";
+import { accrue, GOLD_PEOPLE, LEASE_MS, PARK_COST, PARK_LIMIT, PARK_MS, STARTING_COINS, tiersReached, ZONES } from "../src/economy.ts";
 
 // docs/adr/0007 on the store alone, with a clock the test controls: a park
 // runs two hours, and income across its start and end has to be exact to
@@ -217,8 +217,11 @@ describe("income across a park (integrate)", () => {
   // A reference model: step the clock a minute at a time, work out every
   // building's neighbours at that minute from scratch, and accrue one minute.
   // integrate() must agree to the cent on random boards with buildings
-  // ending and parks starting and ending inside the interval.
-  it("agrees with a minute-by-minute model on random boards with parks", () => {
+  // ending and parks starting and ending inside the interval, and every
+  // building in a random zone (docs/adr/0009): the model works out each
+  // zone's terms from the table in ZONES by hand, cap and floor included,
+  // not from zoneBonus(), so a mistake there can't agree with itself.
+  it("agrees with a minute-by-minute model on random boards with parks and zones", () => {
     // mulberry32, as spec/diff.test.ts uses: a seeded generator that doesn't
     // lose precision and fall into a short cycle
     let s32 = 7;
@@ -232,6 +235,9 @@ describe("income across a park (integrate)", () => {
     const minutes = (n: number): number => Math.floor(rand() * n) * MIN;
     let checked = 0;
     let parkMinutes = 0;
+    let factoryMinutes = 0;
+    let cappedMinutes = 0;
+    const zoneNames = Object.keys(ZONES) as (keyof typeof ZONES)[];
     for (let round = 0; round < 60; round++) {
       const span = 180 * MIN;
       const buildings = [];
@@ -248,6 +254,8 @@ describe("income across a park (integrate)", () => {
             end: rand() < 0.4 ? minutes(180) + MIN : 24 * HOUR,
             pending: Math.floor(rand() * 5000),
             settled: 0,
+            // markets weighted up, so some buildings are ringed past the cap
+            zone: rand() < 0.25 ? "civic" : rand() < 0.6 ? "market" : zoneNames[Math.floor(rand() * zoneNames.length)],
           });
         }
       }
@@ -273,7 +281,14 @@ describe("income across a park (integrate)", () => {
         for (const b of live) {
           const n = neighbourIds(b.id).filter((id) => liveIds.has(id) || running.some((p) => p.id === id && p.by !== b.pid)).length;
           if (running.some((p) => neighbourIds(b.id).includes(p.id))) parkMinutes++;
-          pending.set(b.id, accrue(pending.get(b.id)!, rate(b.level, n), MIN));
+          // zones: each live building beside it held by someone else
+          const others = live.filter((x) => x.pid !== b.pid && neighbourIds(b.id).includes(x.id));
+          const markets = others.filter((x) => x.zone === "market").length * 15;
+          const factories = others.filter((x) => x.zone === "factory").length * -10;
+          if (factories < 0) factoryMinutes++;
+          if (markets > 30) cappedMinutes++;
+          const bonus = Math.max(0, 20 * n + (b.zone === "factory" ? 35 : 0) + Math.min(30, markets) + factories);
+          pending.set(b.id, accrue(pending.get(b.id)!, 10 * b.level * (100 + bonus), MIN));
         }
       }
       for (const b of buildings) if (b.end <= now && !ended.has(b.id)) ended.set(b.id, pending.get(b.id)!);
@@ -291,6 +306,8 @@ describe("income across a park (integrate)", () => {
     // not a vacuous pass: parks really did stand beside buildings
     expect(checked).toBeGreaterThan(300);
     expect(parkMinutes).toBeGreaterThan(5000);
+    expect(factoryMinutes).toBeGreaterThan(2000);
+    expect(cappedMinutes).toBeGreaterThan(200);
   });
 });
 
@@ -398,7 +415,7 @@ describe("migration 6 (parks) from a version-5 database", () => {
       opened.pop();
 
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
       const cols = (v.prepare("PRAGMA table_info(parks)").all() as { name: string; notnull: number; pk: number }[]).map((c) => [c.name, c.notnull, c.pk]);
       expect(cols).toEqual([
         ["cell_id", 0, 1],

@@ -305,3 +305,99 @@ describe("returning a favour", () => {
     expect(backBody).not.toContain(TOM);
   });
 });
+
+// Zoning (docs/adr/0009): only you may rezone your own building, once, for
+// what it costs. The route takes no plot, so a cellId in the body is ignored.
+describe("rezoning", () => {
+  const rezone = (pid: string, body: object, { origin, form = false }: { origin?: string; form?: boolean } = {}): Promise<Response> => {
+    const headers: Record<string, string> = { cookie: `pid=${pid}` };
+    if (origin) headers.origin = origin;
+    if (form) headers["content-type"] = "application/x-www-form-urlencoded";
+    else Object.assign(headers, { "content-type": "application/json", accept: "application/json" });
+    return fetch(new URL("/rezone", baseUrl), {
+      method: "POST",
+      headers,
+      body: form ? new URLSearchParams(body as Record<string, string>).toString() : JSON.stringify(body),
+      redirect: "manual",
+    });
+  };
+  type ZoneTile = { id: number; zone: string | null };
+  const zones = async (pid?: string): Promise<ZoneTile[]> => {
+    const doc = new JSDOM(await page(pid)).window.document;
+    return [...doc.querySelectorAll<HTMLButtonElement>("button.tile")].map((b) => ({ id: Number(b.value), zone: b.dataset.zone ?? null }));
+  };
+  const coinsOf = async (pid: string): Promise<number> => {
+    const doc = new JSDOM(await page(pid)).window.document;
+    return (JSON.parse(doc.querySelector("script[data-board-data]")!.textContent!) as { me: { coins: number } }).me.coins;
+  };
+
+  it("changes only the poster's own building, whatever plot the body names, and shows the zone to everyone", async () => {
+    const UMA = fresh();
+    const VIC = fresh();
+    const [mine, theirs] = await freeTiles();
+    expect((await claim(UMA, mine, "Uma")).status).toBe(200);
+    expect((await claim(VIC, theirs, "Vic")).status).toBe(200);
+    const res = await rezone(UMA, { zone: "factory", cellId: theirs });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(JSON.parse(body)).toMatchObject({ notice: "rezoned", zone: "factory" });
+    expect(body).not.toContain(UMA);
+    for (const viewer of [VIC, IDA, undefined]) {
+      const z = await zones(viewer);
+      expect(z.find((t) => t.id === mine)?.zone, "Uma's building, as anyone sees it").toBe("factory");
+      expect(z.find((t) => t.id === theirs)?.zone, "Vic's building is untouched").toBe("civic");
+    }
+    // free plots carry no zone
+    expect((await zones()).filter((t) => t.zone !== null).every((t) => ["civic", "market", "factory"].includes(t.zone!))).toBe(true);
+  });
+
+  it("charges ten simultaneous rezones once", async () => {
+    const WES = fresh();
+    const [home] = await freeTiles();
+    expect((await claim(WES, home, "Wes")).status).toBe(200);
+    const before = await coinsOf(WES);
+    const results = await Promise.all(Array.from({ length: 10 }, (_, i) => rezone(WES, { zone: i % 2 ? "market" : "factory" })));
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status !== 200).every((r) => r.status === 429 || r.status === 400)).toBe(true);
+    expect(await coinsOf(WES)).toBe(before - 40);
+  });
+
+  it("refuses with a status per reason: no land, a bad zone, the same zone, cooling down, no coins", async () => {
+    const XAN = fresh();
+    const YUL = fresh();
+    const [a, b] = await freeTiles();
+    const status = async (r: Promise<Response>): Promise<[number, unknown]> => {
+      const res = await r;
+      return [res.status, await res.json()];
+    };
+    expect(await status(rezone(XAN, { zone: "market" }))).toEqual([400, { error: "no-land" }]);
+    expect((await claim(XAN, a, "Xan")).status).toBe(200);
+    for (const bad of ["", "Market", "park", "constructor", 7, null]) {
+      expect(await status(rezone(XAN, { zone: bad })), String(bad)).toEqual([400, { error: "zone" }]);
+    }
+    expect(await status(rezone(XAN, {}))).toEqual([400, { error: "zone" }]);
+    expect(await status(rezone(XAN, { zone: "civic" }))).toEqual([400, { error: "same-zone" }]);
+    expect((await rezone(XAN, { zone: "market" })).status).toBe(200);
+    expect(await status(rezone(XAN, { zone: "factory" }))).toEqual([429, { error: "cooldown" }]);
+    // coins: Yul spends 60 of his 100 on a park, leaving exactly 40
+    expect((await claim(YUL, b, "Yul")).status).toBe(200);
+    const spot = (await freeTiles()).find((id) => id !== a && id !== b)!;
+    expect((await fetch(new URL("/park", baseUrl), { method: "POST", headers: { cookie: `pid=${YUL}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ cellId: spot }) })).status).toBe(200);
+    expect((await rezone(YUL, { zone: "market" })).status).toBe(200);
+    expect(await coinsOf(YUL)).toBe(0);
+    // nothing a fresh player can buy leaves them under 40 without a rezone,
+    // whose cooldown then answers first: the 402 is held in spec/zoning.test.ts
+  });
+
+  it("refuses another site's page, and answers a form with a 303 and a notice key", async () => {
+    const ZIA = fresh();
+    const [home] = await freeTiles();
+    expect((await claim(ZIA, home, "Zia")).status).toBe(200);
+    expect((await rezone(ZIA, { zone: "market" }, { origin: "https://evil.example", form: true })).status).toBe(403);
+    expect((await zones()).find((t) => t.id === home)?.zone).toBe("civic");
+    const ok = await rezone(ZIA, { zone: "market" }, { form: true });
+    expect([ok.status, ok.headers.get("location")]).toEqual([303, "/?notice=rezoned"]);
+    const again = await rezone(ZIA, { zone: "factory" }, { form: true });
+    expect([again.status, again.headers.get("location")]).toEqual([303, "/?notice=cooldown"]);
+  });
+});

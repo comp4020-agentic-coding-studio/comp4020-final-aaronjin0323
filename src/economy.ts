@@ -87,11 +87,48 @@ export function tiersReached(neighbours: number, people: number): Tier[] {
 // reload doesn't greet anyone.
 export const WELCOME_AFTER_MS = 5 * MINUTE;
 
+// Zones (docs/adr/0009): what a building does to its own income (`self`)
+// and to each adjacent building held by someone else (`neighbour`), in
+// percentage points added to the rate. Civic is the neutral baseline, so
+// every building that existed before zoning earns exactly what it did.
+export const ZONES = {
+  civic: { self: 0, neighbour: 0 },
+  market: { self: 0, neighbour: 15 },
+  factory: { self: 35, neighbour: -10 },
+} as const;
+export type Zone = keyof typeof ZONES;
+export const ZONE_NAMES = Object.keys(ZONES) as Zone[];
+export const isZone = (z: unknown): z is Zone => typeof z === "string" && Object.hasOwn(ZONES, z);
+// The most a building can receive from the markets round it, so a ring of
+// alt-cookie markets can't farm one building (ADR 9).
+export const MARKET_CAP_PERCENT = 30;
+export const REZONE_COST = 40;
+export const REZONE_COOLDOWN_MS = HOUR;
+
+// The zone terms of a building, in percentage points: its own zone's self
+// term, plus what each adjacent building held by someone else gives it
+// (`received`, their zones), the gifts capped at MARKET_CAP_PERCENT. A zone
+// the store doesn't know counts as civic.
+export function zoneBonus(own: string, received: readonly string[]): number {
+  let gifts = 0;
+  let harms = 0;
+  for (const z of received) {
+    const effect = isZone(z) ? ZONES[z].neighbour : 0;
+    if (effect > 0) gifts += effect;
+    else harms += effect;
+  }
+  return (isZone(own) ? ZONES[own].self : 0) + Math.min(MARKET_CAP_PERCENT, gifts) + harms;
+}
+
 // A building's income in cents a minute:
-//   10 coins × level × (1 + 0.2 × neighbours)  =  10 × level × (100 + 20n) cents
-// which is a whole number for any whole level and neighbour count.
-export function rate(level: number, neighbours: number): number {
-  return BASE_INCOME * level * (100 + NEIGHBOUR_BONUS_PERCENT * neighbours);
+//   10 coins × level × (1 + 0.2 × neighbours + bonus / 100)
+//     =  10 × level × (100 + 20n + bonus) cents
+// which is a whole number for any whole level, neighbour count and bonus.
+// `bonus` is every other percentage term summed (zones, ADR 9; a later term
+// adds into it). The whole bonus never goes below 0, so no building earns
+// less than its no-neighbour base, 10 × level coins (ADR 9).
+export function rate(level: number, neighbours: number, bonus = 0): number {
+  return BASE_INCOME * level * (100 + Math.max(0, NEIGHBOUR_BONUS_PERCENT * neighbours + bonus));
 }
 
 // The most a building can hold uncollected, at a given rate.
@@ -157,4 +194,8 @@ export const ECONOMY = Object.freeze({
   parkHours: PARK_MS / HOUR,
   parkLimit: PARK_LIMIT,
   goldPeople: GOLD_PEOPLE,
+  zones: Object.freeze(Object.fromEntries(ZONE_NAMES.map((z) => [z, Object.freeze({ self: ZONES[z].self, neighbour: ZONES[z].neighbour })]))),
+  marketCapPercent: MARKET_CAP_PERCENT,
+  rezoneCost: REZONE_COST,
+  rezoneCooldownMinutes: REZONE_COOLDOWN_MS / MINUTE,
 });

@@ -68,7 +68,7 @@ describe("migration from crit 8", () => {
       expect(again.tiles()[42].claimerId).toBe(ALICE);
       const v = new DatabaseSync(path);
       // every step since, too: crit 8 straight to the latest
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
       v.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -352,7 +352,7 @@ describe("migration 3 (landmarks)", () => {
       opened.push(again);
       expect(golds(again.landmarks())).toHaveLength(1);
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
       v.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -432,7 +432,7 @@ describe("migration 5 (landmark tiers) from a version-4 database", () => {
       again.close();
       opened.pop();
       const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
       // the unique index is (cell_id, tier) now: a new tier on a cell is
       // allowed, the same tier twice is not
       const put = v.prepare("INSERT INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, 'X', '[]', 't')");

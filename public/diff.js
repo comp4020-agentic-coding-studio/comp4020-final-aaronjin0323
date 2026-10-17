@@ -50,6 +50,16 @@ export const ECONOMY = Object.freeze({
   parkHours: 2, // a park ends this long after it's placed, never renewed
   parkLimit: 2, // running at once, per player
   goldPeople: 3, // distinct people round a gold tower
+  // docs/adr/0009: percentage points to the building itself and to each
+  // adjacent building someone else holds
+  zones: Object.freeze({
+    civic: Object.freeze({ self: 0, neighbour: 0 }),
+    market: Object.freeze({ self: 0, neighbour: 15 }),
+    factory: Object.freeze({ self: 35, neighbour: -10 }),
+  }),
+  marketCapPercent: 30, // the most a building receives from markets
+  rezoneCost: 40,
+  rezoneCooldownMinutes: 60,
 });
 export const MAX_LEVEL = ECONOMY.levels.length;
 export const SOON_MS = HOUR; // a lease ending within this is shown as ending
@@ -88,8 +98,36 @@ const meOf = (board) => board.me ?? null;
 
 export const buildingName = (level) => ECONOMY.levels[Math.min(Math.max(level, 1), MAX_LEVEL) - 1];
 
-// Hundredths of a coin a minute: 10 × level × (1 + 0.2 × neighbours) coins.
-export const rateOf = (level, n) => Math.round(level * ECONOMY.baseIncome * 100 * (1 + ECONOMY.neighbourBonus * n));
+// Hundredths of a coin a minute: 10 × level × (1 + 0.2 × neighbours +
+// bonus / 100) coins, the bonus (every term but the neighbours', in
+// percentage points) never taking the total below 0 (docs/adr/0009).
+const NEIGHBOUR_PCT = Math.round(ECONOMY.neighbourBonus * 100);
+export const rateOf = (level, n, bonus = 0) => level * ECONOMY.baseIncome * (100 + Math.max(0, NEIGHBOUR_PCT * n + bonus));
+
+// --- zones (docs/adr/0009) ---
+export const ZONE_NAMES = Object.freeze(Object.keys(ECONOMY.zones));
+const zoneOf = (t) => (t && Object.hasOwn(ECONOMY.zones, t.zone ?? "") ? t.zone : "civic");
+// A building's zone terms: its own zone's self term, plus what each adjacent
+// building's zone gives it, the gifts capped. Every building on a board is a
+// different person's (one each), so every neighbour counts.
+export function zoneBonus(own, received) {
+  let gifts = 0;
+  let harms = 0;
+  for (const z of received) {
+    const effect = Object.hasOwn(ECONOMY.zones, z) ? ECONOMY.zones[z].neighbour : 0;
+    if (effect > 0) gifts += effect;
+    else harms += effect;
+  }
+  return (Object.hasOwn(ECONOMY.zones, own) ? ECONOMY.zones[own].self : 0) + Math.min(ECONOMY.marketCapPercent, gifts) + harms;
+}
+// The zone terms of every building on the board as shown: 0 for anything else.
+const zoneTerms = (board) =>
+  board.tiles.map((t) => (claimed(t) ? zoneBonus(zoneOf(t), neighbours(t.id).filter((n) => claimed(board.tiles[n])).map((n) => zoneOf(board.tiles[n]))) : 0));
+// A building's rate as shown, or worked out from the board when it isn't.
+const shownRate = (board, t) => (Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(levelOf(t), neighboursOf(board, t), zoneTerms(board)[t.id]));
+// What a rate means as a bonus over the building's base, in percentage
+// points: 1200 at level 1 is +20.
+const pctOf = (rate, level) => Math.round(rate / (level * ECONOMY.baseIncome)) - 100;
 
 // "16", "14.4": a rate (hundredths a minute) as coins a minute.
 export function perMinute(cents) {

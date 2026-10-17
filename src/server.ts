@@ -287,6 +287,8 @@ const STATUS: Record<string, number> = {
   "not-neighbour": 400,
   "no-land": 400,
   "park-limit": 400,
+  zone: 400,
+  "same-zone": 400,
 };
 
 // One POST action, the same shape for each route: same-origin, the
@@ -443,6 +445,19 @@ const postPark = action("park", (pid, fields, now) => {
   };
 });
 
+// Your own building's zone (docs/adr/0009): 40 coins, once an hour. The
+// route takes no plot: only the building your pid holds can be rezoned.
+const postRezone = action("rezone", (pid, fields, now) => {
+  const result = store.rezone(pid, typeof fields.zone === "string" ? fields.zone : "", now);
+  if (!result.ok) return { ok: false, key: result.reason, fields: { zone: cut(fields.zone) } };
+  return {
+    ok: true,
+    key: "rezoned",
+    json: { zone: result.zone },
+    fields: { at: at(result.cellId), zone: raw(result.zone), from: raw(result.from), coins: store.me(pid, now).coins },
+  };
+});
+
 // Static files from a fixed root, never outside it.
 async function serveFile(res: ServerResponse, root: string, rel: string): Promise<void> {
   const base = resolve(root);
@@ -500,6 +515,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/renew" && req.method === "POST") return postRenew(req, res);
   if (path === "/help" && req.method === "POST") return postHelp(req, res);
   if (path === "/park" && req.method === "POST") return postPark(req, res);
+  if (path === "/rezone" && req.method === "POST") return postRezone(req, res);
   if (path === "/events" && req.method === "GET") return openStream(req, res);
   if (path === "/readme") return redirect(res, "/readme/");
   if (path === "/readme/" && (req.method === "GET" || req.method === "HEAD")) {

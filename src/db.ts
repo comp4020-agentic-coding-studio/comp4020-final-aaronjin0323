@@ -12,7 +12,10 @@ import {
   PARK_COST,
   PARK_LIMIT,
   PARK_MS,
+  isZone,
   rate,
+  REZONE_COOLDOWN_MS,
+  REZONE_COST,
   RETURN_BONUS,
   RETURN_WINDOW_MS,
   RELOCATE_COOLDOWN_MS,
@@ -24,6 +27,8 @@ import {
   tiersReached,
   upgradeCost,
   WELCOME_AFTER_MS,
+  type Zone,
+  zoneBonus,
 } from "./economy.ts";
 
 // The board is N×N, row-major: tile id = row * N + col.
@@ -43,6 +48,8 @@ export type Tile = {
   ownedSince: string | null;
   pendingCents: number;
   settledAt: string | null;
+  // The building's zone (docs/adr/0009): 'civic' on every plot nobody holds.
+  zone: string;
 };
 
 // A park as stored (docs/adr/0007): a public good on a plot nobody holds,
@@ -80,6 +87,7 @@ export type Me = {
   ownedSince: string | null;
   relocateAt: string | null; // when you may move again; null if you never have
   helpAt: string | null; // when you may help again; null if you never have
+  rezoneAt: string | null; // when you may rezone again; null if you never have
   parks: number; // your parks still running
   parkLimit: number; // how many may run at once
   // The neighbour whose help you can return for the bonus (docs/adr/0008):
@@ -99,6 +107,10 @@ export type RenewResult = "renewed" | "hours" | "no-land" | "max-lease" | "coins
 // "returned": a help that returned the favour and paid RETURN_BONUS each.
 export type HelpResult = "helped" | "returned" | "no-land" | "not-neighbour" | "cooldown";
 export type ParkResult = "parked" | "no-land" | "taken" | "park-limit" | "coins";
+// "zone": not one of the zones; "same-zone": your building already is it.
+export type RezoneResult =
+  | { ok: true; zone: Zone; from: string; cellId: number }
+  | { ok: false; reason: "no-land" | "zone" | "same-zone" | "cooldown" | "coins" };
 
 export type Store = {
   // Every row, as stored. Use isActive(tile, now) for whether it's held.
@@ -122,6 +134,8 @@ export type Store = {
   upgrade(pid: string, now: Date): UpgradeResult;
   renew(pid: string, hours: number, now: Date): RenewResult;
   help(pid: string, cellId: number, now: Date): HelpResult;
+  // Your own building's zone, and only yours (docs/adr/0009).
+  rezone(pid: string, zone: string, now: Date): RezoneResult;
   // Your wallet as of `now`, income counted to the minute without writing.
   me(pid: string, now: Date): Me;
   // A visit: returns the once-only notices and marks you seen.
@@ -182,12 +196,32 @@ export function occupiedAround(
   });
 }
 
+// The zone terms of the building on `id` held by `holder` (docs/adr/0009):
+// its own zone's self term plus what each adjacent building held by someone
+// else gives it, gifts capped. `at(n)` is the running building on n (its
+// holder and zone), or null. Parks have no zone and give nothing here.
+export function zoneTermsAround(
+  id: number,
+  holder: string,
+  own: string,
+  at: (n: number) => { pid: string; zone: string } | null,
+): number {
+  const received: string[] = [];
+  for (const n of neighbourIds(id)) {
+    const b = at(n);
+    if (b !== null && b.pid !== holder) received.push(b.zone);
+  }
+  return zoneBonus(own, received);
+}
+
 // "row 3, column 5", as the page says it. The city log uses the same.
 export const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
 
 // --- income, integrated piecewise ---
 
-type Building = { id: number; pid: string; label: string; level: number; end: number; pending: number; settled: number };
+// `zone` is fixed over any interval integrate() sees: a rezone settles
+// everyone first (docs/adr/0009), so it's a cut point by construction.
+type Building = { id: number; pid: string; label: string; level: number; end: number; pending: number; settled: number; zone?: string };
 // A park's running time, [start, end), and who placed it.
 export type ParkSpan = { id: number; by: string; start: number; end: number };
 type Projection = {
@@ -203,7 +237,9 @@ type Projection = {
 // over it, then the leases ending there are let go. A park counts over a
 // piece if it runs for the whole of it, and never for its placer's own
 // building. A building stops earning at its own lease end and at the 4-hour
-// cap. Pure: the caller writes the result (settle) or only reads it (me).
+// cap. Zones (docs/adr/0009) add their terms at each piece from the
+// buildings still standing over it. Pure: the caller writes the result
+// (settle) or only reads it (me).
 export function integrate(buildings: Building[], now: number, parks: ParkSpan[] = []): Projection {
   const live = new Map(buildings.map((b) => [b.id, b]));
   const pending = new Map(buildings.map((b) => [b.id, b.pending]));
@@ -234,8 +270,12 @@ export function integrate(buildings: Building[], now: number, parks: ParkSpan[] 
         const from = Math.max(t, b.settled);
         if (from >= cut) continue;
         const n = occupiedAround(b.id, b.pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length;
+        const bonus = zoneTermsAround(b.id, b.pid, b.zone ?? "civic", (id) => {
+          const x = live.get(id);
+          return x ? { pid: x.pid, zone: x.zone ?? "civic" } : null;
+        });
         const before = pending.get(b.id)!;
-        const after = accrue(before, rate(b.level, n), cut - from);
+        const after = accrue(before, rate(b.level, n, bonus), cut - from);
         pending.set(b.id, after);
         earned.set(b.pid, (earned.get(b.pid) ?? 0) + after - before);
       }
@@ -374,6 +414,14 @@ const MIGRATIONS = [
   // row already there means "no favour open", which is true.
   `ALTER TABLE players ADD COLUMN helped_by TEXT;
    ALTER TABLE players ADD COLUMN helped_by_at TEXT;`,
+
+  // 8. Zoning, docs/adr/0009: every plot gets a zone, and every player the
+  // time of their last rezone. Every row already there becomes 'civic', the
+  // neutral zone (0 to itself, 0 to its neighbours), so this step changes
+  // nobody's income; and nobody has a cooldown running. 'civic' is written
+  // out here, not read from src/economy.ts: this step is a record.
+  `ALTER TABLE cells ADD COLUMN zone TEXT NOT NULL DEFAULT 'civic';
+   ALTER TABLE players ADD COLUMN last_rezoned_at TEXT;`,
 ];
 
 function migrate(db: DatabaseSync): void {
@@ -407,6 +455,7 @@ type PlayerRow = {
   leaseLostAt: string | null;
   helpedBy: string | null;
   helpedByAt: string | null;
+  lastRezonedAt: string | null;
 };
 
 export function openStore(path: string): Store {
@@ -427,7 +476,7 @@ export function openStore(path: string): Store {
   };
 
   const COLUMNS = `id, claimer_id AS claimerId, label, claimed_at AS claimedAt, level,
-    lease_ends_at AS leaseEndsAt, owned_since AS ownedSince, pending_cents AS pendingCents, settled_at AS settledAt`;
+    lease_ends_at AS leaseEndsAt, owned_since AS ownedSince, pending_cents AS pendingCents, settled_at AS settledAt, zone`;
   const selectAll = db.prepare(`SELECT ${COLUMNS} FROM cells ORDER BY id`);
   const selectHeld = lazy(`SELECT ${COLUMNS} FROM cells WHERE claimer_id IS NOT NULL ORDER BY id`);
   const selectCell = db.prepare(`SELECT ${COLUMNS} FROM cells WHERE id = ?`);
@@ -441,25 +490,26 @@ export function openStore(path: string): Store {
   const writePending = lazy("UPDATE cells SET pending_cents = ?, settled_at = ? WHERE id = ?");
   const free = db.prepare(
     `UPDATE cells SET claimer_id = NULL, label = NULL, claimed_at = NULL, last_seen_at = NULL, level = NULL,
-       lease_ends_at = NULL, owned_since = NULL, pending_cents = 0, settled_at = NULL WHERE id = ?`,
+       lease_ends_at = NULL, owned_since = NULL, pending_cents = 0, settled_at = NULL, zone = 'civic' WHERE id = ?`,
   );
   // The WHERE is the rule: a plot nobody holds (settle() has already freed
   // every ended lease) and no running park stands on, and its change count
   // says whether this claim won.
   const take = db.prepare(
     `UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ?, level = ?, lease_ends_at = ?, owned_since = ?,
-       pending_cents = ?, settled_at = ? WHERE id = ? AND claimer_id IS NULL
+       pending_cents = ?, settled_at = ?, zone = ? WHERE id = ? AND claimer_id IS NULL
        AND NOT EXISTS (SELECT 1 FROM parks WHERE parks.cell_id = cells.id AND parks.ends_at > ?)`,
   );
   const relabelCell = db.prepare("UPDATE cells SET label = ? WHERE claimer_id = ?");
   const setLevel = lazy("UPDATE cells SET level = ? WHERE id = ?");
   const setLease = lazy("UPDATE cells SET lease_ends_at = ? WHERE id = ?");
   const zeroPending = lazy("UPDATE cells SET pending_cents = 0 WHERE id = ?");
+  const setZone = lazy("UPDATE cells SET zone = ? WHERE id = ?");
 
   const PLAYER = `pid, label, coins, unclaimed_cents AS unclaimedCents, last_relocated_at AS lastRelocatedAt,
     last_helped_at AS lastHelpedAt, earned_cents AS earnedCents, seen_at AS seenAt,
     seen_earned_cents AS seenEarnedCents, lease_lost_at AS leaseLostAt, helped_by AS helpedBy,
-    helped_by_at AS helpedByAt`;
+    helped_by_at AS helpedByAt, last_rezoned_at AS lastRezonedAt`;
   const selectPlayer = db.prepare(`SELECT ${PLAYER} FROM players WHERE pid = ?`);
   // A player is a row from their first action on, with the starting coins.
   // A label typed with a claim is kept on the wallet too.
@@ -476,6 +526,7 @@ export function openStore(path: string): Store {
   const relocated = lazy("UPDATE players SET coins = coins - ?, last_relocated_at = ? WHERE pid = ?");
   const helped = lazy("UPDATE players SET coins = coins + ?, last_helped_at = ? WHERE pid = ?");
   const owe = lazy("UPDATE players SET helped_by = ?, helped_by_at = ? WHERE pid = ?");
+  const rezoned = lazy("UPDATE players SET coins = coins - ?, last_rezoned_at = ? WHERE pid = ?");
   const clearLost = lazy("UPDATE players SET lease_lost_at = NULL WHERE pid = ?");
   const markSeen = lazy(
     "UPDATE players SET seen_at = ?, seen_earned_cents = earned_cents, lease_lost_at = NULL WHERE pid = ?",
@@ -519,6 +570,7 @@ export function openStore(path: string): Store {
       end: t.leaseEndsAt ? Date.parse(t.leaseEndsAt) : 0,
       pending: t.pendingCents,
       settled: t.settledAt ? Date.parse(t.settledAt) : t.leaseEndsAt ? Date.parse(t.leaseEndsAt) : 0,
+      zone: t.zone,
     }));
 
   // In a transaction the caller holds. Income first, while every park that
@@ -637,17 +689,18 @@ export function openStore(path: string): Store {
         ensure(pid, newLabel, now);
         if (!mine) {
           clearLost().run(pid); // they've chosen a new plot, so "your lease ended" is old news
-          took(take.run(pid, newLabel, at, 1, iso(now.getTime() + LEASE_MS), at, 0, at, tileId, at).changes);
+          took(take.run(pid, newLabel, at, 1, iso(now.getTime() + LEASE_MS), at, 0, at, "civic", tileId, at).changes);
           insertEvent.run("claim", `${newLabel} built a ${buildingName(1)} at ${place(tileId)}`, tileId, at);
           return "claimed";
         }
-        // A move: the building goes with you, level, lease, ownership start
-        // and uncollected income all kept.
+        // A move: the building goes with you, level, lease, ownership start,
+        // uncollected income and zone all kept (docs/adr/0009: the zone is
+        // part of the building, and was paid for).
         const player = playerOf(pid)!;
         if (ago(player.lastRelocatedAt, now) < RELOCATE_COOLDOWN_MS) return "cooldown";
         if (player.coins < RELOCATE_COST) return "coins";
         free.run(mine.id);
-        took(take.run(pid, newLabel, mine.claimedAt, mine.level, mine.leaseEndsAt, mine.ownedSince, mine.pendingCents, at, tileId, at).changes);
+        took(take.run(pid, newLabel, mine.claimedAt, mine.level, mine.leaseEndsAt, mine.ownedSince, mine.pendingCents, at, mine.zone, tileId, at).changes);
         relocated().run(RELOCATE_COST, at, pid);
         insertEvent.run(
           "relocate",
@@ -757,6 +810,28 @@ export function openStore(path: string): Store {
       });
     },
 
+    // Checked in this order: your land, the zone, a change at all, the
+    // cooldown, your coins. Settled first: the new zone changes your rate and
+    // every neighbour's, so it applies only from now (a cut point).
+    rezone(pid, zone, now) {
+      return tx((): RezoneResult => {
+        settleIn(now);
+        const mine = mineOf(pid);
+        if (!mine) return { ok: false, reason: "no-land" };
+        if (!isZone(zone)) return { ok: false, reason: "zone" };
+        if (mine.zone === zone) return { ok: false, reason: "same-zone" };
+        const player = playerOf(pid);
+        if (!player) return { ok: false, reason: "no-land" };
+        if (ago(player.lastRezonedAt, now) < REZONE_COOLDOWN_MS) return { ok: false, reason: "cooldown" };
+        if (player.coins < REZONE_COST) return { ok: false, reason: "coins" };
+        const at = now.toISOString();
+        rezoned().run(REZONE_COST, at, pid);
+        setZone().run(zone, mine.id);
+        insertEvent.run("rezone", `${label(pid, mine)} zoned ${zone === "civic" ? "civic" : `a ${zone}`}`, mine.id, at);
+        return { ok: true, zone, from: mine.zone, cellId: mine.id };
+      });
+    },
+
     me(pid, now) {
       const player = playerOf(pid);
       const blank: Me = {
@@ -769,6 +844,7 @@ export function openStore(path: string): Store {
         ownedSince: null,
         relocateAt: null,
         helpAt: null,
+        rezoneAt: null,
         parks: 0,
         parkLimit: PARK_LIMIT,
         returnable: null,
@@ -782,6 +858,13 @@ export function openStore(path: string): Store {
       const live = new Set(p.pending.keys());
       const parkBy = new Map(parks.filter((x) => parkActive(x, now)).map((x) => [x.cellId, x.placedBy]));
       const n = mine ? occupiedAround(mine.id, pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length : 0;
+      const byId = new Map(held.filter((t) => live.has(t.id)).map((t) => [t.id, t]));
+      const bonus = mine
+        ? zoneTermsAround(mine.id, pid, mine.zone, (id) => {
+            const x = byId.get(id);
+            return x ? { pid: x.claimerId!, zone: x.zone } : null;
+          })
+        : 0;
       const after = (when: string | null, ms: number): string | null => (when === null ? null : iso(Date.parse(when) + ms));
       // the favour I can return: open, and its helper's building beside mine
       const helper =
@@ -791,13 +874,14 @@ export function openStore(path: string): Store {
       return {
         coins: player.coins,
         pending: (mine ? p.pending.get(mine.id)! : 0) + player.unclaimedCents + lost,
-        rate: mine ? rate(mine.level ?? 1, n) : 0,
+        rate: mine ? rate(mine.level ?? 1, n, bonus) : 0,
         cellId: mine ? mine.id : null,
         level: mine ? (mine.level ?? 1) : null,
         leaseEndsAt: mine?.leaseEndsAt ?? null,
         ownedSince: mine?.ownedSince ?? null,
         relocateAt: after(player.lastRelocatedAt, RELOCATE_COOLDOWN_MS),
         helpAt: after(player.lastHelpedAt, HELP_COOLDOWN_MS),
+        rezoneAt: after(player.lastRezonedAt, REZONE_COOLDOWN_MS),
         parks: parks.filter((x) => x.placedBy === pid && parkActive(x, now)).length,
         parkLimit: PARK_LIMIT,
         returnable: helper ? { cellId: helper.id, until: after(player.helpedByAt, RETURN_WINDOW_MS)! } : null,

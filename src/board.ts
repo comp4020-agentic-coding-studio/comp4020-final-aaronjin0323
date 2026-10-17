@@ -1,4 +1,4 @@
-import { type CityEvent, isActive, type Landmark, type Me, N, occupiedAround, type Park, parkActive, type Tile, type Visit } from "./db.ts";
+import { type CityEvent, isActive, type Landmark, type Me, N, occupiedAround, type Park, parkActive, type Tile, type Visit, zoneTermsAround } from "./db.ts";
 import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, PARK_LIMIT, rate, RENEWALS, RETURN_BONUS, type Tier, tierRank } from "./economy.ts";
 import { escapeHtml, page } from "./html.ts";
 // The page's own pure module (no DOM), so the goal line and the glowing
@@ -25,6 +25,9 @@ export const NOTICES = {
   helped: `Helped! +${HELP_GIFT} to them, +${HELP_REWARD} to you`,
   returned: `Helped back! +${RETURN_BONUS} each`,
   parked: "Park open!",
+  rezoned: "Rezoned!",
+  zone: "No such zone.",
+  "same-zone": "Already that zone.",
   "park-limit": `${PARK_LIMIT} parks at most.`,
   coins: "Not enough coins.",
   cooldown: "Not yet: cooling down.",
@@ -69,6 +72,9 @@ export type TileView = {
   neighbours: number;
   rate: number;
   leaseEndsAt: string | null;
+  // A building's zone (docs/adr/0009), public: civic, market or factory.
+  // Absent on a free plot or a park.
+  zone?: string;
   // A park only: when it ends, and whether it's yours (never who placed it
   // otherwise, beyond the label).
   endsAt?: string;
@@ -119,6 +125,23 @@ export function neighbourCounts(tiles: Tile[], now: Date, parks: Park[] = []): n
   );
 }
 
+// The zone terms of every building (docs/adr/0009), in percentage points:
+// its own zone's self term and what each adjacent running building held by
+// someone else gives it. 0 for a free plot or a park.
+export function zoneTerms(tiles: Tile[], now: Date): number[] {
+  const active = tiles.map((t) => isActive(t, now));
+  const at = (n: number) => (active[n] ? { pid: tiles[n].claimerId!, zone: tiles[n].zone ?? "civic" } : null);
+  return tiles.map((t) => (active[t.id] ? zoneTermsAround(t.id, t.claimerId!, t.zone ?? "civic", at) : 0));
+}
+
+// Every building's income in cents a minute as of `now` (0 for a free plot
+// or a park): level, occupied neighbours (parks included) and zone terms.
+export function rates(tiles: Tile[], now: Date, parks: Park[] = []): number[] {
+  const counts = neighbourCounts(tiles, now, parks);
+  const terms = zoneTerms(tiles, now);
+  return tiles.map((t) => (isActive(t, now) ? rate(t.level ?? 1, counts[t.id], terms[t.id]) : 0));
+}
+
 // A building's height is its level plus its occupied neighbours (ADR 5); a
 // free plot or a park is 0. The same for every viewer, so all pages agree.
 // Derived, never stored.
@@ -155,6 +178,7 @@ export function boardView(
   }: { me?: Me | null; events?: CityEvent[]; visit?: Visit | null; parks?: Park[] } = {},
 ): BoardView {
   const counts = neighbourCounts(tiles, now, parks);
+  const terms = zoneTerms(tiles, now);
   const parkAt = new Map(parks.filter((p) => parkActive(p, now)).map((p) => [p.cellId, p]));
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
@@ -209,8 +233,9 @@ export function boardView(
       aria: `${where}, ${who}, ${buildingName(level)}, height ${h}`,
       level,
       neighbours: n,
-      rate: rate(level, n),
+      rate: rate(level, n, terms[tile.id]),
       leaseEndsAt: tile.leaseEndsAt,
+      zone: tile.zone ?? "civic",
     };
   });
 
@@ -229,6 +254,7 @@ export function boardView(
     ownedSince: null,
     relocateAt: null,
     helpAt: null,
+    rezoneAt: null,
     parks: 0,
     parkLimit: PARK_LIMIT,
     returnable: null,
@@ -294,7 +320,7 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   const building =
     t.level === null
       ? ""
-      : ` data-level="${t.level}" data-neighbours="${t.neighbours}" data-rate="${t.rate}"${t.leaseEndsAt ? ` data-lease-ends-at="${escapeHtml(t.leaseEndsAt)}"` : ""}`;
+      : ` data-level="${t.level}" data-neighbours="${t.neighbours}" data-rate="${t.rate}" data-zone="${escapeHtml(t.zone ?? "civic")}"${t.leaseEndsAt ? ` data-lease-ends-at="${escapeHtml(t.leaseEndsAt)}"` : ""}`;
   const soon = leaseSoon(t, now) ? ` data-lease="soon"` : "";
   // .roof carries the building's roofline; .beacon floats over it: your
   // marker, the ghost of a plot you're about to build on (with its income on
