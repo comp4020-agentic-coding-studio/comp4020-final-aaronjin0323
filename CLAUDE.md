@@ -108,7 +108,11 @@ it.
   24 h/300, never past 48 h from the ownership start; help +50 to the
   neighbour, +20 to the helper, once an hour; helping back within an hour
   of being helped +30 more to each (ADR 8); a park 60 coins, 2 h, at most
-  2 running per player; gold needs 3 distinct people (ADR 7). The one exception:
+  2 running per player; gold needs 3 distinct people (ADR 7); zones civic
+  0/0, market +15% to each adjacent other person's building (at most +30%
+  received from markets), factory +35% self and −10% to each adjacent other
+  person's building, total bonus never below 0 (the no-neighbour base);
+  rezoning 40 coins, 1 h cooldown per player (ADR 9). The one exception:
   `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
   import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
   single field. Change `src/economy.ts` first, then the mirror.
@@ -135,7 +139,7 @@ it.
   `/claim` (also relocation, when you already hold land: 50 coins,
   cooldown), `/collect`, `/upgrade`, `/renew` (`hours` 6|12|24), `/help`
   (`cellId` of an adjacent neighbour), `/park` (`cellId` of a free plot,
-  ADR 7). Same-origin, `pid` only, JSON or form
+  ADR 7), `/rezone` (`zone`, ADR 9). Same-origin, `pid` only, JSON or form
   (form gets a `303` with a notice key, as `/claim` does). Refusals are
   specific: `409` taken, `402` not enough coins, `429` cooldown, `400` bad
   input or rule (`max-level`, `max-lease`, `not-neighbour`, `no-land`,
@@ -193,6 +197,34 @@ help at a distance was turned down).
   glows that building green (`data-return`, "+30" over its roof) and its
   Help reads "Help back +30 each". City log: "Kai
   returned Mia's help"; server log: the `help` line with `returned=true`.
+
+### Zoning (ADR 9): what your building does to the people beside it
+
+Read `docs/adr/0009-zoning.md`. The one choice with a cost to someone else
+in it, and it's public.
+
+- **Every building has a zone** (`civic` default, `market`, `factory`).
+  Income is `10 × level × (100 + 20 × neighbours + zone terms)` cents a
+  minute: own zone's self term, plus each adjacent *other person's*
+  building's zone effect; market effects received capped at +30%; the
+  whole bonus floored at 0. Parks have no zone. `rate(level, n, bonus)`
+  takes one summed percentage term, so a later term adds into it.
+- **`POST /rezone {zone}`** on your own building: 40 coins, 1 h cooldown,
+  one `BEGIN IMMEDIATE`, **settle first** (it changes neighbours' rates, so
+  it's a cut point for every adjacent building). Refusals `402`, `429`,
+  `400` (`no-land`, `zone`, `same-zone`). A new claim is civic; a freed plot
+  goes back to civic; **a move keeps the zone** (part of the building, like
+  its level).
+- **Migration 8:** `cells.zone TEXT NOT NULL DEFAULT 'civic'`,
+  `players.last_rezoned_at TEXT`. Civic is neutral, so the deploy changes
+  nobody's income.
+- **Payload:** every building tile has `zone` (public); `me.rezoneAt`. The
+  page draws a roof icon for market and factory (civic none); your own
+  inspector offers the other zones with cost while you can act; the
+  preview's `+N/min` and each neighbour's `+N%` include zones. A neighbour
+  rezoning is narrated on your page only, one line ("Kai built a factory
+  beside you · −10%"). Logged `rezone who=… at=… zone=… from=…`; city log
+  "Kai zoned a factory".
 
 ### Crit 9: real-time and leaving (superseded in part by ADR 5)
 

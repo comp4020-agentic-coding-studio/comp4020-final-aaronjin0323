@@ -40,10 +40,12 @@ row their `pid` holds, or a row nobody is still around for.
 | You | | Help a neighbour (their building is next to yours), once an hour: +50 to them, +20 to you | `/help` checks same-origin, your active land, adjacency and `last_helped_at` inside one transaction, so a repeated or simultaneous request can't pay twice (Help replaced Wave, ADR 5) |
 | You | Whose help you can return, while you can: their plot and when the hour ends (`me.returnable`, [ADR 8](0008-return-the-favour.md)) | Help back the neighbour who helped you within the hour: +30 more each, once | `players.helped_by` (a `pid`) never leaves the store; `me()` sends only a plot and a time, to your own page and stream. `help` checks and clears the favour inside its one `BEGIN IMMEDIATE`, so simultaneous returns pay once |
 | You | | Place a park on a free plot, while you hold land: 60 coins, 2 h, at most 2 at once ([ADR 7](0007-parks.md)) | `park` in `src/db.ts` checks your active land, the plot (no running building or park), your count of running parks and your coins inside one `BEGIN IMMEDIATE`, so simultaneous posts can't make a third; `402`/`409`/`400` |
+| Anyone | Every building's zone (civic, market or factory), and so what it does to the buildings beside it ([ADR 9](0009-zoning.md)) | | `boardView` puts `zone` on each building tile; nothing else about the rezone (who paid, when) leaves the store except your own `rezoneAt` |
+| You | When you may rezone again (`me.rezoneAt`) | Rezone your own building, and only your own: 40 coins, once an hour | `/rezone` takes no plot: `rezone` in `src/db.ts` changes only the row your `pid` holds, checks the zone, cooldown and coins inside one `BEGIN IMMEDIATE` that settles first, so simultaneous posts charge once; `402`/`429`/`400` |
 | Anyone | Every running park: where, the placer's label and when it ends; your own marked `mine` | | `boardView` builds a park tile from label, end time and a `mine` flag only; `parks.placed_by` (a `pid`) never leaves the store |
 | Nobody | | Take a held tile that isn't dormant, or build on a running park | The same `WHERE` (and a check for a running park on the plot): `409` (JSON) or `303 /?notice=taken` (form) |
 | Nobody | | Hold two tiles | The move transaction, and the unique index `one_tile_each` on `claimer_id` as a backstop |
-| Nobody | | Change another person's label or wake their tile | Every write is keyed by the requester's own `pid` |
+| Nobody | | Change another person's label or zone, or wake their tile | Every write is keyed by the requester's own `pid` |
 | Nobody | | Post a label outside 1–24 characters, or with control characters | `validLabel` (`400`, or `/?notice=label`); every output goes through `escapeHtml` or `textContent` |
 | Nobody | | Claim from another site's page | `sameOrigin`: a POST with a foreign `Origin` is a `403`; `SameSite=Lax` keeps the cookie off cross-site POSTs anyway |
 
@@ -122,5 +124,8 @@ row their `pid` holds, or a row nobody is still around for.
   `pid` appears in a park's view; a park can't go on a held tile.
   Return the favour (ADR 8): `returnable` is on the helped person's page
   only, and no `pid` is in it or in anyone's board.
+  Zoning (ADR 9): a rezone changes only the poster's own building, even with
+  someone else's `cellId` in the body; ten simultaneous rezones charge once;
+  a foreign `Origin` is a `403`; no `pid` in any reply.
 - `spec/log.test.ts`: the logs name each person by a tag that tells them
   apart, never print a `pid`, and a label can't forge a line.
