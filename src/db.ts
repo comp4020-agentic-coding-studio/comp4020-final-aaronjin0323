@@ -4,11 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import {
   accrue,
   buildingName,
+  DISTRICT_SIZE,
   HELP_COOLDOWN_MS,
   HELP_GIFT,
   HELP_REWARD,
   LEASE_MS,
   MAX_LEVEL,
+  MAYOR_MIN_LEVEL,
+  mayorBonus,
   PARK_COST,
   PARK_LIMIT,
   PARK_MS,
@@ -59,6 +62,17 @@ export type Park = { cellId: number; placedBy: string; label: string; placedAt: 
 
 // A park that ended, as settle() found it: for the server to log.
 export type ParkEnd = { cellId: number; pid: string; label: string; at: string };
+
+// A district's mayor changing hands (docs/adr/0010), for the server to log:
+// pids stay on the server, and the log turns them into tags.
+export type MayorChange = {
+  district: number;
+  pid: string | null;
+  label: string | null;
+  cellId: number | null;
+  from: string | null;
+  fromLabel: string | null;
+};
 
 // A crown a tower earned, recorded for good (docs/adr/0004, as amended by
 // ADR 5 and ADR 6): one row per (cell, tier), bronze at 3 occupied
@@ -151,6 +165,11 @@ export type Store = {
   // neighbours) that its cell has never had, lower tiers included, and
   // returns those just recorded: by cell, lowest tier first.
   raise(now: Date): Landmark[];
+  // Every district whose mayor changed since the last call (docs/adr/0010),
+  // by district: who now (null if the seat emptied) and who before. Seats
+  // are derived, so the last ones seen are kept in memory only; a new
+  // mayor writes the city log unless `record` is false (the boot baseline).
+  elect(now: Date, record?: boolean): MayorChange[];
   close(): void;
 };
 
@@ -214,6 +233,54 @@ export function zoneTermsAround(
   return zoneBonus(own, received);
 }
 
+// --- districts and mayors (docs/adr/0010) ---
+
+// The district of a plot: nine DISTRICT_SIZE-square blocks, 0..8 row-major.
+// Derived from the plot id, never stored.
+const PER_ROW = N / DISTRICT_SIZE;
+export const district = (id: number): number =>
+  Math.floor(Math.floor(id / N) / DISTRICT_SIZE) * PER_ROW + Math.floor((id % N) / DISTRICT_SIZE);
+export const DISTRICTS = PER_ROW * PER_ROW;
+
+// A district's mayor: the plot of their building, who holds it, and how many
+// other qualifying buildings there are someone else's.
+export type Seat = { district: number; cellId: number; pid: string; others: number };
+
+// Every district's mayor among `buildings` (each a running building's plot,
+// holder and level), by district. A building qualifies at MAYOR_MIN_LEVEL
+// or more. The mayor is the one holder of the highest-level qualifier: two
+// people at the top level is a tie, and a tie is no mayor. They're mayor
+// only over someone: at least one other qualifier held by someone else
+// (mayorBonus is 0 below MAYOR_MIN_OTHERS, so a seat with none isn't one).
+// A holder with several top buildings (impossible with one each) sits on
+// the lowest plot.
+export function seats(buildings: readonly { id: number; pid: string; level: number }[]): Map<number, Seat> {
+  const by = new Map<number, { id: number; pid: string; level: number }[]>();
+  for (const b of buildings) {
+    if (b.level < MAYOR_MIN_LEVEL) continue;
+    const d = district(b.id);
+    by.set(d, [...(by.get(d) ?? []), b]);
+  }
+  const out = new Map<number, Seat>();
+  for (const [d, list] of by) {
+    const top = Math.max(...list.map((b) => b.level));
+    const atTop = list.filter((b) => b.level === top).sort((a, b) => a.id - b.id);
+    if (new Set(atTop.map((b) => b.pid)).size > 1) continue;
+    const pid = atTop[0].pid;
+    const others = list.filter((b) => b.pid !== pid).length;
+    if (mayorBonus(others) === 0) continue;
+    out.set(d, { district: d, cellId: atTop[0].id, pid, others });
+  }
+  return out;
+}
+
+// The mayor's term of the building on `id`, in percentage points: what its
+// seat pays, or 0 if it isn't a mayor's.
+export function mayorTerm(id: number, mayors: Map<number, Seat>): number {
+  const seat = mayors.get(district(id));
+  return seat && seat.cellId === id ? mayorBonus(seat.others) : 0;
+}
+
 // "row 3, column 5", as the page says it. The city log uses the same.
 export const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
 
@@ -238,7 +305,9 @@ type Projection = {
 // piece if it runs for the whole of it, and never for its placer's own
 // building. A building stops earning at its own lease end and at the 4-hour
 // cap. Zones (docs/adr/0009) add their terms at each piece from the
-// buildings still standing over it. Pure: the caller writes the result
+// buildings still standing over it, and so do mayors (docs/adr/0010): a
+// seat depends only on which buildings stand and their levels, and a level
+// changes only at an upgrade, which settles first. Pure: the caller writes the result
 // (settle) or only reads it (me).
 export function integrate(buildings: Building[], now: number, parks: ParkSpan[] = []): Projection {
   const live = new Map(buildings.map((b) => [b.id, b]));
@@ -266,6 +335,7 @@ export function integrate(buildings: Building[], now: number, parks: ParkSpan[] 
       // so every rate is fixed.
       const parkBy = new Map<number, string>();
       for (const p of parks) if (p.start <= t && p.end > t) parkBy.set(p.id, p.by);
+      const mayors = seats([...live.values()]);
       for (const b of live.values()) {
         const from = Math.max(t, b.settled);
         if (from >= cut) continue;
@@ -273,7 +343,7 @@ export function integrate(buildings: Building[], now: number, parks: ParkSpan[] 
         const bonus = zoneTermsAround(b.id, b.pid, b.zone ?? "civic", (id) => {
           const x = live.get(id);
           return x ? { pid: x.pid, zone: x.zone ?? "civic" } : null;
-        });
+        }) + mayorTerm(b.id, mayors);
         const before = pending.get(b.id)!;
         const after = accrue(before, rate(b.level, n, bonus), cut - from);
         pending.set(b.id, after);
@@ -556,6 +626,8 @@ export function openStore(path: string): Store {
   const parkCharge = lazy("UPDATE players SET coins = coins - ? WHERE pid = ?");
 
   let expiredSince: Expiry[] = [];
+  // The mayors elect() last saw, by district: pid and label only.
+  let seated = new Map<number, { pid: string; label: string }>();
   let parksEndedSince: ParkEnd[] = [];
   const spans = (parks: Park[]): ParkSpan[] =>
     parks.map((p) => ({ id: p.cellId, by: p.placedBy, start: Date.parse(p.placedAt), end: Date.parse(p.endsAt) }));
@@ -863,7 +935,7 @@ export function openStore(path: string): Store {
         ? zoneTermsAround(mine.id, pid, mine.zone, (id) => {
             const x = byId.get(id);
             return x ? { pid: x.claimerId!, zone: x.zone } : null;
-          })
+          }) + mayorTerm(mine.id, seats([...byId.values()].map((t) => ({ id: t.id, pid: t.claimerId!, level: t.level ?? 1 }))))
         : 0;
       const after = (when: string | null, ms: number): string | null => (when === null ? null : iso(Date.parse(when) + ms));
       // the favour I can return: open, and its helper's building beside mine
@@ -963,6 +1035,33 @@ export function openStore(path: string): Store {
           (l) => Number(recordLandmark().run(l.cellId, l.tier, l.label, JSON.stringify(l.raisers), l.raisedAt).changes) === 1,
         ),
       );
+    },
+
+    elect(now, record = true) {
+      const tiles = selectAll.all() as Tile[];
+      const current = seats(tiles.filter((t) => isActive(t, now)).map((t) => ({ id: t.id, pid: t.claimerId!, level: t.level ?? 1 })));
+      const changes: MayorChange[] = [];
+      for (let d = 0; d < DISTRICTS; d++) {
+        const was = seated.get(d) ?? null;
+        const is = current.get(d) ?? null;
+        if ((was?.pid ?? null) === (is?.pid ?? null)) continue;
+        changes.push({
+          district: d,
+          pid: is?.pid ?? null,
+          label: is ? (tiles[is.cellId].label ?? "") : null,
+          cellId: is?.cellId ?? null,
+          from: was?.pid ?? null,
+          fromLabel: was?.label ?? null,
+        });
+      }
+      seated = new Map([...current].map(([d, x]) => [d, { pid: x.pid, label: tiles[x.cellId].label ?? "" }]));
+      if (record) {
+        const at = now.toISOString();
+        for (const c of changes) {
+          if (c.pid !== null) insertEvent.run("mayor", `${c.label} became mayor of district ${c.district + 1}`, c.cellId, at);
+        }
+      }
+      return changes;
     },
 
     close: () => db.close(),

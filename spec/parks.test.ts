@@ -221,7 +221,7 @@ describe("income across a park (integrate)", () => {
   // building in a random zone (docs/adr/0009): the model works out each
   // zone's terms from the table in ZONES by hand, cap and floor included,
   // not from zoneBonus(), so a mistake there can't agree with itself.
-  it("agrees with a minute-by-minute model on random boards with parks and zones", () => {
+  it("agrees with a minute-by-minute model on random boards with parks, zones and mayors", () => {
     // mulberry32, as spec/diff.test.ts uses: a seeded generator that doesn't
     // lose precision and fall into a short cycle
     let s32 = 7;
@@ -237,6 +237,8 @@ describe("income across a park (integrate)", () => {
     let parkMinutes = 0;
     let factoryMinutes = 0;
     let cappedMinutes = 0;
+    let mayorMinutes = 0;
+    let mayorCapMinutes = 0;
     const zoneNames = Object.keys(ZONES) as (keyof typeof ZONES)[];
     for (let round = 0; round < 60; round++) {
       const span = 180 * MIN;
@@ -287,7 +289,18 @@ describe("income across a park (integrate)", () => {
           const factories = others.filter((x) => x.zone === "factory").length * -10;
           if (factories < 0) factoryMinutes++;
           if (markets > 30) cappedMinutes++;
-          const bonus = Math.max(0, 20 * n + (b.zone === "factory" ? 35 : 0) + Math.min(30, markets) + factories);
+          // the mayor (docs/adr/0010), by hand: the district's Lv2+
+          // buildings standing this minute; one holder alone at the top
+          // level, with others held by someone else, +8% each up to +40%
+          const dOf = (id: number) => Math.floor(Math.floor(id / 12) / 4) * 3 + Math.floor((id % 12) / 4);
+          const rivals = live.filter((x) => x.level >= 2 && dOf(x.id) === dOf(b.id));
+          const top = Math.max(0, ...rivals.map((x) => x.level));
+          const atTop = new Set(rivals.filter((x) => x.level === top).map((x) => x.pid));
+          const rivalsElse = rivals.filter((x) => x.pid !== b.pid).length;
+          const mayor = b.level === top && b.level >= 2 && atTop.size === 1 && rivalsElse >= 1 ? Math.min(40, 8 * rivalsElse) : 0;
+          if (mayor > 0) mayorMinutes++;
+          if (mayor === 40) mayorCapMinutes++;
+          const bonus = Math.max(0, 20 * n + (b.zone === "factory" ? 35 : 0) + Math.min(30, markets) + factories + mayor);
           pending.set(b.id, accrue(pending.get(b.id)!, 10 * b.level * (100 + bonus), MIN));
         }
       }
@@ -308,6 +321,8 @@ describe("income across a park (integrate)", () => {
     expect(parkMinutes).toBeGreaterThan(5000);
     expect(factoryMinutes).toBeGreaterThan(2000);
     expect(cappedMinutes).toBeGreaterThan(200);
+    expect(mayorMinutes).toBeGreaterThan(2000);
+    expect(mayorCapMinutes).toBeGreaterThan(50);
   });
 });
 

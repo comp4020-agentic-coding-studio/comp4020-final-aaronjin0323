@@ -120,12 +120,29 @@ export function zoneBonus(own: string, received: readonly string[]): number {
   return (isZone(own) ? ZONES[own].self : 0) + Math.min(MARKET_CAP_PERCENT, gifts) + harms;
 }
 
+// Districts and mayors (docs/adr/0010): the board is nine DISTRICT_SIZE ×
+// DISTRICT_SIZE blocks. A building qualifies in its district at
+// MAYOR_MIN_LEVEL or more; the mayor is the holder of the single
+// highest-level qualifier (a tie is no mayor), if at least MAYOR_MIN_OTHERS
+// other qualifiers there are someone else's. The mayor's building earns
+// MAYOR_BONUS_PERCENT per other qualifier, at most MAYOR_CAP_PERCENT.
+export const DISTRICT_SIZE = 4;
+export const MAYOR_MIN_LEVEL = 2;
+export const MAYOR_MIN_OTHERS = 1;
+export const MAYOR_BONUS_PERCENT = 8;
+export const MAYOR_CAP_PERCENT = 40;
+
+// The mayor's term, in percentage points, over `others` other qualifiers
+// held by someone else: 0 below MAYOR_MIN_OTHERS, capped above.
+export const mayorBonus = (others: number): number =>
+  others < MAYOR_MIN_OTHERS ? 0 : Math.min(MAYOR_CAP_PERCENT, MAYOR_BONUS_PERCENT * others);
+
 // A building's income in cents a minute:
 //   10 coins × level × (1 + 0.2 × neighbours + bonus / 100)
 //     =  10 × level × (100 + 20n + bonus) cents
 // which is a whole number for any whole level, neighbour count and bonus.
-// `bonus` is every other percentage term summed (zones, ADR 9; a later term
-// adds into it). The whole bonus never goes below 0, so no building earns
+// `bonus` is every other percentage term summed (zones, ADR 9; the mayor's,
+// ADR 10). The whole bonus never goes below 0, so no building earns
 // less than its no-neighbour base, 10 × level coins (ADR 9).
 export function rate(level: number, neighbours: number, bonus = 0): number {
   return BASE_INCOME * level * (100 + Math.max(0, NEIGHBOUR_BONUS_PERCENT * neighbours + bonus));
@@ -198,4 +215,9 @@ export const ECONOMY = Object.freeze({
   marketCapPercent: MARKET_CAP_PERCENT,
   rezoneCost: REZONE_COST,
   rezoneCooldownMinutes: REZONE_COOLDOWN_MS / MINUTE,
+  districtSize: DISTRICT_SIZE, // plots along each side of a district
+  mayorMinLevel: MAYOR_MIN_LEVEL,
+  mayorMinOthers: MAYOR_MIN_OTHERS,
+  mayorBonusPercent: MAYOR_BONUS_PERCENT, // per other qualifying building
+  mayorCapPercent: MAYOR_CAP_PERCENT,
 });

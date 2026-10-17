@@ -10,6 +10,7 @@ import {
   canPark,
   describeTile,
   diffBoards,
+  districtOf,
   doneText,
   ECONOMY,
   eventText,
@@ -22,6 +23,7 @@ import {
   hudParts,
   inspect,
   leaseSoon,
+  mayorsOf,
   pendingNow,
   preview,
   raisedText,
@@ -672,7 +674,12 @@ describe("the placement preview", () => {
         expect(p!.heights, `seed ${seed}, plot ${t.id}`).toEqual(hs);
         expect(p!.rates, `seed ${seed}, plot ${t.id} rates`).toEqual(live.map((x) => x.rate));
         expect(p!.neighbours).toBe(ns[t.id]);
-        expect(p!.rate).toBe(serverRate(mine?.level ?? 1, ns[t.id]));
+        // civic everywhere, so the only term beyond neighbours is a mayor's
+        // (docs/adr/0010): a move can carry my level into a district's seat
+        expect(p!.rate).toBe(live[t.id].rate);
+        if (!before.mayors.some((m) => m.cellId === mine?.id) && !boardView(after, ME, NOW).mayors.some((m) => m.cellId === t.id)) {
+          expect(p!.rate).toBe(serverRate(mine?.level ?? 1, ns[t.id]));
+        }
         const held = (i: number) => before.tiles[i].state === "held";
         expect(p!.lifted).toEqual(live.filter((x) => held(x.id) && x.rate > before.tiles[x.id].rate).map((x) => x.id));
         expect(p!.dropped).toEqual(live.filter((x) => held(x.id) && x.rate < before.tiles[x.id].rate).map((x) => x.id));
@@ -805,6 +812,55 @@ describe("the placement preview", () => {
     expect(checked).toBeGreaterThan(800);
     expect(zoneMoves).toBeGreaterThan(300);
     expect(factoryLifts).toBeGreaterThan(20);
+  }, 30_000);
+
+  // Districts (docs/adr/0010): random boards of levels 1-5 dense enough that
+  // most districts have a contest, zones and parks too. A claim or a move
+  // can make, tie or unseat a mayor, in the district it lands in and the
+  // one it leaves, and the preview's incomes must still equal the
+  // server's to the cent, its mayors too.
+  it("agrees with the server's income and mayors on random boards, mayor terms included", () => {
+    const ZONES = ["civic", "market", "factory"];
+    let checked = 0;
+    let seatChanges = 0;
+    let mayorRates = 0;
+    for (let seed = 301; seed <= 330; seed++) {
+      const rand = rng(seed);
+      const density = 0.15 + rand() * 0.4;
+      const mineAt = rand() < 0.85 ? Math.floor(rand() * 144) : -1;
+      const rows: Tile[] = [];
+      const parks: Park[] = [];
+      for (let id = 0; id < 144; id++) {
+        const level = 1 + Math.floor(rand() * 5);
+        const zone = ZONES[Math.floor(rand() * 3)];
+        if (id === mineAt) rows.push({ ...row(id, ME, level), zone });
+        else if (rand() < density) rows.push({ ...row(id, `p${id}`, level, rand() < 0.1 ? -HOUR : 10 * HOUR), zone });
+        else {
+          rows.push(row(id, null));
+          if (rand() < 0.1) parks.push({ cellId: id, placedBy: "stranger", label: "S", placedAt: new Date(NOW.getTime() - HOUR).toISOString(), endsAt: new Date(NOW.getTime() + HOUR).toISOString() });
+        }
+      }
+      const before = boardView(rows, ME, NOW, [], { parks });
+      // the page's own reading of the mayors matches the server's
+      expect(mayorsOf({ ...before, mayors: undefined }), `seed ${seed} mayors`).toEqual(before.mayors);
+      expect(before.tiles.map((t) => t.district)).toEqual(before.tiles.map((t) => districtOf(t.id)));
+      const mine = rows.find((r) => r.claimerId === ME);
+      for (const t of before.tiles) {
+        if (t.state !== "free") continue;
+        const p: Preview | null = preview(before, t.id);
+        const after = rows.map((r) =>
+          r.id === t.id ? { ...row(r.id, ME, mine?.level ?? 1), zone: mine?.zone ?? "civic" } : r.claimerId === ME ? row(r.id, null) : r,
+        );
+        const next = boardView(after, ME, NOW, [], { parks });
+        expect(p!.rates, `seed ${seed}, plot ${t.id} rates`).toEqual(next.tiles.map((x) => x.rate));
+        if (JSON.stringify(next.mayors.map((m) => m.cellId)) !== JSON.stringify(before.mayors.map((m) => m.cellId))) seatChanges++;
+        if (next.mayors.length) mayorRates++;
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
+    expect(seatChanges).toBeGreaterThan(300);
+    expect(mayorRates).toBeGreaterThan(1000);
   }, 30_000);
 
   it("says what building there would earn and whose income it raises, in numbers", () => {

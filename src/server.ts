@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
 import { boardView, isNotice, renderBoard } from "./board.ts";
-import { type Expiry, isActive, type Landmark, openStore, type ParkEnd, TILES, type Visit } from "./db.ts";
+import { type Expiry, isActive, type Landmark, type MayorChange, openStore, type ParkEnd, TILES, type Visit } from "./db.ts";
 import { type Tier, tierRank } from "./economy.ts";
 import { at, claimEffects, expiryDrops, holder, log, people, quote, raw, tag, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
@@ -62,6 +62,7 @@ function broadcast(now = new Date()): void {
   version = Math.max(version + 1, Date.now());
   const raised = store.raise(now);
   for (const l of raised) logLandmark(l);
+  for (const m of store.elect(now)) logMayor(m);
   const top = raised.reduce<Landmark | undefined>((best, l) => (best && tierRank(best.tier) > tierRank(l.tier) ? best : l), undefined);
   const news = top ? { cellId: top.cellId, tier: top.tier, label: top.label, raisers: top.raisers } : undefined;
   for (const stream of streams) sendBoard(stream, now, news);
@@ -104,6 +105,17 @@ function logParksEnded(list: ParkEnd[], now: Date): boolean {
 function logEnded(now: Date): boolean {
   const leases = logExpired(store.takeExpired(), now);
   return logParksEnded(store.takeParksEnded(), now) || leases;
+}
+
+// A district's mayor changed (docs/adr/0010): districts as people read
+// them, 1..9; each person a tag, or none.
+function logMayor(m: MayorChange): void {
+  log("mayor", {
+    district: m.district + 1,
+    who: m.pid === null ? raw("none") : who(m.pid),
+    label: m.label ?? undefined,
+    from: m.from === null ? raw("none") : who(m.from),
+  });
 }
 
 function logLandmark(l: Landmark): void {
@@ -163,6 +175,7 @@ setInterval(() => sweep(new Date()), SWEEP_MS).unref();
   store.settle(now);
   logEnded(now);
   for (const l of store.raise(now)) logLandmark(l);
+  store.elect(now, false); // the seats as they stand: a baseline, not news
 }
 
 const TYPES: Record<string, string> = {

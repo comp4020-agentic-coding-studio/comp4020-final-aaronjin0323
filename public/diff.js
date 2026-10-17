@@ -61,6 +61,13 @@ export const ECONOMY = Object.freeze({
   marketCapPercent: 30, // the most a building receives from markets
   rezoneCost: 40,
   rezoneCooldownMinutes: 60,
+  // docs/adr/0010: nine 4×4 districts; a mayor needs Lv2+, the single
+  // highest level, and 1 other Lv2+ building someone else holds
+  districtSize: 4, // plots along each side of a district
+  mayorMinLevel: 2,
+  mayorMinOthers: 1,
+  mayorBonusPercent: 8, // per other qualifying building
+  mayorCapPercent: 40,
 });
 export const MAX_LEVEL = ECONOMY.levels.length;
 export const SOON_MS = HOUR; // a lease ending within this is shown as ending
@@ -124,8 +131,58 @@ export function zoneBonus(own, received) {
 // The zone terms of every building on the board as shown: 0 for anything else.
 const zoneTerms = (board) =>
   board.tiles.map((t) => (claimed(t) ? zoneBonus(zoneOf(t), neighbours(t.id).filter((n) => claimed(board.tiles[n])).map((n) => zoneOf(board.tiles[n]))) : 0));
+
+// --- districts and mayors (docs/adr/0010) ---
+const PER_ROW = N / ECONOMY.districtSize;
+// A plot's district, 0..8 row-major (people read it as 1..9).
+export const districtOf = (id) =>
+  Math.floor(Math.floor(id / N) / ECONOMY.districtSize) * PER_ROW + Math.floor((id % N) / ECONOMY.districtSize);
+// The mayor's term over `others` other qualifiers: 0 below the minimum, capped.
+export const mayorBonus = (others) =>
+  others < ECONOMY.mayorMinOthers ? 0 : Math.min(ECONOMY.mayorCapPercent, ECONOMY.mayorBonusPercent * others);
+// Every district's mayor, from each plot's building level (0 for none), as
+// a Map of district to { district, cellId, others }. Every building on a
+// board is a different person's (one each), so a tie at the top level is
+// two people, and every other qualifier is someone else's.
+export function seatsOf(levels) {
+  const by = new Map();
+  levels.forEach((level, id) => {
+    if (level < ECONOMY.mayorMinLevel) return;
+    const d = districtOf(id);
+    by.set(d, [...(by.get(d) ?? []), { id, level }]);
+  });
+  const out = new Map();
+  for (const [d, list] of by) {
+    const top = Math.max(...list.map((b) => b.level));
+    const atTop = list.filter((b) => b.level === top);
+    const others = list.length - 1;
+    if (atTop.length !== 1 || mayorBonus(others) === 0) continue;
+    out.set(d, { district: d, cellId: atTop[0].id, others });
+  }
+  return out;
+}
+const levelsOf = (board) => board.tiles.map((t) => (claimed(t) ? levelOf(t) : 0));
+// Each plot's mayor term, in percentage points, for the levels given.
+const mayorTerms = (levels) => {
+  const out = levels.map(() => 0);
+  for (const seat of seatsOf(levels).values()) out[seat.cellId] = mayorBonus(seat.others);
+  return out;
+};
+// Every term but the neighbours' (zones and the mayor's), per plot.
+const bonusTerms = (board, levels = levelsOf(board)) => {
+  const zones = zoneTerms(board);
+  const mayors = mayorTerms(levels);
+  return zones.map((z, i) => z + mayors[i]);
+};
+// The board's mayors as the server sent them, or worked out from its levels.
+export const mayorsOf = (board) =>
+  Array.isArray(board.mayors)
+    ? board.mayors
+    : [...seatsOf(levelsOf(board)).values()].sort((a, b) => a.district - b.district).map((m) => ({ district: m.district, cellId: m.cellId, label: board.tiles[m.cellId].label }));
+export const mayorAt = (board, id) => mayorsOf(board).find((m) => m.cellId === id) ?? null;
+
 // A building's rate as shown, or worked out from the board when it isn't.
-const shownRate = (board, t) => (Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(levelOf(t), neighboursOf(board, t), zoneTerms(board)[t.id]));
+const shownRate = (board, t) => (Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(levelOf(t), neighboursOf(board, t), bonusTerms(board)[t.id]));
 // What a rate means as a bonus over the building's base, in percentage
 // points: 1200 at level 1 is +20.
 const pctOf = (rate, level) => Math.round(rate / (level * ECONOMY.baseIncome)) - 100;
@@ -189,12 +246,13 @@ export function upgradeInfo(board) {
   if (!mine) return { ok: false, reason: "no-land" };
   const level = levelOf(mine);
   const n = neighboursOf(board, mine);
-  const bonus = zoneTerms(board)[mine.id];
-  const base = { level, name: buildingName(level), rate: rateOf(level, n, bonus) };
+  const base = { level, name: buildingName(level), rate: rateOf(level, n, bonusTerms(board)[mine.id]) };
   if (level >= MAX_LEVEL) return { ...base, ok: false, reason: "max-level" };
   const next = level + 1;
   const cost = ECONOMY.upgradeCosts[level - 1];
-  const info = { ...base, next, nextName: buildingName(next), cost, nextRate: rateOf(next, n, bonus) };
+  // the next level can take (or tie) a district's seat (docs/adr/0010)
+  const after = levelsOf(board).map((l, i) => (i === mine.id ? next : l));
+  const info = { ...base, next, nextName: buildingName(next), cost, nextRate: rateOf(next, n, bonusTerms(board, after)[mine.id]) };
   if (coins < cost) return { ...info, ok: false, reason: "coins" };
   return { ...info, ok: true, reason: null };
 }
@@ -361,8 +419,11 @@ export function preview(board, id) {
   // its zone. Every building is a different person's, so each neighbour's
   // zone counts; parks have none.
   const zones = board.tiles.map((x) => (x.id === id ? (mine ? zoneOf(mine) : "civic") : occupied[x.id] ? zoneOf(x) : null));
+  // Mayors after (docs/adr/0010), from the levels after: a move carries my
+  // level into one district and out of another.
+  const mayors = mayorTerms(levels);
   const terms = board.tiles.map((x) =>
-    occupied[x.id] ? zoneBonus(zones[x.id], neighbours(x.id).filter((n) => occupied[n]).map((n) => zones[n])) : 0,
+    occupied[x.id] ? zoneBonus(zones[x.id], neighbours(x.id).filter((n) => occupied[n]).map((n) => zones[n])) + mayors[x.id] : 0,
   );
   const rates = board.tiles.map((x) => (occupied[x.id] ? rateOf(levels[x.id], counts[x.id], terms[x.id]) : 0));
   // Whose income goes up or down, by income, so a factory arriving (+20
@@ -777,7 +838,7 @@ export function hudParts(board, now, pending = meOf(board)?.pending ?? 0) {
   const coins = me?.coins ?? 0;
   const owed = collectable(pending);
   const n = neighboursOf(board, mine);
-  const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n, zoneTerms(board)[mine.id]);
+  const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n, bonusTerms(board)[mine.id]);
   const leaseIso = me?.leaseEndsAt ?? mine.leaseEndsAt ?? null;
   const left = Math.max(0, msUntil(leaseIso, now));
   const since = me?.ownedSince ? new Date(me.ownedSince).getTime() : NaN;

@@ -1,4 +1,4 @@
-import { type CityEvent, isActive, type Landmark, type Me, N, occupiedAround, type Park, parkActive, type Tile, type Visit, zoneTermsAround } from "./db.ts";
+import { type CityEvent, district, isActive, type Landmark, mayorTerm, type Me, N, occupiedAround, type Park, parkActive, type Seat, seats, type Tile, type Visit, zoneTermsAround } from "./db.ts";
 import { buildingName, HELP_GIFT, HELP_REWARD, LEASE_CAP_MS, PARK_LIMIT, rate, RENEWALS, RETURN_BONUS, type Tier, tierRank } from "./economy.ts";
 import { escapeHtml, page } from "./html.ts";
 // The page's own pure module (no DOM), so the goal line and the glowing
@@ -72,6 +72,8 @@ export type TileView = {
   neighbours: number;
   rate: number;
   leaseEndsAt: string | null;
+  // The plot's district (docs/adr/0010), 0..8: derived from its id.
+  district: number;
   // A building's zone (docs/adr/0009), public: civic, market or factory.
   // Absent on a free plot or a park.
   zone?: string;
@@ -94,11 +96,16 @@ export const EVENTS_SHOWN = 8;
 // string, since it travels as JSON.
 export type LandmarksView = { count: number; cells: Record<string, { tier: Tier; label: string; raisers: string[] }> };
 
+// Each district's mayor (docs/adr/0010): the district (0..8), the plot of
+// the mayor's building and the holder's label. Never a pid.
+export type MayorView = { district: number; cellId: number; label: string };
+
 export type BoardView = {
   tiles: TileView[];
   claimed: number;
   status: string;
   landmarks: LandmarksView;
+  mayors: MayorView[];
   events: EventView[];
   me: MeView;
 };
@@ -134,12 +141,20 @@ export function zoneTerms(tiles: Tile[], now: Date): number[] {
   return tiles.map((t) => (active[t.id] ? zoneTermsAround(t.id, t.claimerId!, t.zone ?? "civic", at) : 0));
 }
 
+// Every district's mayor as of `now` (docs/adr/0010), from the running
+// buildings and their levels, by district.
+export function mayorsOf(tiles: Tile[], now: Date): Map<number, Seat> {
+  return seats(tiles.filter((t) => isActive(t, now)).map((t) => ({ id: t.id, pid: t.claimerId!, level: t.level ?? 1 })));
+}
+
 // Every building's income in cents a minute as of `now` (0 for a free plot
-// or a park): level, occupied neighbours (parks included) and zone terms.
+// or a park): level, occupied neighbours (parks included), zone terms and
+// the mayor's term.
 export function rates(tiles: Tile[], now: Date, parks: Park[] = []): number[] {
   const counts = neighbourCounts(tiles, now, parks);
   const terms = zoneTerms(tiles, now);
-  return tiles.map((t) => (isActive(t, now) ? rate(t.level ?? 1, counts[t.id], terms[t.id]) : 0));
+  const mayors = mayorsOf(tiles, now);
+  return tiles.map((t) => (isActive(t, now) ? rate(t.level ?? 1, counts[t.id], terms[t.id] + mayorTerm(t.id, mayors)) : 0));
 }
 
 // A building's height is its level plus its occupied neighbours (ADR 5); a
@@ -179,6 +194,7 @@ export function boardView(
 ): BoardView {
   const counts = neighbourCounts(tiles, now, parks);
   const terms = zoneTerms(tiles, now);
+  const mayors = mayorsOf(tiles, now);
   const parkAt = new Map(parks.filter((p) => parkActive(p, now)).map((p) => [p.cellId, p]));
   const views = tiles.map((tile): TileView => {
     const where = place(tile.id).replace(/^r/, "R");
@@ -198,6 +214,7 @@ export function boardView(
         neighbours: 0,
         rate: 0,
         leaseEndsAt: null,
+        district: district(tile.id),
         endsAt: park.endsAt,
         mine: yours,
       };
@@ -215,6 +232,7 @@ export function boardView(
         neighbours: 0,
         rate: 0,
         leaseEndsAt: null,
+        district: district(tile.id),
       };
     }
     const label = tile.label ?? "";
@@ -233,8 +251,9 @@ export function boardView(
       aria: `${where}, ${who}, ${buildingName(level)}, height ${h}`,
       level,
       neighbours: n,
-      rate: rate(level, n, terms[tile.id]),
+      rate: rate(level, n, terms[tile.id] + mayorTerm(tile.id, mayors)),
       leaseEndsAt: tile.leaseEndsAt,
+      district: district(tile.id),
       zone: tile.zone ?? "civic",
     };
   });
@@ -268,6 +287,9 @@ export function boardView(
     claimed: views.filter((t) => t.state === "held" || t.state === "mine").length,
     status,
     landmarks: landmarksView(landmarks),
+    mayors: [...mayors.values()]
+      .sort((a, b) => a.district - b.district)
+      .map((m) => ({ district: m.district, cellId: m.cellId, label: tiles[m.cellId].label ?? "" })),
     events: events.slice(0, EVENTS_SHOWN).map((e) => ({ type: e.type, text: e.text, cellId: e.cellId, at: e.at })),
     me: { ...wallet, ...once },
   };

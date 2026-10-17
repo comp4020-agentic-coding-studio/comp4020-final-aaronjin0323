@@ -266,3 +266,60 @@ describe("a park ending", () => {
     }
   });
 });
+
+// A mayor (docs/adr/0010) needs Lv2+ buildings, which take hours of income,
+// so a server is started on a database seeded hours in the past: Kay at Lv3
+// and Mei at Lv2, apart in the centre district (5), so Kay is already mayor
+// at boot. That seat is a baseline, not news; Mei's upgrades then tie him
+// (no mayor) and pass him (Mei is).
+describe("a mayor changing", () => {
+  it("is logged by district, tag and label, with who it was before, never a pid", async () => {
+    const d = mkdtempSync(join(tmpdir(), "skyline-mayor-"));
+    const path = join(d, "app.db");
+    const KAY = "00000000-0000-4000-8000-0000000000ca";
+    const MEI = "00000000-0000-4000-8000-0000000000ae";
+    const then = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    const later = new Date(Date.now() - 60 * 60 * 1000);
+    const s = openStore(path);
+    expect(s.claim(4 * 12 + 4, KAY, "Kay", then)).toBe("claimed"); // r5c5
+    expect(s.claim(7 * 12 + 7, MEI, "Mei", then)).toBe("claimed"); // r8c8
+    s.collect(KAY, later);
+    expect(s.upgrade(KAY, later)).toBe("upgraded");
+    expect(s.upgrade(KAY, later)).toBe("upgraded");
+    s.collect(MEI, later);
+    expect(s.upgrade(MEI, later)).toBe("upgraded");
+    s.close();
+    let text = "";
+    const child = spawn(process.execPath, ["src/server.ts"], {
+      env: { ...process.env, PORT: "0", DB_PATH: path, NODE_ENV: "test" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      child.stdout!.setEncoding("utf8").on("data", (c: string) => (text += c));
+      child.stderr!.setEncoding("utf8").on("data", (c: string) => (text += c));
+      for (let i = 0; i < 100 && !/^start port=\d+/m.test(text); i++) await new Promise((r) => setTimeout(r, 50));
+      const url = `http://127.0.0.1:${/^start port=(\d+)/m.exec(text)![1]}`;
+      const as = (pid: string, route: string) =>
+        fetch(new URL(route, url), { method: "POST", headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" }, body: "{}" });
+      const mayorLines = () => text.split("\n").filter((l) => l.startsWith("mayor "));
+      expect(mayorLines(), "Kay's seat at boot is not news").toEqual([]);
+      expect((await as(MEI, "/collect")).status).toBe(200);
+      expect((await as(MEI, "/upgrade")).status).toBe(200); // Lv3: a tie, nobody
+      await new Promise((r) => setTimeout(r, 50));
+      expect(mayorLines()).toEqual([`mayor district=5 who=none from=${tag(KAY)}`]);
+      expect((await as(MEI, "/upgrade")).status).toBe(200); // Lv4: Mei
+      await new Promise((r) => setTimeout(r, 50));
+      expect(mayorLines()).toEqual([`mayor district=5 who=none from=${tag(KAY)}`, `mayor district=5 who=${tag(MEI)} label="Mei" from=none`]);
+      // the city log says it in words, by label
+      const page = await (await fetch(new URL("/", url), { headers: { cookie: `pid=${KAY}` } })).text();
+      expect(page).toContain("Mei became mayor of district 5");
+      expect(page).not.toContain(MEI);
+      expect(page).not.toContain(KAY);
+      expect(text).not.toContain(KAY);
+      expect(text).not.toContain(MEI);
+    } finally {
+      child.kill("SIGTERM");
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
