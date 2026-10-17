@@ -310,11 +310,11 @@ type LandmarkCell = { tier: Tier; label: string; raisers: string[] };
 
 // A plot's label for a screen reader: the same words app.js writes, so it
 // can say a lease is ending soon without the server re-sending the board.
-const ariaFor = (t: TileView, now: Date): string => tileWords(t, now) as string;
+const ariaFor = (t: TileView, now: Date, mayor: boolean): string => tileWords(t, now, mayor) as string;
 
 const hiddenIf = (hide: boolean): string => (hide ? " hidden" : "");
 
-function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: boolean, now: Date, leaseFrac: number | null, back = false): string {
+function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: boolean, now: Date, leaseFrac: number | null, back = false, mayor = false): string {
   // A landmark ever raised on this cell: the label it was raised under, and
   // the nine raisers as a JSON array, so the page has them before the stream.
   // It wears a crown on its roof, and its label says who raised it.
@@ -328,7 +328,7 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // with "+30" floating over its roof (the beacon's data-back); the same
   // returnGlow() the page reruns.
   const favour = back ? " data-return" : "";
-  const aria = tileAria(ariaFor(t, now), landmark ?? null) as string;
+  const aria = tileAria(ariaFor(t, now, mayor), landmark ?? null) as string;
   // Your own plot carries what's left of its lease (0 to 1), which the
   // stylesheet draws as a ring draining round the building's foot.
   const lease = leaseFrac === null ? "" : `;--lease:${leaseFrac.toFixed(3)}`;
@@ -350,7 +350,10 @@ function tileButton(t: TileView, landmark: LandmarkCell | undefined, helps: bool
   // it), the hourglass of a lease ending. .ring is the lease ring, drawn only
   // round your own building.
   const crownMark = landmark ? `<span class="crown" aria-hidden="true"></span>` : "";
-  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}"${building}${park}${soon}${crown}${glow}${favour} style="${style}" aria-label="${escapeHtml(back ? (returnWords(aria) as string) : aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"${back ? ` data-back="+${RETURN_BONUS}"` : ""}></span><span class="zone-mark" aria-hidden="true"></span>${crownMark}</button>`;
+  // The mayor of the tile's district (docs/adr/0010) wears a star on its
+  // roof; data-district lets the stylesheet draw the district lines.
+  const seat = mayor ? " data-mayor" : "";
+  return `<button class="tile" name="cellId" value="${t.id}" data-state="${t.state}" data-height="${t.height}" data-district="${t.district}"${building}${park}${soon}${crown}${glow}${favour}${seat} style="${style}" aria-label="${escapeHtml(back ? (returnWords(aria) as string) : aria)}"${title}><span class="sides" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="roof" aria-hidden="true"><span class="gable"></span></span><span class="initials" aria-hidden="true">${escapeHtml(t.initials)}</span><span class="beacon" aria-hidden="true"${back ? ` data-back="+${RETURN_BONUS}"` : ""}></span><span class="zone-mark" aria-hidden="true"></span><span class="mayor-mark" aria-hidden="true"></span>${crownMark}</button>`;
 }
 
 // JSON inside a <script> element: "<" is escaped so no string in it (a label
@@ -395,6 +398,7 @@ const LEGEND: [string, string][] = [
   ["park", "Park: lifts the buildings round it"],
   ["market", "Market: +15% to neighbours"],
   ["factory", "Factory: +35% itself, −10% neighbours"],
+  ["mayor", "Mayor: highest Lv2+ in a district of 4×4"],
   ["soon", "Lease ending within the hour"],
 ];
 
@@ -474,6 +478,7 @@ export function renderBoard(
     Object.hasOwn(view.landmarks.cells, String(id)) ? view.landmarks.cells[String(id)] : undefined;
   const hud = hudParts(view, now) as Hud | null;
   const land = hud !== null;
+  const seated = new Set(view.mayors.map((m) => m.cellId));
 
   return page({
     title: "Skyline",
@@ -508,7 +513,7 @@ export function renderBoard(
           <div class="notices" data-notices>${notices}</div>
           <div class="stage" data-stage>
             <div class="board" role="group" aria-label="City map, ${N} by ${N} plots" aria-describedby="status" data-version="${version}"${land ? "" : " data-invite"}>
-          ${view.tiles.map((t) => tileButton(t, markOf(t.id), helps.has(t.id), now, t.state === "mine" && hud ? hud.lease.frac : null, t.id === back)).join("\n          ")}
+          ${view.tiles.map((t) => tileButton(t, markOf(t.id), helps.has(t.id), now, t.state === "mine" && hud ? hud.lease.frac : null, t.id === back, seated.has(t.id))).join("\n          ")}
             </div>
           </div>
         </section>
@@ -517,7 +522,7 @@ export function renderBoard(
           <dl data-inspect-facts></dl>
         </aside>
         <div class="sr-only" aria-live="polite" data-announce></div>
-        <script type="application/json" data-board-data>${jsonForScript({ me: view.me, events: view.events })}</script>
+        <script type="application/json" data-board-data>${jsonForScript({ me: view.me, events: view.events, mayors: view.mayors })}</script>
       </form>
     </main>`,
   });

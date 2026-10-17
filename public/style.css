@@ -50,6 +50,7 @@
     linear-gradient(to top right, #b9b4cc 49%, transparent 51%) 0 62% / 34% 30% repeat-x,
     linear-gradient(#b9b4cc, #b9b4cc) 0 100% / 100% 40% no-repeat,
     #3a3450;
+  --district-line: rgb(255 90 170 / 0.7); /* the district grid, the board's neon */
   --line: #000; /* every outline and hard shadow */
   --cream: #fff7ec;
   --panel: #1c0f2e;
@@ -1056,11 +1057,14 @@ main {
 
 /* The board is the street grid: the gaps between tiles are the roads. */
 .board {
+  --gap: 3px;
+  --pad: 6px;
+  position: relative;
   width: var(--board);
   display: grid;
   grid-template-columns: repeat(12, 1fr);
-  gap: 3px;
-  padding: 6px;
+  gap: var(--gap);
+  padding: var(--pad);
   background: var(--road);
   border: 3px solid var(--line);
   border-radius: 6px;
@@ -1076,6 +1080,27 @@ main {
   --spin: 35deg;
   transform: rotateX(var(--tilt)) rotateZ(var(--spin));
   transition: transform 300ms ease-out;
+}
+
+/* The districts (docs/adr/0010): a thin neon line down the road between
+   every fourth row and column, drawn in the board's own plane under the
+   tiles. The line sits on the gap's centre: the padding, four or eight
+   tiles, and three and a half (or seven and a half) gaps in. Gradients only,
+   no extra boxes and no clip-path. */
+.board::before {
+  --tile: calc((100% - 2 * var(--pad) - 11 * var(--gap)) / 12);
+  --x1: calc(var(--pad) + 4 * var(--tile) + 3.5 * var(--gap));
+  --x2: calc(var(--pad) + 8 * var(--tile) + 7.5 * var(--gap));
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 3px;
+  background:
+    linear-gradient(90deg, transparent calc(var(--x1) - 1px), var(--district-line) calc(var(--x1) - 1px) calc(var(--x1) + 1px), transparent calc(var(--x1) + 1px)),
+    linear-gradient(90deg, transparent calc(var(--x2) - 1px), var(--district-line) calc(var(--x2) - 1px) calc(var(--x2) + 1px), transparent calc(var(--x2) + 1px)),
+    linear-gradient(180deg, transparent calc(var(--x1) - 1px), var(--district-line) calc(var(--x1) - 1px) calc(var(--x1) + 1px), transparent calc(var(--x1) + 1px)),
+    linear-gradient(180deg, transparent calc(var(--x2) - 1px), var(--district-line) calc(var(--x2) - 1px) calc(var(--x2) + 1px), transparent calc(var(--x2) + 1px));
 }
 
 .board.is-instant {
@@ -1956,6 +1981,53 @@ main {
   background: var(--zone-factory);
 }
 
+/* A district's mayor (docs/adr/0010): a gold star standing on the roof's
+   near-left corner, facing the camera like the crown and the zone sign, which
+   stand at the centre and the right edge, so a crowned, zoned mayor shows
+   all three. A glyph with a hard black outline: no clip-path on a 3D face.
+   Hidden while a preview uses the roof. */
+.mayor-mark {
+  display: none;
+  position: absolute;
+  left: 8%;
+  top: 92%;
+  pointer-events: none;
+  font-family: var(--display);
+  font-size: calc(var(--unit) * 1.5 + 4px);
+  line-height: 1;
+  color: var(--accent);
+  -webkit-text-stroke: 1.5px var(--line);
+  paint-order: stroke fill;
+  text-shadow: 1px 1px 0 var(--line);
+  translate: -50% -85% 2px;
+  transform-origin: 50% 100%;
+  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
+}
+
+.mayor-mark::before {
+  content: "\2605";
+}
+
+.tile[data-mayor]:not([data-preview]) .mayor-mark {
+  display: block;
+}
+
+.swatch[data-swatch="mayor"] {
+  display: grid;
+  place-items: center;
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+  -webkit-text-stroke: 1px var(--line);
+  paint-order: stroke fill;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.swatch[data-swatch="mayor"]::before {
+  content: "\2605";
+}
+
 /* the rezone buttons in your own building's inspector */
 .zone-buttons {
   display: flex;
@@ -2445,8 +2517,8 @@ body:has(.confirm:not([hidden])) main {
   .board {
     --tilt: 36deg;
     --spin: 20deg;
-    gap: 2px;
-    padding: 4px;
+    --gap: 2px;
+    --pad: 4px;
   }
 
   .crown-icon {

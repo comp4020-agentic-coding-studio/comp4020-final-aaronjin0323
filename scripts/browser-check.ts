@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
+import { DISTRICT_PIDS, DISTRICT_SCENE } from "./seed-demo.ts";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
 refuseProduction(APP);
@@ -1255,6 +1256,71 @@ async function zoning(browser: Browser): Promise<void> {
   await sharp.context().close();
 }
 
+// --- districts and mayors (docs/adr/0010) ---
+// A mayor needs levels that take hours of income, so this plays a board
+// seeded with `node scripts/seed-demo.ts districts` on a fresh DB_PATH; on
+// any other board it says so and checks only the grid lines.
+async function districts(browser: Browser): Promise<void> {
+  console.log("\n— districts: the grid, the mayor's star, and taking the seat —");
+  const as = (name: keyof typeof DISTRICT_PIDS): Player => ({ pid: DISTRICT_PIDS[name], label: name });
+  const at = (name: string) => DISTRICT_SCENE.find(([n]) => n === name)![1];
+  const page = await freshAs(browser, as("Rex"));
+  // the grid: a line every four plots, painted on the board itself
+  const grid = await page.$eval(".board", (el) => getComputedStyle(el, "::before").backgroundImage);
+  check((grid.match(/linear-gradient/g) ?? []).length === 4, "the board draws four district lines", grid.slice(0, 60));
+  const seeded = (await page.getAttribute(`button.tile[value="${at("Kai")}"]`, "data-level")) === "3";
+  if (!seeded) {
+    console.log("  (not the seeded districts board: run seed-demo.ts districts on a fresh DB_PATH to check mayors)");
+    await page.context().close();
+    return;
+  }
+  const mayors = () => page.$$eval("button.tile[data-mayor]", (els) => els.map((e) => Number((e as HTMLButtonElement).value)));
+  const starShown = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"] .mayor-mark`, (el) => getComputedStyle(el).display !== "none");
+  check(JSON.stringify(await mayors()) === JSON.stringify([at("Kai")]), "Kai, top of district 5 over two Lv2s, is its only mayor", JSON.stringify(await mayors()));
+  check(await starShown(page, at("Kai")), "and wears a star on his roof");
+  check(!(await starShown(page, at("Bo"))) && !(await starShown(page, at("Cy"))), "a tie at Lv3 is no mayor: no star");
+  const aria = (await page.getAttribute(`button.tile[value="${at("Kai")}"]`, "aria-label")) ?? "";
+  check(/mayor of district 5/.test(aria), "the star has words for a screen reader", aria);
+  // the star, the crown and the factory sign on one roof, none on another
+  const boxes = await page.$eval(`button.tile[value="${at("Kai")}"]`, (el) =>
+    [".mayor-mark", ".zone-mark", ".crown"].map((s) => {
+      const r = el.querySelector(s)!.getBoundingClientRect();
+      return { s, x: r.x, y: r.y, w: r.width, h: r.height };
+    }),
+  );
+  const overlap = (a: (typeof boxes)[number], b: (typeof boxes)[number]) =>
+    Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  const star = boxes[0];
+  const hit = boxes.slice(1).map((b) => overlap(star, b) / (star.w * star.h));
+  check(star.w > 4 && hit.every((f) => f < 0.25), "the star stands clear of the zone sign and the crown", hit.map((f) => f.toFixed(2)).join(", "));
+  // the inspector says who's mayor, and what Rex needs
+  await clickTile(page, at("Rex"));
+  const facts = await page.$eval("[data-inspect-facts]", (el) => el.textContent ?? "");
+  check(facts.includes("District 8Lv4 to be mayor"), "Rex's inspector says what it takes", facts);
+  await hoverTile(page, at("Kai"));
+  const kai = await page.$eval("[data-inspect-facts]", (el) => el.textContent ?? "");
+  check(/District 5Mayor \+16%/.test(kai), "Kai's says Mayor +16%", kai);
+  // Rex upgrades: Ivy is now mayor over him, and both are told in a line
+  const ivy = await freshAs(browser, as("Ivy"));
+  const heard = ivy.waitForSelector('[data-notice="mayor"]', { timeout: 3000 }).catch(() => null);
+  await page.click('[data-act="upgrade"]');
+  await page.waitForSelector('[data-notice="upgraded"], [data-notice="mayor"]', { timeout: 3000 }).catch(() => null);
+  check((await heard) !== null && (await noticeOf(ivy)) === "You're mayor! +8%", "Ivy is told she's mayor", await noticeOf(ivy));
+  await ivy.waitForSelector(`button.tile[value="${at("Ivy")}"][data-mayor]`, { timeout: 2000 }).catch(() => null);
+  check(await starShown(ivy, at("Ivy")), "and the star goes up on her roof");
+  // close up and still, at 4x
+  for (const p of [page, ivy]) await p.context().close();
+  // a visitor with no land, so no marker or income float of their own crowds the roofs
+  const sharp = await freshAs(browser, player("Onlooker"), { deviceScaleFactor: 4, reducedMotion: "reduce" });
+  const box = await sharp.$eval(`button.tile[value="${at("Kai")}"]`, (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.x - 90), y: Math.max(0, r.y - 100), width: r.width + 200, height: r.height + 190 };
+  });
+  await sharp.screenshot({ path: ".shots/districts-4x.png", clip: box });
+  await sharp.locator("[data-stage]").screenshot({ path: ".shots/districts.png" });
+  await sharp.context().close();
+}
+
 // --- a stranger, cold: what's on the first screen, and the first minute ---
 
 // The words a person can actually see: text in rendered elements on the
@@ -1567,6 +1633,7 @@ const SECTIONS = {
   parks,
   returning, // after parks: its two buildings would sit just outside parks' open patch
   zoning,
+  districts,
   viewports,
   richBoard,
   busyBoard,

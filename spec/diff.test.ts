@@ -34,6 +34,7 @@ import {
   returnGlow,
   returnTarget,
   rezoneOptions,
+  seatText,
   tileAria,
   timeLeft,
   upgradeInfo,
@@ -526,6 +527,74 @@ describe("zoning (docs/adr/0009)", () => {
     expect(doc.querySelector(`button.tile[value="${at(5, 7)}"]`)!.getAttribute("data-zone")).toBe("civic");
     expect(doc.querySelector(`button.tile[value="${at(0, 0)}"]`)!.hasAttribute("data-zone")).toBe(false);
     expect(doc.querySelector(`button.tile[value="${at(5, 5)}"]`)!.getAttribute("aria-label")).toMatch(/Kai's Small House, market, height 1/);
+  });
+});
+
+describe("districts and mayors (docs/adr/0010)", () => {
+  // Lv2+ buildings take income, so these boards are built from stored rows
+  // directly: levels, holders and plots are all the rules read.
+  const board = (list: [number, string, number][], me = ME) => {
+    const rows: Tile[] = Array.from({ length: 144 }, (_, id) => row(id, null));
+    for (const [id, pid, level] of list) rows[id] = row(id, pid, level);
+    return boardView(rows, me, NOW);
+  };
+
+  it("says in the inspector who is mayor, what it pays them, and on my own building what it takes", () => {
+    // the centre district (5): Mia Lv3 mayor over Kai's Lv2 and mine
+    const v = board([[at(4, 4), MIA, 3], [at(7, 7), KAI, 2], [at(5, 7), ME, 2]]);
+    const fact = (id: number) => inspect(v, id, NOW)!.facts.find(([k]: [string]) => k === "District 5")?.[1];
+    expect(fact(at(4, 4))).toBe("Mayor +16%");
+    expect(fact(at(7, 7))).toBe("MIA-PID is mayor");
+    expect(fact(at(5, 7))).toBe("MIA-PID is mayor · Lv4 to take mayor");
+    expect(seatText(v, at(5, 7))).toBe("MIA-PID is mayor · Lv4 to take mayor");
+    // alone at Lv2 in a district: one more Lv2+ needed
+    expect(seatText(board([[at(0, 0), ME, 2]]), at(0, 0))).toBe("1 more Lv2+ to be mayor");
+    // a Small House with nobody about: what to run on
+    expect(seatText(board([[at(0, 0), ME, 1]]), at(0, 0))).toBe("Lv2 to run for mayor");
+    // a tie at Lv3: nobody, and Lv4 takes it
+    expect(seatText(board([[at(0, 0), ME, 3], [at(3, 3), MIA, 3]]), at(0, 0))).toBe("Lv4 to be mayor");
+    // a Small House beside a lone Lv2: Lv3 to be mayor over it
+    expect(seatText(board([[at(0, 0), ME, 1], [at(3, 3), MIA, 2]]), at(0, 0))).toBe("Lv3 to be mayor");
+    // someone else's building, with nobody mayor, says nothing
+    expect(seatText(board([[at(0, 0), MIA, 1]], ME), at(0, 0))).toBeNull();
+    // I'm mayor, seen from a rival's tile on my own page
+    expect(seatText(board([[at(4, 4), ME, 3], [at(7, 7), KAI, 2]]), at(7, 7))).toBe("You're mayor");
+  });
+
+  it("tells me in one line when I become mayor, lose it, or someone takes it, never elsewhere", () => {
+    const base: [number, string, number][] = [[at(4, 4), ME, 3], [at(7, 7), KAI, 2]];
+    const alone = board([[at(4, 4), ME, 3], [at(7, 7), KAI, 1]]);
+    const mayor = board(base);
+    expect(diffBoards(alone, mayor).messages).toEqual([{ key: "mayor", text: "You're mayor! +8%", said: "You're mayor of district 5: 8% more income." }]);
+    // Kai ties me: nobody
+    expect(diffBoards(mayor, board([[at(4, 4), ME, 3], [at(7, 7), KAI, 3]])).messages[0]).toMatchObject({ key: "mayor", text: "You're no longer mayor" });
+    // Kai passes me
+    const kai = board([[at(4, 4), ME, 3], [at(7, 7), KAI, 4]]);
+    expect(diffBoards(mayor, kai).messages[0]).toMatchObject({ key: "mayor", text: "KAI-PID took mayor" });
+    // from a tie, Kai takes it: I'm told, as I stand in the district
+    expect(diffBoards(board([[at(4, 4), ME, 3], [at(7, 7), KAI, 3], [at(6, 4), ZOE, 2]]), board([[at(4, 4), ME, 3], [at(7, 7), KAI, 4], [at(6, 4), ZOE, 2]])).messages[0]).toMatchObject({ text: "KAI-PID took mayor" });
+    // a seat changing in another district says nothing to me
+    expect(diffBoards(board([...base, [at(0, 0), MIA, 2]]), board([...base, [at(0, 0), MIA, 2], [at(1, 1), ZOE, 3]])).messages).toEqual([]);
+    // nothing changed: nothing said
+    expect(diffBoards(mayor, board(base)).messages).toEqual([]);
+    // the line is short
+    for (const m of [...diffBoards(alone, mayor).messages, ...diffBoards(mayor, kai).messages]) expect(m.text.split(/\s+/).length).toBeLessThanOrEqual(4);
+  });
+
+  it("names the mayor in the tile's words, the city log and the server's page, with a star on the roof", () => {
+    const v = board([[at(4, 4), MIA, 3], [at(7, 7), KAI, 2]]);
+    const html = renderBoard(v, "", { now: NOW });
+    const doc = new JSDOM(html).window.document;
+    const mayors = [...doc.querySelectorAll("button.tile[data-mayor]")].map((el) => Number((el as HTMLButtonElement).value));
+    expect(mayors).toEqual([at(4, 4)]);
+    expect(doc.querySelector(`button.tile[value="${at(4, 4)}"]`)!.getAttribute("aria-label")).toMatch(/MIA-PID's Apartment, mayor of district 5, height 3$/);
+    expect(doc.querySelector(`button.tile[value="${at(7, 7)}"]`)!.getAttribute("aria-label")).not.toMatch(/mayor/);
+    // every tile has its district and its star span, for the page to patch
+    expect([...doc.querySelectorAll("button.tile")].map((el) => Number(el.getAttribute("data-district")))).toEqual(v.tiles.map((t) => t.district));
+    expect(doc.querySelectorAll("button.tile .mayor-mark")).toHaveLength(144);
+    // the board's script data carries the mayors for the page's first board
+    expect(JSON.parse(doc.querySelector("[data-board-data]")!.textContent!).mayors).toEqual(v.mayors);
+    expect(eventText({ type: "mayor", label: "Kai", cellId: at(4, 4) })).toBe("Kai became mayor of district 5");
   });
 });
 

@@ -30,6 +30,7 @@ import {
   returnGlow,
   returnWords,
   rezoneOptions,
+  mayorAt,
   statusText,
   tileAria,
   tileWords,
@@ -283,7 +284,11 @@ if (board && stage) {
     setData(el, "return", back ? "" : null);
     const beacon = el.querySelector(".beacon");
     setData(beacon, "back", back ? `+${ECONOMY.returnBonus}` : null);
-    const aria = back ? returnWords(tileAria(tileWords(t, now), mark)) : tileAria(tileWords(t, now), mark);
+    // the district's mayor wears a star (docs/adr/0010)
+    const mayor = mayorAt(shownBoard, t.id) !== null;
+    setData(el, "mayor", mayor ? "" : null);
+    const said = tileWords(t, now, mayor);
+    const aria = back ? returnWords(tileAria(said, mark)) : tileAria(said, mark);
     if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
     if (mark) {
       el.dataset.landmark = mark.label;
@@ -339,6 +344,7 @@ if (board && stage) {
       landmarks: readLandmarks(),
       me: extra.me ?? null,
       events: extra.events ?? [],
+      mayors: extra.mayors ?? [],
       tiles: tiles.map((el, id) => ({
         id,
         state: el.dataset.state,

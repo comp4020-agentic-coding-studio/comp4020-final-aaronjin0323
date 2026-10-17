@@ -180,6 +180,47 @@ export const mayorsOf = (board) =>
     ? board.mayors
     : [...seatsOf(levelsOf(board)).values()].sort((a, b) => a.district - b.district).map((m) => ({ district: m.district, cellId: m.cellId, label: board.tiles[m.cellId].label }));
 export const mayorAt = (board, id) => mayorsOf(board).find((m) => m.cellId === id) ?? null;
+// A district as people read it: 1..9.
+export const districtName = (d) => `district ${d + 1}`;
+
+// What a district's seat looks like from one building on the board: its
+// mayor (or null), what the seat pays them, whether it's this building's,
+// and, for one that isn't, the shortest way to it: `to`, the level that
+// would stand alone at the top (null past a Skyscraper), or `more`, the
+// Lv2+ buildings still needed round a building already alone at the top.
+// Every building is a different person's, so `rivals` is every other Lv2+
+// building in the district.
+export function seatInfo(board, id) {
+  const t = board.tiles[id];
+  if (!claimed(t)) return null;
+  const d = districtOf(id);
+  const levels = levelsOf(board);
+  const rivals = levels.filter((l, i) => i !== id && districtOf(i) === d && l >= ECONOMY.mayorMinLevel);
+  const mayor = mayorsOf(board).find((m) => m.district === d) ?? null;
+  const seat = seatsOf(levels).get(d);
+  const level = levelOf(t);
+  const top = Math.max(0, ...rivals);
+  const info = { district: d, mayor, pays: seat ? mayorBonus(seat.others) : 0, level, top, rivals: rivals.length };
+  if (mayor?.cellId === id) return { ...info, mine: true };
+  if (level >= ECONOMY.mayorMinLevel && level > top) return { ...info, mine: false, more: Math.max(0, ECONOMY.mayorMinOthers - rivals.length) };
+  const to = Math.max(ECONOMY.mayorMinLevel, top + 1);
+  return { ...info, mine: false, to: to <= MAX_LEVEL ? to : null };
+}
+
+// The inspector's district line: "Mayor +16%", "Kai is mayor", or what it
+// takes from here: "Lv4 to take mayor", "1 more Lv2+ to be mayor", "Lv2 to
+// run for mayor". Only your own building is told how to win the seat.
+export function seatText(board, id) {
+  const s = seatInfo(board, id);
+  if (!s) return null;
+  if (s.mine) return `Mayor +${s.pays}%`;
+  const who = s.mayor ? (board.tiles[s.mayor.cellId]?.state === "mine" ? "You're mayor" : `${s.mayor.label} is mayor`) : null;
+  if (board.tiles[id].state !== "mine") return who;
+  if (s.more !== undefined) return s.more > 0 ? `${s.more} more Lv${ECONOMY.mayorMinLevel}+ to be mayor` : who;
+  if (s.to === null) return who ?? "Tied at the top";
+  const goal = s.mayor ? "take mayor" : s.top >= ECONOMY.mayorMinLevel ? "be mayor" : "run for mayor";
+  return `${who ? `${who} · ` : ""}Lv${s.to} to ${goal}`;
+}
 
 // A building's rate as shown, or worked out from the board when it isn't.
 const shownRate = (board, t) => (Number.isFinite(t.rate) && t.rate > 0 ? t.rate : rateOf(levelOf(t), neighboursOf(board, t), bonusTerms(board)[t.id]));
@@ -606,6 +647,31 @@ export function diffBoards(prev, next) {
     }
   }
 
+  // My district's seat (docs/adr/0010), for my own building only: I became
+  // mayor, I lost it, or someone took the seat in the district I stand in.
+  // One line, and only when nothing else about my building was said.
+  if (nextMine && messages.length === 0) {
+    const d = districtOf(nextMine.id);
+    const stayed = prevMine !== null && districtOf(prevMine.id) === d;
+    const was = stayed ? (mayorsOf(prev).find((m) => m.district === d) ?? null) : null;
+    const is = mayorsOf(next).find((m) => m.district === d) ?? null;
+    const iWas = was !== null && was.cellId === prevMine.id;
+    const iAm = is !== null && is.cellId === nextMine.id;
+    const where = districtName(d);
+    if (iAm && !iWas) {
+      const gain = seatInfo(next, nextMine.id).pays;
+      messages.push({ key: "mayor", text: `You're mayor! +${gain}%`, said: `You're mayor of ${where}: ${gain}% more income.` });
+    } else if (iWas && !iAm) {
+      messages.push(
+        is
+          ? { key: "mayor", text: `${is.label} took mayor`, said: `${is.label} took mayor of ${where} from you.` }
+          : { key: "mayor", text: "You're no longer mayor", said: `You're no longer mayor of ${where}.` },
+      );
+    } else if (stayed && is && !iAm && was?.cellId !== is.cellId) {
+      messages.push({ key: "mayor", text: `${is.label} took mayor`, said: `${is.label} became mayor of ${where}.` });
+    }
+  }
+
   return { rises, messages };
 }
 
@@ -794,6 +860,8 @@ export function eventText(e) {
       return `${who} zoned ${e.zone === "civic" || !e.zone ? "civic" : `a ${e.zone}`}`;
     case "landmark":
       return `Landmark raised${where}`;
+    case "mayor":
+      return `${who} became mayor${Number.isInteger(cell) ? ` of ${districtName(districtOf(cell))}` : ""}`;
     default:
       return `${who}${where}`;
   }
@@ -804,7 +872,7 @@ export function eventText(e) {
 export const initialsOf = (label) => Array.from(String(label ?? "").trim()).slice(0, 2).join("");
 
 // A plot's aria-label, from the tile alone (the board sends no words).
-export function tileWords(t, now = new Date()) {
+export function tileWords(t, now = new Date(), mayor = false) {
   const where = place(t.id).replace(/^r/, "R");
   if (t.state === "free") return `${where}, free plot`;
   if (isPark(t)) return `${where}, ${parkName(t)}`;
@@ -812,7 +880,8 @@ export function tileWords(t, now = new Date()) {
   const who = t.state === "mine" ? `your ${kind}, ${t.label}` : `${t.label}'s ${kind}`;
   const soon = leaseSoon(t, now) ? ", lease ending soon" : "";
   const zone = zoneOf(t) === "civic" ? "" : `, ${zoneOf(t)}`;
-  return `${where}, ${who}${zone}, height ${t.height}${soon}`;
+  const seat = mayor ? `, mayor of ${districtName(districtOf(t.id))}` : "";
+  return `${where}, ${who}${zone}${seat}, height ${t.height}${soon}`;
 }
 
 // The status line: never on screen, but it describes the board to a screen
@@ -926,6 +995,9 @@ export function inspect(board, id, now) {
     facts.push(["Neighbours", `${around} of ${neighbours(id).length}`]);
     // a zone that does something (docs/adr/0009); civic is the baseline
     if (zoneOf(t) !== "civic") facts.push(["Zone", `${zoneName(zoneOf(t))} · ${zoneEffect(zoneOf(t))}`]);
+    // the district's seat (docs/adr/0010), when there's one to speak of
+    const seat = seatText(board, id);
+    if (seat) facts.push([capital(districtName(districtOf(id))), seat]);
     const lease = timeLeft(t.leaseEndsAt, now);
     if (lease) facts.push(["Lease", lease === "ended" ? "ended" : `${lease} left`]);
   }
