@@ -538,7 +538,15 @@ export function welcomeSaid(me) {
   const text = welcomeText(me);
   return text === null ? null : `Welcome back! Your building earned ${text.match(/\d+/)[0]} coins while you were away.`;
 }
-export const expiredText = (me) => (me?.expired ? EXPIRED_TEXT : null);
+// A lease that ended is the louder news, but it mustn't hide the money the
+// building left: the next-day return has to show both. The figure is what
+// Collect pays (everything waiting), not what was earned since the last
+// visit, so the line and the button never disagree.
+export function expiredText(me) {
+  if (!me?.expired) return null;
+  const waiting = collectable(Number(me.pending) || 0);
+  return waiting >= 1 ? `Your lease ended. ${waiting} coins waiting: collect, then pick a new plot.` : EXPIRED_TEXT;
+}
 
 // What claiming or moving says: "Your building is up! +14/min · Mia and
 // Kai +20%".
@@ -902,10 +910,25 @@ export const RENEW_SHOWN_MS = 6 * HOUR;
 // be used: the page leaves them out rather than drawing them disabled.
 export function hudParts(board, now, pending = meOf(board)?.pending ?? 0) {
   const mine = mineOf(board);
-  if (!mine) return null;
   const me = meOf(board);
   const coins = me?.coins ?? 0;
   const owed = collectable(pending);
+  // No land, but earnings an ended lease left behind: the wallet shows them
+  // with Collect, and nothing that needs a building.
+  if (!mine) {
+    if (!me || owed < 1) return null;
+    return {
+      coins: String(coins),
+      coinsSaid: `${coins} coins`,
+      rate: "+0/min",
+      rateSaid: "No income: no land",
+      level: 0,
+      collect: { owed, text: `+${owed}`, said: `Collect ${owed} coins` },
+      upgrade: null,
+      lease: { left: "", frac: 0, soon: false, said: "No lease" },
+      renew: [],
+    };
+  }
   const n = neighboursOf(board, mine);
   const rate = Number.isFinite(mine.rate) && mine.rate > 0 ? mine.rate : rateOf(levelOf(mine), n, bonusTerms(board)[mine.id]);
   const leaseIso = me?.leaseEndsAt ?? mine.leaseEndsAt ?? null;

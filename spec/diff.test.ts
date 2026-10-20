@@ -22,6 +22,7 @@ import {
   heldText,
   helpButtonText,
   helpsWith,
+  expiredText,
   hudParts,
   inspect,
   leaseSoon,
@@ -285,8 +286,18 @@ describe("the returning player's notices", () => {
     const doc = (me: object) => new JSDOM(renderBoard(withMe(scene().view(), me), "")).window.document;
     expect(doc({ welcome: 12 }).querySelector('[data-notice="welcome"]')?.textContent).toBe("Welcome back! +12 earned");
     expect(doc({ expired: true }).querySelector('[data-notice="expired"]')?.textContent).toBe("Your lease ended. Pick a new plot.");
-    // one line at a time: a lease that ended wins over a welcome
+    // one line at a time, but a lease that ended doesn't hide what was earned
     expect(doc({ welcome: 12, expired: true }).querySelectorAll("[data-notice]")).toHaveLength(1);
+    // The figure is what Collect pays, so the line and the button agree.
+    expect(doc({ welcome: 12, expired: true, pending: 1250 }).querySelector("[data-notice]")?.textContent).toBe("Your lease ended. 12 coins waiting: collect, then pick a new plot.");
+    expect(expiredText({ expired: true, welcome: 12, pending: 288000 })).toBe("Your lease ended. 2880 coins waiting: collect, then pick a new plot.");
+    expect(expiredText({ expired: true, pending: 99 })).toBe("Your lease ended. Pick a new plot.");
+    expect(expiredText({ expired: true })).toBe("Your lease ended. Pick a new plot.");
+    // and the earnings it left are on the page to collect, with no land held
+    const lost = doc({ expired: true, pending: 288000 });
+    expect(lost.querySelector("[data-wallet]")?.hasAttribute("hidden")).toBe(false);
+    expect(lost.querySelector('[data-act="collect"]')?.hasAttribute("hidden")).toBe(false);
+    expect(lost.querySelector('[data-act="upgrade"]')?.hasAttribute("hidden")).toBe(true);
     expect(doc({}).querySelectorAll("[data-notice]")).toHaveLength(0);
   });
 });
@@ -654,9 +665,25 @@ describe("the wallet: only what you can act on now", () => {
     return view();
   };
 
-  it("doesn't exist without land", () => {
+  it("doesn't exist without land, unless money is waiting", () => {
     expect(hudParts(scene().view(), NOW)).toBeNull();
     expect(hudParts({ ...scene().view(), me: undefined }, NOW)).toBeNull();
+    // A newcomer's 100 starting coins aren't a reason to show anything.
+    expect(hudParts(withMe(scene().view(), { coins: 100, pending: 0 }), NOW)).toBeNull();
+  });
+
+  // The next-day return (the final project's persistence check): a lease that
+  // ended while you were away left its earnings waiting. Hiding the wallet
+  // then made the money look lost, with no way to collect it.
+  it("shows coins and Collect, and nothing that needs land, when a lost lease left earnings", () => {
+    const h = hudParts(withMe(scene().view(), { coins: 100, pending: 288000 }), NOW)!;
+    expect(h).not.toBeNull();
+    expect(h.coins).toBe("100");
+    expect(h.collect).toEqual({ owed: 2880, text: "+2880", said: "Collect 2880 coins" });
+    expect(h.upgrade).toBeNull();
+    expect(h.renew).toEqual([]);
+    expect(h.level).toBe(0);
+    expect(h.rate).toBe("+0/min");
   });
 
   it("shows coins, income as +N/min, and the lease as a full ring for a new owner", () => {

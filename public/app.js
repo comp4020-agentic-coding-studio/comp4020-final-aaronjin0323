@@ -437,10 +437,12 @@ if (board && stage) {
   const showHud = () => {
     const now = new Date();
     const h = hudParts(shown, now, pendingNow(shown.me, pendingSince, now));
-    form?.toggleAttribute("data-land", h !== null);
-    setData(board, "invite", h === null ? "" : null);
-    show(wallet, h !== null);
     const mine = mineIndex();
+    // Land, not the wallet: with no land the wallet can still show, to
+    // collect what an ended lease left, and the free plots still invite.
+    form?.toggleAttribute("data-land", mine >= 0);
+    setData(board, "invite", mine < 0 ? "" : null);
+    show(wallet, h !== null);
     if (!h) {
       owedMark.remove();
       return;
@@ -449,7 +451,9 @@ if (board && stage) {
     setText(hud.coinsSaid, h.coinsSaid);
     setText(hud.rate, h.rate);
     setText(hud.rateSaid, h.rateSaid);
-    if (hud.lease) {
+    if (hud.lease) show(hud.lease, h.level > 0); // no land, no lease
+    show(hud.rate?.closest(".income"), h.level > 0); // and no income
+    if (hud.lease && h.level > 0) {
       hud.lease.style.setProperty("--lease", h.lease.frac.toFixed(3));
       if (hud.lease.getAttribute("aria-label") !== h.lease.said) {
         hud.lease.setAttribute("aria-label", h.lease.said);
@@ -791,22 +795,25 @@ if (board && stage) {
     }
   };
 
-  const sayExpired = () => {
+  const sayExpired = (me = null) => {
     if (once.has("expired")) return;
-    once.add("expired");
-    const text = expiredText({ expired: true });
+    once.add("expired").add("welcome"); // the one line says both
+    const text = expiredText({ ...me, expired: true });
     showNotice("expired", text);
   };
   const sayOnce = (me) => {
+    // A lease that ended is said first, with what was earned in the same line.
+    if (expiredText(me)) return sayExpired(me);
     const w = welcomeText(me);
     if (w && !once.has("welcome")) {
       once.add("welcome");
       showNotice("welcome", w, { said: welcomeSaid(me), at: mineIndex() >= 0 ? mineIndex() : null });
     }
-    if (expiredText(me)) sayExpired();
   };
   if (notices?.querySelector('[data-notice="welcome"]')) once.add("welcome");
-  if (notices?.querySelector('[data-notice="expired"]')) once.add("expired");
+  // The lease-ended line already carries what was earned away, so the
+  // stream's own welcome (opening it counts as a visit too) mustn't replace it.
+  if (notices?.querySelector('[data-notice="expired"]')) once.add("expired").add("welcome");
 
   // --- the city log, behind its icon ---
   const eventsList = document.querySelector("[data-events]");

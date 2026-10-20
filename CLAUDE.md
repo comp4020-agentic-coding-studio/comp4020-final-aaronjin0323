@@ -277,9 +277,14 @@ change: everything is derived from plots and levels.
 - Crit 9's dormant tiles (fading, waking by a visit, displacement) were
   replaced by leases in ADR 5.
 - **Losing land is told, not hidden.** When a lease ends, the player's next
-  visit says so once ("Your lease ended. Pick a new plot."), and their coins
-  and uncollected earnings are kept. A rule that takes something from you
-  has to be readable off the screen.
+  visit says so once, with what's waiting in the same line ("Your lease
+  ended. 2880 coins waiting: collect, then pick a new plot."; the figure is
+  what Collect pays, so the two never disagree), and their coins and
+  uncollected earnings are kept. With no land but earnings waiting, the
+  wallet shows coins and Collect only (no income, lease ring, Upgrade or
+  Renew). This is the next-day return a marker checks for persistence: an
+  empty board with the money hidden reads as data lost. A rule that takes
+  something from you has to be readable off the screen.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
   on a tile selects it and shows a full-width bar; its button ("Build here",
   or "Move here · 50" when you hold land) does the action. Mouse and keyboard
@@ -438,7 +443,8 @@ board, and as few words as possible.
 
 - **Show only what you can act on now.** Nothing is drawn disabled to
   explain itself. A control appears when it becomes possible and goes when
-  it isn't: no land means no dashboard and no action buttons; Upgrade appears
+  it isn't: no land means no dashboard and no action buttons (except
+  Collect, for earnings an ended lease left); Upgrade appears
   once you can afford it; Renew once the lease is under 6 h; Relocate and
   Help in the inspector of the plot you picked. The disabled-with-a-reason
   pattern is gone.

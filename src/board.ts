@@ -442,8 +442,8 @@ function wallet(view: BoardView, now: Date): string {
   const up = d.upgrade;
   return `<section class="wallet" data-wallet aria-label="Your city"${hiddenIf(h === null)}>
           <p class="purse" title="Coins"><span class="coin coin-big" data-coin aria-hidden="true"></span><span data-hud-coins aria-hidden="true">${d.coins}</span><span class="sr-only" data-hud-coins-said>${escapeHtml(d.coinsSaid)}</span></p>
-          <p class="income" title="Income"><span data-hud-rate aria-hidden="true">${escapeHtml(d.rate)}</span><span class="sr-only" data-hud-rate-said>${escapeHtml(d.rateSaid)}</span></p>
-          <span class="lease-ring" data-hud-lease role="img" aria-label="${escapeHtml(d.lease.said)}" title="${escapeHtml(d.lease.said)}" style="--lease:${d.lease.frac.toFixed(3)}"${d.lease.soon ? ` data-lease="soon"` : ""}></span>
+          <p class="income" title="Income"${hiddenIf(d.level === 0)}><span data-hud-rate aria-hidden="true">${escapeHtml(d.rate)}</span><span class="sr-only" data-hud-rate-said>${escapeHtml(d.rateSaid)}</span></p>
+          <span class="lease-ring" data-hud-lease role="img" aria-label="${escapeHtml(d.lease.said)}" title="${escapeHtml(d.lease.said)}" style="--lease:${d.lease.frac.toFixed(3)}"${d.lease.soon ? ` data-lease="soon"` : ""}${hiddenIf(d.level === 0)}></span>
           <div class="acts">
             <button class="act act-collect" data-act="collect" formaction="/collect" formnovalidate aria-label="${escapeHtml(d.collect?.said ?? "Collect")}"${hiddenIf(!d.collect)}><span class="act-name">Collect</span><span class="act-cost" data-hud-owed>${escapeHtml(d.collect?.text ?? "")}</span></button>
             <button class="act act-upgrade" data-act="upgrade" formaction="/upgrade" formnovalidate aria-label="${escapeHtml(up?.said ?? "Upgrade")}"${hiddenIf(!up)}><span class="act-up" aria-hidden="true"></span><span class="act-name" data-hud-next>${escapeHtml(up?.name ?? "")}</span><span class="act-cost"><span class="coin" aria-hidden="true"></span><span data-hud-cost>${up?.cost ?? ""}</span></span></button>
@@ -476,8 +476,10 @@ export function renderBoard(
   const back = returnGlow(view, now) as number | null;
   const markOf = (id: number): LandmarkCell | undefined =>
     Object.hasOwn(view.landmarks.cells, String(id)) ? view.landmarks.cells[String(id)] : undefined;
+  // Land, not the wallet: the wallet also shows, with no land, to collect
+  // what an ended lease left.
+  const land = view.tiles.some((t) => t.state === "mine");
   const hud = hudParts(view, now) as Hud | null;
-  const land = hud !== null;
   const seated = new Set(view.mayors.map((m) => m.cellId));
 
   return page({
