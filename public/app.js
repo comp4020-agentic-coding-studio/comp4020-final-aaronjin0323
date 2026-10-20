@@ -1112,6 +1112,9 @@ if (board && stage) {
     if (busy) return; // one action at a time: a second click or Enter does nothing
     const target = describeTile(shown, id, new Date());
     if (target.kind === "held" || target.kind === "park") {
+      // Looking at a building ends the plan to build on a plot picked before
+      // a name was typed, so Enter in the name field can't build there unseen.
+      want(null);
       const m = heldText(shown, id);
       return showNotice("held", m.text, { said: m.said, at: id });
     }
@@ -1188,6 +1191,7 @@ if (board && stage) {
         if (tile === selected && !holding && tile.dataset.state === "free") return void claim(id);
         select(tile === selected ? null : tile);
         if (selected && !holding && tile.dataset.state === "free" && !nameField.value.trim()) want(id);
+        else if (tile.dataset.state === "held" || tile.dataset.state === "park") want(null); // as in claim()
         return;
       }
       // A mouse click on a building or a park, or on a free plot while you

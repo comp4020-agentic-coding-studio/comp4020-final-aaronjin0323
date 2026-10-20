@@ -564,7 +564,9 @@ async function claiming(browser: Browser): Promise<void> {
     if (what === "the network failing") {
       const first = ((await empty.textContent("[data-notices]")) ?? "").trim();
       check(/^Connection lost: checking your claim$/.test(first), "a lost claim first says it's checking, not that nothing was claimed", first);
-      await empty.waitForTimeout(3500);
+      // Wait for the 3 s follow-up rather than a fixed sleep: a loaded
+      // machine ran it late and read "checking" again.
+      await empty.waitForFunction(() => /nothing claimed/.test(document.querySelector("[data-notices]")?.textContent ?? ""), null, { timeout: 8000 }).catch(() => null);
     }
     const text = ((await empty.textContent("[data-notices]")) ?? "").trim();
     check(pattern.test(text), `${what} is explained`, text);
@@ -621,6 +623,19 @@ async function touchInspect(browser: Browser): Promise<void> {
   const info = ((await page.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
   check((await shown(page, "[data-inspect]")) && /^Ana's Small House/.test(info.trim()) && / left$/.test(info.trim()), "tapping a building inspects it", info.trim());
   check((await page.$$eval("[data-preview]", (els) => els.length)) === 0, "and a held tile previews nothing");
+  // The free plot tapped before any name was typed is no longer the plan once
+  // a building is being looked at: it loses its ring, and Enter in the name
+  // field builds nothing behind the player's back. Found on the live site.
+  check((await hooks(page, centre)).wanted === undefined, "tapping a building drops the plot picked before a name was typed");
+  const posts: string[] = [];
+  const listen = (r: import("playwright-core").Request): void => void (r.method() === "POST" && posts.push(r.url()));
+  page.on("request", listen);
+  await page.fill("#label", "Stale");
+  await page.press("#label", "Enter");
+  await page.waitForTimeout(600);
+  page.off("request", listen);
+  check(posts.length === 0 && (await hooks(page, centre)).state === "free", "and Enter in the name field then builds nothing", posts.join(" "));
+  await page.fill("#label", "");
   await page.locator(".confirm-cancel").tap();
   check((await page.$$eval("[data-selected], [data-preview]", (els) => els.length)) === 0, "Cancel clears the selection and preview");
   check(!(await shown(page, "[data-inspect]")), "and the inspector");
