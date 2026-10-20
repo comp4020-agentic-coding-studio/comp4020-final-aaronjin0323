@@ -1,4 +1,6 @@
 import {
+  connAfter,
+  lostClaimText,
   accepts,
   arrivals,
   canHelp,
@@ -735,6 +737,7 @@ if (board && stage) {
   // --- every board comes through here ---
   const once = new Set();
   let actionMessage = null; // my claim's narration, waiting for its reply
+  let lostClaim = null; // a claim whose reply never came, until a board settles it
   const applyBoard = (next, { streamVersion = null } = {}) => {
     if (next.raised) celebrate(next.raised);
     if (!accepts(shown.version, next.version, streamVersion)) return;
@@ -745,6 +748,8 @@ if (board && stage) {
     const prevMine = mineIndex();
     shown = next;
     pendingSince = new Date();
+    const settled = lostClaim;
+    lostClaim = null;
     const now = new Date();
 
     next.tiles.forEach((t, i) => tiles[i] && patchTile(tiles[i], t, next, now));
@@ -771,6 +776,12 @@ if (board && stage) {
     look();
     sayOnce(next.me);
     const [m] = messages;
+    // A claim whose reply was lost: the first board after it settles it. If
+    // the tile came to me, the diff's own "claimed" message says so below.
+    if (settled !== null && next.tiles[settled]?.state !== "mine" && !m) {
+      const r = refusalText({ network: true }, { claim: true });
+      showNotice("network", r.text, { said: r.said, at: settled });
+    }
     if (m) {
       // My own claim or move is said when the server's reply confirms it,
       // even if the stream brought it first; my lease ending is said once.
@@ -900,13 +911,14 @@ if (board && stage) {
       reopened = false;
       setConn("live");
     });
-    events.addEventListener("open", () => setConn("live"));
+    events.addEventListener("open", () => setConn(connAfter("open")));
+    events.addEventListener("message", () => setConn(connAfter("message")));
     events.addEventListener("error", () => {
       reopened = true;
-      setConn(events.readyState === EventSource.CLOSED ? "offline" : "reconnecting");
+      setConn(connAfter("error", { closed: events.readyState === EventSource.CLOSED }));
     });
-    addEventListener("offline", () => setConn("offline"));
-    addEventListener("online", () => events.readyState !== EventSource.OPEN && setConn("reconnecting"));
+    addEventListener("offline", () => setConn(connAfter("offline")));
+    addEventListener("online", () => setConn(connAfter("online", { streamOpen: events.readyState === EventSource.OPEN })));
   } else setConn("offline");
 
   // --- actions: one POST each, one at a time ---
@@ -1129,6 +1141,24 @@ if (board && stage) {
             ? { key: "renamed", ...doneText("renamed", { label: r.body.label ?? nameField.value.trim() }) }
             : (actionMessage ?? { key: r.body.notice ?? "claimed", text: r.body.notice === "moved" ? "Moved!" : "Your building is up!", said: r.body.notice === "moved" ? "Moved." : "Your building is up." });
         showNotice(r.body.notice ?? "claimed", m.text, { said: raisedNews ? `${m.said} ${raisedNews}` : m.said, at: id });
+      } else if (r.network) {
+        // The reply was lost, not necessarily the claim: say what the board says.
+        const m = lostClaimText(shown, id);
+        showNotice(m.key, m.text, { said: m.said, at: id });
+        if (m.key === "network") {
+          // On a quiet board no new board may come to settle it. A claim the
+          // server made reaches the stream within a second (realtime.test.ts),
+          // so a live stream that still shows it free a few seconds on means
+          // it wasn't made.
+          lostClaim = id;
+          setTimeout(() => {
+            if (lostClaim !== id || conn?.dataset.conn !== "live") return;
+            lostClaim = null;
+            if (shown.tiles[id]?.state === "mine") return;
+            const r = refusalText({ network: true }, { claim: true });
+            showNotice("network", r.text, { said: r.said, at: id });
+          }, 3000);
+        }
       } else {
         const m = refusal(r, { claim: true });
         showNotice(refusalKey(r), m.text, { said: m.said, at: id });

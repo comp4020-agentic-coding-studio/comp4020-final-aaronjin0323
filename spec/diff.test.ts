@@ -5,6 +5,8 @@ import { type Landmark, type Me, openStore, type Park, type Store, type Tile } f
 import { ECONOMY as SERVER_ECONOMY, rate as serverRate } from "../src/economy.ts";
 import {
   accepts,
+  connAfter,
+  lostClaimText,
   arrivals,
   canHelp,
   canPark,
@@ -210,6 +212,32 @@ describe("what each action's answer says", () => {
     expect(refusalText({ network: true }).text).toBe("Can't reach the server: nothing changed");
     expect(refusalText({ status: 500 }).text).toBe("That didn't work (error 500)");
     expect(refusalText({ error: "constructor", status: 400 }).text).toBe("That didn't work (error 400)");
+  });
+
+  // A slow or dropped connection (the top marking band names one). Both were
+  // found on Slow 3G against a local server: the line stuck on "Offline" with
+  // the stream still open, and a claim the server made reported as not made.
+  it("says Live again when the browser comes back online and the stream never closed", () => {
+    expect(connAfter("online", { streamOpen: true })).toBe("live");
+    expect(connAfter("online", { streamOpen: false })).toBe("reconnecting");
+    expect(connAfter("offline", { streamOpen: true })).toBe("offline");
+    expect(connAfter("message", { streamOpen: true })).toBe("live");
+    expect(connAfter("error", { streamOpen: false, closed: true })).toBe("offline");
+    expect(connAfter("error", { streamOpen: false, closed: false })).toBe("reconnecting");
+  });
+
+  it("never says nothing was claimed when the board shows the claim went through", () => {
+    const { store, view } = scene();
+    const before = view();
+    store.claim(40, ME, "Mo", NOW);
+    const after = view();
+    // The reply was lost but the stream already shows tile 40 as mine.
+    expect(lostClaimText(after, 40)).toEqual({ key: "claimed", text: "Your building is up!", said: "Your building is up." });
+    // Still free on every board the page has: honest about not knowing.
+    const unknown = lostClaimText(before, 40);
+    expect(unknown.key).toBe("network");
+    expect(unknown.text).not.toMatch(/nothing claimed/i);
+    expect(unknown.text).toMatch(/connection/i);
   });
 
   it("says whose a building is when it's clicked", () => {

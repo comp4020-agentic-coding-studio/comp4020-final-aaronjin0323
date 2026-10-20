@@ -558,11 +558,37 @@ async function claiming(browser: Browser): Promise<void> {
     await empty.route("**/claim", handler);
     await clickTile(empty, other);
     await empty.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 3000 }).catch(() => null);
+    // A lost request may still have reached the server, so the page first
+    // says it's checking, and says nothing was claimed only once the live
+    // board still shows the tile free (slow-connection fix 3).
+    if (what === "the network failing") {
+      const first = ((await empty.textContent("[data-notices]")) ?? "").trim();
+      check(/^Connection lost: checking your claim$/.test(first), "a lost claim first says it's checking, not that nothing was claimed", first);
+      await empty.waitForTimeout(3500);
+    }
     const text = ((await empty.textContent("[data-notices]")) ?? "").trim();
     check(pattern.test(text), `${what} is explained`, text);
     check((await hooks(empty, other)).state === "free", `and after ${what} the tile isn't shown as mine`);
     await empty.unroute("**/claim");
   }
+
+  // A claim the server made but whose reply was lost is reported as made,
+  // never "nothing claimed": the board the stream brought is the truth.
+  // Its own page, so `empty` still holds no land for the Space check below.
+  const replyless = await fresh(browser);
+  await replyless.fill("#label", "Replyless");
+  const lost = Number(await freeTile(replyless));
+  await replyless.route("**/claim", async (r) => {
+    await r.fetch();
+    await r.abort("internetdisconnected");
+  });
+  await clickTile(replyless, lost);
+  await replyless.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 5000 }).catch(() => null);
+  await replyless.waitForTimeout(500);
+  const lostText = ((await replyless.textContent("[data-notices]")) ?? "").trim();
+  check(!/nothing claimed/i.test(lostText), "a claim whose reply was lost is never reported as not made", lostText);
+  check((await hooks(replyless, lost)).state === "mine", "and the tile shows as mine");
+  await replyless.context().close();
 
   // Space claims a focused tile too.
   const spaced = Number(await freeTile(empty));

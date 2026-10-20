@@ -1082,6 +1082,24 @@ export function refusalText({ network = false, status = 0, error = null } = {}, 
   return { text, said: `${text}.` };
 }
 
+// The connection line after an event. The browser's `online` doesn't fire on
+// the stream, so if the stream stayed open the whole time, coming back online
+// means live: otherwise a quiet board said "Offline" until its next update.
+export function connAfter(event, { streamOpen = false, closed = false } = {}) {
+  if (event === "offline") return "offline";
+  if (event === "error") return closed ? "offline" : "reconnecting";
+  if (event === "online") return streamOpen ? "live" : "reconnecting";
+  return "live"; // open, or any message: the stream is plainly working
+}
+
+// A claim whose reply never came. The server may have made it anyway, so the
+// board the page holds decides: if the tile is mine there, it went through;
+// otherwise we don't know yet, and the stream will tell.
+export function lostClaimText(board, id) {
+  if (board?.tiles?.[id]?.state === "mine") return { key: "claimed", text: "Your building is up!", said: "Your building is up." };
+  return { key: "network", text: "Connection lost: checking your claim", said: "Connection lost. Checking whether your claim went through." };
+}
+
 // Clicking a building that isn't yours: whose it is.
 export function heldText(board, id) {
   const t = board.tiles[id];
