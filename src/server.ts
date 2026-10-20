@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, normalize, resolve, sep } from "node:path";
+import { gzipSync } from "node:zlib";
 import { boardView, isNotice, renderBoard } from "./board.ts";
 import { type Expiry, isActive, type Landmark, type MayorChange, openStore, type ParkEnd, TILES, type Visit } from "./db.ts";
 import { type Tier, tierRank } from "./economy.ts";
@@ -275,8 +276,22 @@ function validHours(raw: unknown): number | null {
 }
 
 function send(res: ServerResponse, status: number, type: string, body: string | Buffer): void {
-  res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store" });
-  res.end(body);
+  reply(res, status, { "Content-Type": type, "Cache-Control": "no-store" }, body);
+}
+
+// Text goes out gzipped to a client that accepts it: on a slow connection the
+// first load is ~285 KB plain and ~51 KB gzipped (spec/transfer.test.ts).
+// Small bodies aren't worth the header.
+function reply(res: ServerResponse, status: number, headers: Record<string, string>, body: string | Buffer): void {
+  const accepts = /\bgzip\b/.test(String(res.req.headers["accept-encoding"] ?? ""));
+  const bytes = typeof body === "string" ? Buffer.from(body) : body;
+  if (accepts && bytes.length > 1024 && /^(text\/|application\/json|image\/svg)/.test(headers["Content-Type"] ?? "")) {
+    res.writeHead(status, { ...headers, "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
+    res.end(gzipSync(bytes));
+  } else {
+    res.writeHead(status, { ...headers, Vary: "Accept-Encoding" });
+    res.end(bytes);
+  }
 }
 
 const sendJson = (res: ServerResponse, status: number, value: unknown): void =>
@@ -480,8 +495,7 @@ async function serveFile(res: ServerResponse, root: string, rel: string): Promis
   try {
     const data = await readFile(file);
     const fresh = type.startsWith("text/javascript") || type.startsWith("text/css");
-    res.writeHead(200, { "Content-Type": type, "Cache-Control": fresh ? "no-cache" : "public, max-age=300" });
-    res.end(data);
+    reply(res, 200, { "Content-Type": type, "Cache-Control": fresh ? "no-cache" : "public, max-age=300" }, data);
   } catch {
     notFound(res);
   }
