@@ -42,8 +42,8 @@ Settled; change them here first, then in the code.
 - **First claim wins.** Claiming a tile someone else holds fails: the form
   path redirects back with a visible "someone got there first" notice, and a
   script client gets `409`. Nobody can take a held tile. With JS, clicking a
-  tile the page already shows as held never posts: it says who holds it ("Ari
-  holds row 5, column 6"), so "got there first" only ever means a real race.
+  tile the page already shows as held never posts: it says whose it is
+  ("Ari's Townhouse"), so "got there first" only ever means a real race.
 - **Grid is 12×12 (144 tiles).** `N = 12` is a constant in code, not a config
   table.
 - **Height = building level + occupied neighbours** (ADR 5), counting the
@@ -93,12 +93,11 @@ Settled; change them here first, then in the code.
   whatever production already holds. A committed migration is never edited;
   a fix is a new step.
 
-### The city economy (ADR 5) — this section wins over any older rule
+### The city economy (ADR 5)
 
 Skyline is a city game: land on a lease, buildings that earn coins. Read
-`docs/adr/0005-a-city-economy.md`. Where an older bullet below talks about
-dormant tiles, fading, waking by visiting, or waving, this section replaces
-it.
+`docs/adr/0005-a-city-economy.md`. It replaced crit 9's dormant tiles
+(fading, waking by visiting, displacement; ADR 1 and ADR 3) and ADR 4's Wave.
 
 - **Every game number lives in `src/economy.ts`**, nowhere else: starting
   coins 100; base income 10/min; +20% per occupied neighbour; 4 h cap on
@@ -252,7 +251,7 @@ change: everything is derived from plots and levels.
   comparing before and after each broadcast; city log "Kai became mayor of
   district 5".
 
-### Crit 9: real-time and leaving (superseded in part by ADR 5)
+### Crit 9: real-time and leaving
 
 - **Live updates over SSE** (`GET /events`). Claims stay `POST`s; the server
   pushes the board to every open page after any change. SSE fits bare
@@ -270,26 +269,23 @@ change: everything is derived from plots and levels.
 - **Each stream gets its own payload.** "Mine" depends on who's asking, and a
   `pid` is the only thing that proves identity, so it never leaves the
   server: each connection is sent the board with its own tile marked, and
-  other people appear only as label, hue, height and state.
+  other people appear only through the public tile fields, never a `pid`.
 - **With JS, claiming happens in place.** The form posts with `fetch` and the
   board updates from the response and the stream: no reload, and the camera
   and focus stay put. Without JS it's the `303` reload, as before, and other
   people's claims show on the next load.
-- **Replaced by ADR 5: dormant tiles, waking by visiting, and the "your
-  tile went quiet" notice.** ADR 1 (faded tiles still count) and ADR 3
-  (faded tiles stand, lift nobody, wake on a visit) are both dropped. Land
-  now ends on a lease clock and becomes free; nobody's tile fades.
-- **Losing land is told, not hidden.** The rule that survives from the
-  displaced notice: when a lease ends, the player's next visit says so
-  once ("Your land lease has expired. Choose a new plot to continue
-  building."), and their coins and uncollected earnings are kept. A rule
-  that takes something from you has to be readable off the screen.
+- Crit 9's dormant tiles (fading, waking by a visit, displacement) were
+  replaced by leases in ADR 5.
+- **Losing land is told, not hidden.** When a lease ends, the player's next
+  visit says so once ("Your lease ended. Pick a new plot."), and their coins
+  and uncollected earnings are kept. A rule that takes something from you
+  has to be readable off the screen.
 - **Phones tap to select, then confirm.** On a coarse pointer the first tap
-  on a tile selects it and shows a full-width "Claim row R, column C" bar;
-  that button claims. Mouse and keyboard claim directly, as before. The bar
-  names whoever holds the tile, and for an open tile says how many
-  neighbours settling there would lift: on a phone it's the only way to
-  learn who you'd stand beside.
+  on a tile selects it and shows a full-width bar; its button ("Build here",
+  or "Move here · 50" when you hold land) does the action. Mouse and keyboard
+  claim directly. The bar names whose building it is, and for a free plot
+  shows what building there would earn and whose income it would lift: on a
+  phone it's the only way to learn who you'd stand beside.
 
 ### Showing what your choice does to other people
 
@@ -301,13 +297,13 @@ whole point. So:
   changes *while keeping its holder* shows a floating "+1" or "−1" on every
   open screen. A tile that changes hands, or becomes claimed, doesn't: that's
   a new arrival, not a rise.
-- **Your own neighbourhood is narrated, and only yours.** Claiming says who
-  you lifted ("Claimed row 4, column 7. You lifted Mia and Kai.") and who
-  dropped when you left. Someone settling beside you or moving away says so,
-  with your new height ("Mia settled beside you. You're up to height 3.").
+- **Your own neighbourhood is narrated, and only yours.** Building says
+  whose income you lifted ("Your building is up! +14/min · Mia and Kai
+  +20%"). Someone building beside you, moving away, or their lease ending
+  says so, with what it did to your income ("Mia built beside you · +20%").
   Limiting messages to your own tile keeps a busy room from flooding anyone's
-  screen or screen reader. Settling on a faded neighbour counts as arriving;
-  a change of holder shows as a change of hue, which comes from the holder.
+  screen or screen reader. A change of holder shows as a change of hue,
+  which comes from the holder.
 - **It's all worked out on the page.** Each `board` event is the full board,
   so `public/diff.js` compares consecutive boards; the server sends nothing
   new. The first board to compare against is read from the server-rendered
@@ -318,8 +314,6 @@ whole point. So:
   `spec/diff.test.ts`.
 - **Scripts are ES modules, served `no-cache`,** so an `app.js` and a
   `diff.js` from different deploys can never run together.
-- **Superseded by "Show, don't tell" below:** the lede was three short
-  sentences; it's now one line.
 
 ### Crit 10: telling people apart, and who did what
 
@@ -330,10 +324,12 @@ whole point. So:
   Change the ADR's table before changing who may do what.
 - **One line per event on stdout, `event key=value`,** so `flyctl logs` is
   the narration at the crit and the first thing read when production
-  misbehaves. Events: `start`, `page`, `stream.open`/`stream.close`,
-  `claim` (with `from`, `renamed`, `took`, `lifted`, `dropped`),
-  `claim.refused` (status, reason, and `held` on a `409`), `wake`,
-  `dormant`, `displaced.seen`, `error`, `shutdown`.
+  misbehaves. Events: `start`, `page`, `welcome`, `expired.seen`,
+  `stream.open`/`stream.close`; one per successful action from the `action`
+  wrapper in `src/server.ts` (`claim` with `from`, `renamed`, `lifted`,
+  `dropped`; `relocate`, `collect`, `upgrade`, `renew`, `help`, `park`,
+  `rezone`), and `<action>.refused` (status, reason, and `held` on a claim's
+  `409`); `expire`, `park.end`, `landmark`, `mayor`, `error`, `shutdown`.
 - **A person in the logs is a tag, never their `pid`.** The tag is the first
   6 hex of a SHA-256 of the `pid`: two visitors read apart, and nobody
   reading the logs can turn it back into a cookie. Logs leave the server, and
@@ -344,7 +340,7 @@ whole point. So:
   forge a second one, or hide text. Only tags, tiles, numbers and fixed
   words go in unquoted.
 - **Logging lives in `src/log.ts`, called from `src/server.ts`.** `db.ts`
-  and `board.ts` stay pure. What a claim did (`lifted`, `dropped`, `took`)
+  and `board.ts` stay pure. What a claim did (`lifted`, `dropped`)
   is worked out by comparing the board before and after, the same rule as
   the page's +1/−1.
 
@@ -379,7 +375,8 @@ Playing it found the game was one action: claim, then wait. Recorded in
   not celebrated. They can't be derived,
   because the people who raised one may have left.
 - **A landmark is a mark on the spot, not a lock.** Ownership rules are
-  unchanged: its holder can move, and the tile can fade and be settled. It
+  unchanged: its holder can move, and its lease can end and the plot be
+  settled again. It
   shows as a crown on that cell, coloured by its highest tier.
 - **The only room-wide messages are crowns being raised.** Gold is the
   celebration: every open page bursts and names all nine. Bronze and silver
@@ -400,31 +397,28 @@ Playing it found the game was one action: claim, then wait. Recorded in
   `raised` entry (with `tier`) for a crown that just happened, so a
   reconnecting page doesn't replay old celebrations. The log line is
   `landmark at=… tier=… label=… raisers=…`, one per row recorded.
-- **Neighbours can wave.** Selecting a neighbour's tower offers a Wave
-  button: `POST /wave` with `cellId`, same-origin like `/claim`. It's allowed
-  only from someone holding a tile, at a held tile next to theirs, at most
-  once per pair every 10 s (`429` otherwise). The server pushes a `wave`
-  event `{ from: cellId, label }` to the holder's streams only. No text,
-  never stored, not offered without JS. Logged as `wave who=… at=… to=…`.
+- ADR 4's Wave was replaced by Help in ADR 5; `/wave` is gone.
 
 ### Seeing a claim before and while you make it
 
 - **A placement preview, never a change.** Hover, keyboard focus or a phone
-  tap on a free or faded tile previews its resulting height and marks the
+  tap on a free plot previews its resulting height and income and marks the
   neighbours it would lift (`data-preview="lift"`) and, on a move, the old
   ones it would drop (`"drop"`). It's computed by `preview()` in
   `public/diff.js`, and `spec/diff.test.ts` holds it equal to the server's
-  `heights(tiles, now)` on random boards with faded tiles in them, so the
-  preview and the real claim can't disagree.
+  heights and income on random boards with ended leases, parks, zones and
+  mayors in them, so the preview and the real claim can't disagree.
 - **"Claimed" only once the server says so.** A claim in flight marks its
   tile `data-pending` and ignores every further claim until it answers. The
   stream may show the new board first; success is still announced only from
   the reply. A network failure says nothing was claimed, rather than falling
-  back to a full form post. Each refusal (`403`, `409`, `400`, network) has
-  its own message, sent through the `[data-announce]` live region.
-- **Any tile can be inspected,** by hover, focus or tap: holder, height,
-  claimed neighbours, and protection left, counted down on the page from the
-  server's `safeUntil` (a time, not a countdown). The inspector is
+  back to a full form post. Each refusal (`403`, `409`, `402`, `429`, `400`,
+  network) has its own message, sent through the `[data-announce]` live
+  region.
+- **Any tile can be inspected,** by hover, focus or tap: whose building,
+  income, occupied neighbours, zone, district seat, landmark, and lease left,
+  counted down on the page from the server's `leaseEndsAt` (a time, not a
+  countdown); a park shows whom it lifts and when it closes. The inspector is
   server-rendered and follows the latest input.
 - **Others' claims are marked, never announced.** A tile someone else just
   claimed gets `data-fresh` for about two seconds; focus never moves.
@@ -434,7 +428,7 @@ Playing it found the game was one action: claim, then wait. Recorded in
 - **The connection line says live, reconnecting or offline,** by shape as
   well as colour, and is hidden without JS.
 
-### Show, don't tell — this wins over any older layout rule
+### Show, don't tell
 
 Playing it cold, the first screen was too complicated to start: a full
 dashboard of empty stats, four greyed buttons, a goal line, a key and an
@@ -481,8 +475,7 @@ board, and as few words as possible.
   skyline with palms, flat colour with black outlines and hard shadows, and
   the board as a city map at night: the gaps are roads, and every claimed
   tile is a tower with one row of lit windows per floor, so a height reads
-  as a count of floors. A dormant tower is grey with its lights out. Each
-  person keeps their own hue; that was the one part of the old warm-paper
+  as a count of floors. Each person keeps their own hue; that was the one part of the old warm-paper
   look worth keeping, since it's how you tell people apart.
 - **Pricedown is artwork, never a font.** The wordmark is Pricedown (the
   GTA logo face) converted to outlines in `public/art/logo.svg`. Its free
@@ -492,8 +485,8 @@ board, and as few words as possible.
   artwork, not new text. Live text uses Passion One under the SIL OFL,
   with its licence beside it in `public/fonts/`.
 - **Every tile state reads in greyscale.** Free is a flat lot with a kerb,
-  taken a lit tower, yours a gold ring with a gold marker, faded hatched
-  grey with its lights out. Focus is one gold outline, selected a double
+  taken a lit tower, yours a gold ring with a gold marker, a park a low
+  lawn with a hedge and a tree. Focus is one gold outline, selected a double
   cream one, pending moving stripes, a preview a dashed ghost at the
   resulting height, a fresh claim a spreading ring. Ghosts are drawn in each
   tile's `.beacon`, which never takes a click.
@@ -511,55 +504,37 @@ board, and as few words as possible.
 
 ## Build sketch
 
-Schema, one table:
+The schema is the migrations in `src/db.ts`, 1--8; read them, not a copy
+here. `cells` (one row per plot, `id` 0..143 row-major, all 144 created at
+startup with `INSERT OR IGNORE`; `one_tile_each` unique on `claimer_id`),
+`players`, `events` (the city log), `landmarks`, `parks`. Migration 2's
+`cells.last_seen_at` and `displaced` table were crit 9's dormancy (replaced
+by ADR 5); migration 4 keeps them unused rather than dropping history.
 
-    CREATE TABLE cells (
-      id         INTEGER PRIMARY KEY,  -- 0..143, row-major position in the 12×12 grid
-      claimer_id TEXT,                 -- the pid cookie of whoever holds it; NULL if free
-      label      TEXT,                 -- the name they typed; NULL if free
-      claimed_at TEXT                  -- ISO timestamp; NULL if free
-    );
-    CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id)
-      WHERE claimer_id IS NOT NULL;
-
-Migration 2 (crit 9) adds `last_seen_at TEXT`, backfilled from `claimed_at`,
-and a table `displaced (claimer_id TEXT PRIMARY KEY, label TEXT, cell_id
-INTEGER, displaced_at TEXT)`, read once and deleted. A tile is dormant when
-`last_seen_at` is more than 24 hours old, computed at read time, never
-stored. A claim succeeds on a free tile *or* a dormant one, as one
-`UPDATE ... WHERE claimer_id IS NULL OR last_seen_at < ?`, so "did I win?"
-is still its change count.
-
-**Production consequence, on purpose:** the 4 tiles claimed at crit 8 are
-about 6 days old, so they go dormant the moment migration 2 runs. They stay
-on the board, greyed, until someone settles there.
+A claim is one `UPDATE ... WHERE claimer_id IS NULL` (and no running park on
+the plot) after `settle(now)` has freed every ended lease, so "did I win?" is
+its change count.
 
 **The store takes its database and its clock as arguments.**
-`openStore(path)` returns the claim/read/touch functions, and each takes
-`now`. The server opens `DB_PATH`; tests open `:memory:`. That's how
-dormancy (25 hours later) and the migration (a crit-8-shaped database
-upgraded with its rows intact) get tested without waiting a day or touching
-the volume.
+`openStore(path)` returns the store, and every function that depends on time
+takes `now`. The server opens `DB_PATH`; tests open `:memory:`. That's how
+lease ends, income over hours, and each migration (an older database
+upgraded with its rows intact) get tested without waiting or touching the
+volume.
 
-All 144 rows are created at startup (`INSERT OR IGNORE`), so a claim is always
-an `UPDATE ... WHERE claimer_id IS NULL` and "did I win?" is its change count.
-
-Routes for crit 8's slice:
+Routes:
 
 - `GET /`: the board, rendered on the server from current state
-- `POST /claim`: fields `cellId`, `label`, form-encoded or JSON. A plain
-  form always gets a `303` back to `/?notice=<key>` (`claimed`, `taken`,
-  `label`, `cell`), so a no-JS visitor sees what happened. A client sending
-  `Accept: application/json` gets real statuses instead: `200`, `409` when it
-  lost, `400` for a bad `cellId` or label. A POST whose `Origin` isn't this
-  host is refused with a `403`
+- `POST /claim`, `/collect`, `/upgrade`, `/renew`, `/help`, `/park`,
+  `/rezone`: see the economy section above. A plain form always gets a `303`
+  back to `/?notice=<key>`, so a no-JS visitor sees what happened; a client
+  sending `Accept: application/json` gets real statuses instead. A POST whose
+  `Origin` isn't this host is refused with a `403`
 - Notices are picked by key from a fixed table in `src/board.ts`; nothing
   from the query string is echoed into the page
 - `GET /events`: SSE. On connect, and after every change, it sends a `board`
-  event: per tile `{ state: free|held|mine|dormant, label, hue, height }`,
-  plus the claimed count and, for the connection's own person, their status
-  line. A tile crossing into dormancy, or waking, also triggers a send;
-  dormancy is checked once a minute
+  event (the payload in the economy section). A sweep once a minute settles
+  income and ends leases and parks, broadcasting if any ended
 - `GET /readme/`: `README.md` rendered to HTML (headings intact), replacing
   the placeholder's verbatim copy. `docs/` is served beneath it so the README's
   relative image links resolve there as they do on GitHub
@@ -581,9 +556,10 @@ and delete the line when one is settled.
   are tested and which are judged.
 - **The rest of the roadmap (weeks 11--12)**, from the same review:
   "N here now" (a count of open streams); "since you left, 4 people settled
-  near you" on return; a "room here" invite marker; a cooldown on moving.
-  The move warning shipped as the preview's "drop" marks, and the room
-  score became landmarks (ADR 4).
+  near you" on return; a "room here" invite marker. The move warning shipped
+  as the preview's "drop" marks, the room score became landmarks (ADR 4),
+  and the cooldown on moving shipped with the economy (ADR 5: 50 coins,
+  30 min).
 
 ## How to work in here
 
@@ -643,7 +619,7 @@ and delete the line when one is settled.
 - **Real-time is a test, not a claim.** A spec test opens two `/events`
   streams as different people, claims from a third, and fails unless both
   receive the change within 1000 ms. It runs in CI against the built image.
-- **Dormancy and migrations are unit tests over `openStore(":memory:")`**
+- **Leases, income and migrations are unit tests over `openStore(":memory:")`**
   with an injected clock, in `spec/` alongside the HTTP tests.
 - **The logs are tested from a server the test starts itself.** The app at
   `APP_URL` is a separate process (a container in CI), so its stdout can't be
@@ -824,9 +800,9 @@ these tools, not tied to any one prototype's content.
   invisible character itself. Grep new files for non-ASCII after writing
   escapes.
 - **A server that only broadcasts on "big" changes leaves pages counting
-  down to a stale time.** If the page derives anything from a field
-  (`safeUntil`), every change to that field has to broadcast, including a
-  quiet one like a visit.
+  down to a stale time.** If the page derives anything from a field (a
+  lease end), every change to that field has to broadcast, including a
+  quiet one.
 - **`server.close()` waits for idle keep-alive sockets.** On `SIGTERM` call
   `closeAllConnections()` too, or exit takes seconds and the platform may
   kill the process before the database closes.
@@ -870,10 +846,12 @@ these tools, not tied to any one prototype's content.
 ## Deliverables still owed
 
 - `README.md`: the argument for good, with sources. 400--600 words by
-  submission, and the main material at crit 8.
+  submission, and the main material at crit 8. It's about 730 words now
+  (`wc -w`), so it needs cutting.
 - `PROCESS.md`: rewritten, not appended, at each crit. It must argue for the
   stack and the agent workflow and link commits by hash.
 - `reflections/crit-8.md`, `crit-9.md`, `crit-10.md`, each by its cutoff.
-- `research-note.md` (COMP8020): 600--800 words, a cited position that a
-  durable in-repo harness (rules plus executable checks) beats per-session
+  `crit-8.md` and `crit-9.md` are in; `crit-10.md` isn't yet.
+- `research-note.md` (COMP8020), not started: 600--800 words, a cited
+  position that a durable in-repo harness (rules plus executable checks) beats per-session
   prompting for agentic development. It has to meet the counter-case.
