@@ -398,6 +398,17 @@ async function viewports(browser: Browser): Promise<void> {
       // the slider and the sculpture it changes: where they land
       const slider = await page.locator("#ribbon-turns").boundingBox();
       check(!!slider && slider.width >= 150, "phone: sliders are wide enough to drag", `${Math.round(slider?.width ?? 0)}px`);
+      // every plinth's title is read in full: none clipped, none past two lines
+      const clipped = await page.$$eval(".plinth-sub", (els) =>
+        els
+          .filter((e) => {
+            const lh = parseFloat(getComputedStyle(e).lineHeight) || 20;
+            return e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1 || e.clientHeight > lh * 2 + 2;
+          })
+          .map((e) => e.textContent),
+      );
+      const titles = await page.locator(".plinth-sub").count();
+      check(titles > 0 && clipped.length === 0, "phone: every plinth title is shown in full", clipped.join(", "));
       const small = await page.$$eval("button:not([hidden])", (els) => els.filter((e) => (e as HTMLElement).offsetParent && e.getBoundingClientRect().height < 32).map((e) => e.textContent?.trim()));
       check(small.length === 0, "phone: every visible button is a comfortable tap", small.join(", "));
     } else {
