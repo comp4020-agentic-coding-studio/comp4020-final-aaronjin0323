@@ -5,16 +5,16 @@
 //
 //   node scripts/browser-check.ts            # everything
 //   node scripts/browser-check.ts realtime   # one section
+//   HEADED=1 node scripts/browser-check.ts   # a real GPU-backed window
 //
 // It writes screenshots to .shots/ (gitignored). Read them: a green run says
 // the behaviour works, not that the page looks right.
 //
-// It claims tiles, so point it at a throwaway database, never production.
-import { randomUUID } from "node:crypto";
+// It edits the shared workbench and publishes exhibits as fixture visitors,
+// so point it at a throwaway database, never production.
 import { mkdirSync } from "node:fs";
-import { chromium, type Browser, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
-import { DISTRICT_PIDS, DISTRICT_SCENE } from "./seed-demo.ts";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
 refuseProduction(APP);
@@ -22,1666 +22,391 @@ const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Conte
 const only = process.argv[2];
 mkdirSync(".shots", { recursive: true });
 
-if (/fly\.dev/.test(APP)) throw new Error("browser-check claims tiles; don't point it at production");
-
 let failures = 0;
 const check = (ok: boolean, what: string, detail = ""): void => {
   console.log(`${ok ? "✓" : "✗"} ${what}${detail ? `  (${detail})` : ""}`);
   if (!ok) failures++;
 };
 
-const fresh = async (browser: Browser, opts: Parameters<Browser["newContext"]>[0] = {}): Promise<Page> => {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...opts });
+type Opts = Parameters<Browser["newContext"]>[0];
+const DESKTOP: Opts = { viewport: { width: 1440, height: 900 } };
+const PHONE: Opts = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
+
+// Each context is its own cookie jar, so its own visitor.
+async function visitor(browser: Browser, opts: Opts = DESKTOP): Promise<Page> {
+  const ctx = await browser.newContext({ reducedMotion: "reduce", ...opts });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => check(false, "no script errors", e.message));
   await page.goto(`${APP}/?v=${Date.now()}`);
+  await live(page);
   return page;
-};
-
-const freeTile = (page: Page): Promise<string> =>
-  page.locator('button.tile[data-state="free"]').nth(5).getAttribute("value").then((v) => v ?? "");
-
-// Whether a click at the tile's centre lands on the tile. In 3D a taller
-// block in front can cover a shorter one behind it.
-const reachable = (page: Page, cell: string | number): Promise<boolean> =>
-  page.evaluate((c) => {
-    const el = document.querySelector(`button.tile[value="${c}"]`)!;
-    const r = el.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-    return hit === el || el.contains(hit);
-  }, String(cell));
-
-// The camera buttons sit behind the camera icon: open it the way a player
-// would, then turn. A page without script has no camera panel at all.
-async function turnLeft(page: Page, touch = false): Promise<void> {
-  const open = await page.$eval('details[data-tool="camera"]', (d) => (d as HTMLDetailsElement).open).catch(() => null);
-  if (open === null) throw new Error("no camera panel to turn the board with");
-  if (!open) await (touch ? page.locator('details[data-tool="camera"] > summary').tap() : page.click('details[data-tool="camera"] > summary'));
-  await (touch ? page.locator("text=Turn left").tap() : page.click("text=Turn left"));
-  await page.waitForTimeout(450); // the turn's 300 ms transition, settled
 }
 
-// Hover a plot the way a player would: turning the camera until it's
-// uncovered first.
-// Other players' claims can raise a neighbour between the reach check and
-// the hover, so a covered hover turns the camera and tries again rather than
-// waiting out Playwright's default timeout on an angle that's now blocked.
-async function hoverTile(page: Page, cell: string | number): Promise<void> {
-  for (let turns = 0; ; turns++) {
-    if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
-    if (await reachable(page, cell)) {
-      try {
-        await page.hover(`button.tile[value="${cell}"]`, { timeout: 1500 });
-        return;
-      } catch {
-        // covered after all; fall through and turn
-      }
-    }
-    await turnLeft(page);
-  }
-}
+/** Waits until the page has had a state event and enabled its controls. */
+const live = (page: Page): Promise<unknown> =>
+  page.waitForFunction(() => document.body.dataset.conn === "live" && !document.querySelector("[data-people]")?.hasAttribute("hidden"), null, { timeout: 10_000 });
 
-// Turn the camera until the tile is uncovered, the way a player would, then
-// click it. Fails the check rather than clicking through with force.
-async function tapTile(page: Page, cell: string | number): Promise<void> {
-  for (let turns = 0; !(await reachable(page, cell)); turns++) {
-    if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
-    await turnLeft(page, true);
-  }
-  await page.locator(`button.tile[value="${cell}"]`).tap();
-}
-
-async function clickTile(page: Page, cell: string | number): Promise<void> {
-  for (let turns = 0; !(await reachable(page, cell)); turns++) {
-    if (turns === 8) throw new Error(`tile ${cell} can't be reached from any camera angle`);
-    await turnLeft(page);
-  }
-  await page.click(`button.tile[value="${cell}"]`);
-}
-
-async function realtime(browser: Browser): Promise<void> {
-  console.log("\n— real-time: two people, two browsers —");
-  const a = await fresh(browser);
-  const b = await fresh(browser);
-  await a.waitForTimeout(500); // both streams connected
-  const cell = await freeTile(a);
-  const url = a.url();
-
-  await a.fill("#label", "Ana");
-  while (!(await reachable(a, cell))) await turnLeft(a);
-  const started = Date.now();
-  await a.click(`button.tile[value="${cell}"]`);
-  await b.waitForSelector(`button.tile[value="${cell}"][data-state="held"]`, { timeout: 3000 }).catch(() => null);
-  const elapsed = Date.now() - started;
-  const seen = await b.getAttribute(`button.tile[value="${cell}"]`, "data-state");
-
-  check(seen === "held", "B sees A's claim without reloading", `${elapsed} ms`);
-  check(elapsed < 1000, "within about a second", `${elapsed} ms`);
-  check(a.url() === url, "A's claim didn't reload A's page");
-  await a.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await a.getAttribute(`button.tile[value="${cell}"]`, "data-state")) === "mine", "A sees it as theirs");
-  check((await b.getAttribute(`button.tile[value="${cell}"]`, "title")) === "Ana", "B sees A's name on it");
-
-  // B already sees the tile as Ana's, so clicking it names her, not a race.
-  await b.fill("#label", "Ben");
-  await clickTile(b, cell);
-  const notice = await b.waitForSelector('[data-notice="held"]', { timeout: 3000 }).catch(() => null);
-  const said = (await notice?.textContent()) ?? "";
-  check(said === "Ana's Small House", "B clicking A's plot is told it's Ana's", said);
-
-  // The claimed count follows along.
-  const countA = await a.textContent("[data-claimed]");
-  const countB = await b.textContent("[data-claimed]");
-  check(countA === countB, "both pages show the same claimed count", `${countA} / ${countB}`);
-
-  await a.screenshot({ path: ".shots/realtime-a.png" });
-  await b.screenshot({ path: ".shots/realtime-b.png" });
-  await a.context().close();
-  await b.context().close();
-}
-
-async function keyboard(browser: Browser): Promise<void> {
-  console.log("\n— keyboard —");
-  const page = await fresh(browser);
-  await page.fill("#label", "Keys");
-  await page.press("#label", "Enter");
-  check(await page.evaluate(() => document.activeElement?.classList.contains("tile") ?? false), "Enter in the name field goes to the board");
-  // walk to a free tile
-  for (let i = 0; i < 24; i++) {
-    if ((await page.evaluate(() => (document.activeElement as HTMLElement).dataset.state)) === "free") break;
-    await page.keyboard.press(i < 12 ? "d" : "s");
-  }
-  const cell = await page.evaluate(() => (document.activeElement as HTMLButtonElement).value);
-  const url = page.url();
-  await page.keyboard.press("Enter");
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await page.getAttribute(`button.tile[value="${cell}"]`, "data-state")) === "mine", "Enter claims the focused tile", `tile ${cell}`);
-  check(page.url() === url, "and the page didn't reload");
-  check(
-    await page.evaluate((c) => (document.activeElement as HTMLButtonElement).value === c, cell),
-    "focus stays on the claimed tile",
+const post = (page: Page, path: string, body: unknown = {}): Promise<{ status: number; json: { error?: string } }> =>
+  page.evaluate(
+    async ([p, b]) => {
+      const r = await fetch(p as string, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+      return { status: r.status, json: await r.json().catch(() => ({})) };
+    },
+    [path, body] as const,
   );
-  await page.click("#label");
-  await page.keyboard.type("wasd");
-  check((await page.inputValue("#label")).endsWith("wasd"), "WASD still types in the name field");
-  await page.context().close();
+
+/** Puts a Loop & Lantern on the bench, whatever was there. Clearing archives,
+ * so nothing is lost; it may be refused while someone else holds a lease. */
+async function freshBench(page: Page): Promise<void> {
+  await post(page, "/draft/clear");
+  const r = await post(page, "/draft/start", { recipe: "loop" });
+  if (r.status !== 200) throw new Error(`couldn't start a draft: ${r.status} ${JSON.stringify(r.json)}`);
+  await page.click('[data-go="bench"]');
+  await page.waitForSelector('[data-parts] .part[data-part="ribbon"]');
 }
 
-async function noScript(browser: Browser): Promise<void> {
-  console.log("\n— without JavaScript —");
-  const page = await fresh(browser, { javaScriptEnabled: false });
-  const cell = await freeTile(page);
-  await page.fill("#label", "NoJS");
-  await clickTile(page, cell);
-  await page.waitForURL(/notice=claimed/, { timeout: 3000 }).catch(() => null);
-  check(/notice=claimed/.test(page.url()), "a plain form post claims and reloads");
-  check((await page.getAttribute(`button.tile[value="${cell}"]`, "data-state")) === "mine", "the reloaded board shows it");
-  await page.context().close();
-}
+const twoFrames = (page: Page): Promise<unknown> => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
-async function hitTesting(browser: Browser): Promise<void> {
-  console.log("\n— every free tile takes its own click —");
-  const page = await fresh(browser);
-  const lost = await page.evaluate(() => {
-    const out: string[] = [];
-    for (const el of document.querySelectorAll<HTMLButtonElement>("button.tile")) {
-      if (el.dataset.state !== "free") continue;
-      // Off screen, elementFromPoint finds nothing: scroll to it, as a player would.
-      el.scrollIntoView({ block: "center", behavior: "instant" });
-      const r = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-      const tile = hit?.closest("button.tile");
-      // Covered by a taller block is a 3D fact a player turns the camera for;
-      // lost to anything else is a bug.
-      if (tile !== el && !(tile && tile.getAttribute("data-state") !== "free")) out.push(el.value);
-    }
-    return out;
-  });
-  check(lost.length === 0, "no free tile loses its click to the board", lost.length ? `lost: ${lost.join(", ")}` : "");
-  await page.context().close();
-}
-
-// The whole page as the emulated device sees it. Playwright's fullPage
-// renders as a mouse device while it captures: on a phone, (hover: none) and
-// (pointer: coarse) stop matching and the shot shows the desktop styles.
-// Making the viewport as tall as the page keeps the device intact. The two
-// frames matter: a capture straight after the resize can catch it half
-// drawn, with the top of the page tiled down the shot.
+// Playwright's fullPage capture turns an emulated phone into a mouse
+// device while it captures; growing the viewport to the page keeps it a
+// phone. Two frames after the resize, or the shot can be half drawn.
 async function wholePage(page: Page, path: string): Promise<void> {
   const screen = page.viewportSize();
   if (!screen) throw new Error("wholePage needs a fixed viewport");
   const height = await page.evaluate(() => document.documentElement.scrollHeight);
   await page.setViewportSize({ width: screen.width, height });
-  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await twoFrames(page);
+  await page.waitForTimeout(300);
   await page.screenshot({ path });
   await page.setViewportSize(screen);
 }
 
+// ------------------------------------------------------------------ sections
+
+async function firstVisit(browser: Browser): Promise<void> {
+  console.log("\n— first visit: what can I do? —");
+  const page = await visitor(browser);
+  const lede = (await page.textContent("[data-lede]")) ?? "";
+  check(/Pick a sculpture to remix/.test(lede), "the first line says what to do", lede);
+  const box = await page.locator("[data-lede]").boundingBox();
+  check(!!box && box.y + box.height < 200, "and sits at the top of the first screen", `${Math.round(box?.y ?? -1)}px`);
+  const plinths = await page.locator("[data-go]").count();
+  check(plinths === 7, "the workbench and six plinths are buttons", String(plinths));
+  const listingHidden = await page.$eval("[data-static]", (el) => getComputedStyle(el).display === "none");
+  check(listingHidden, "the no-JS listing steps aside once the page is live");
+  const you = (await page.textContent("[data-you]")) ?? "";
+  const here = await page.locator("[data-here] li").count();
+  check(you.trim().length > 0 && here >= 1, "it says who you are and who's here", `${you.trim()}, ${here} here`);
+  await page.context().close();
+}
+
+async function noScript(browser: Browser): Promise<void> {
+  console.log("\n— without JavaScript —");
+  const ctx = await browser.newContext({ ...DESKTOP, javaScriptEnabled: false });
+  const page = await ctx.newPage();
+  await page.goto(`${APP}/?v=${Date.now()}`);
+  const items = await page.locator("[data-static] li").allTextContents();
+  check(items.length === 6, "the server's listing names all six slots", items.join(" | "));
+  await page.screenshot({ path: ".shots/no-js.png" });
+  await ctx.close();
+}
+
+async function noWebGL(browser: Browser): Promise<void> {
+  console.log("\n— without WebGL —");
+  const ctx = await browser.newContext({ ...DESKTOP, reducedMotion: "reduce" });
+  await ctx.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+      if (/webgl/.test(kind)) return null;
+      return (real as (...a: unknown[]) => unknown).call(this, kind, ...rest);
+    } as typeof real;
+  });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => check(false, "no script errors without WebGL", e.message));
+  await page.goto(`${APP}/?v=${Date.now()}`);
+  await live(page);
+  check(await page.$eval("[data-scene]", (el) => getComputedStyle(el).display === "none"), "the canvas is hidden");
+  await freshBench(page);
+  const slider = page.locator("#ribbon-turns");
+  check(await slider.isEnabled(), "the sliders still work");
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.querySelector("#ribbon-turns + output")?.textContent === "3", null, { timeout: 3000 }).catch(() => null);
+  check((await page.textContent("#ribbon-turns + output")) === "3", "and the draft's numbers show");
+  await page.click('[data-go="slot:1"]');
+  await page.waitForSelector("[data-history] .version", { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-history] .version").count()) > 0, "history still lists versions");
+  await page.screenshot({ path: ".shots/no-webgl.png" });
+  await ctx.close();
+}
+
+async function realtime(browser: Browser): Promise<void> {
+  console.log("\n— real-time: two people, two browsers —");
+  const a = await visitor(browser);
+  const b = await visitor(browser);
+  await freshBench(a);
+  await b.click('[data-go="bench"]');
+  await b.waitForSelector('[data-parts] .part[data-part="spheres"]');
+  const before = (await b.textContent("#spheres-count + output")) ?? "";
+  // open the part, then move its slider by keyboard: a real input event
+  await a.click('[data-toggle="spheres"]');
+  await a.focus("#spheres-count");
+  const started = Date.now();
+  await a.keyboard.press("ArrowRight");
+  const want = String(Number(before) + 1);
+  await b.waitForFunction((w) => document.querySelector("#spheres-count + output")?.textContent === w, want, { timeout: 3000 }).catch(() => null);
+  const elapsed = Date.now() - started;
+  const seen = (await b.textContent("#spheres-count + output")) ?? "";
+  check(seen === want, "B sees A's edit without reloading", `${before} → ${seen}`);
+  check(elapsed < 1000, "within about a second", `${elapsed} ms`);
+
+  // B sees the part as A's, with A's name, and can't move it
+  await b.click('[data-toggle="spheres"]');
+  await b.waitForFunction(() => document.querySelector('.part[data-part="spheres"]')?.getAttribute("data-lease") === "held", null, { timeout: 3000 }).catch(() => null);
+  const lease = await b.$eval('.part[data-part="spheres"]', (el) => ({ state: el.getAttribute("data-lease"), text: el.querySelector("[data-lease-text]")?.textContent ?? "" }));
+  const aName = ((await a.textContent("[data-you]")) ?? "").trim();
+  check(lease.state === "held" && lease.text.includes(aName), "B sees who holds the part", lease.text);
+  check(await b.locator("#spheres-count").isDisabled(), "and its controls are disabled for B");
+  check(await b.locator("#ribbon-turns").isEnabled(), "while the other parts stay free");
+  check((await a.getAttribute('.part[data-part="spheres"]', "data-lease")) === "mine", "A sees it as theirs");
+  await b.screenshot({ path: ".shots/lease-held.png" });
+  await a.screenshot({ path: ".shots/lease-mine.png" });
+
+  // A's presence is in B's here-now strip
+  const here = await b.locator("[data-here] li").allTextContents();
+  check(here.some((t) => t.includes(aName)), "B's here-now strip lists A", here.join(" | "));
+
+  // A leaves: B sees the part free again at once
+  await a.context().close();
+  await b.waitForFunction(() => document.querySelector('.part[data-part="spheres"]')?.getAttribute("data-lease") === "free", null, { timeout: 3000 }).catch(() => null);
+  check((await b.getAttribute('.part[data-part="spheres"]', "data-lease")) === "free", "when A leaves, the part is free for B");
+  await b.context().close();
+}
+
+async function dragging(browser: Browser): Promise<void> {
+  console.log("\n— dragging a slider: draw every frame, send at most every 100 ms —");
+  const page = await visitor(browser);
+  await freshBench(page);
+  const sent: number[] = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/draft/edit")) sent.push(Date.now());
+  });
+  const box = (await page.locator("#ribbon-radius").boundingBox())!;
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  await page.mouse.down();
+  const startedAt = Date.now();
+  for (let i = 0; i <= 40; i++) {
+    await page.mouse.move(box.x + 4 + (i / 40) * (box.width - 8), box.y + box.height / 2);
+    await page.waitForTimeout(15);
+  }
+  const dragMs = Date.now() - startedAt;
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const gaps = sent.slice(1).map((t, i) => t - sent[i]);
+  // the release send may follow a throttled one closely; every other gap is ≥ ~100 ms
+  const tooClose = gaps.slice(0, -1).filter((g) => g < 90);
+  check(sent.length >= 2 && sent.length <= Math.ceil(dragMs / 100) + 2, "a drag sends a handful of edits, not one per frame", `${sent.length} sends over ${dragMs} ms`);
+  check(tooClose.length === 0, "none closer than 100 ms apart while dragging", gaps.join(","));
+  const final = (await page.textContent("#ribbon-radius + output")) ?? "";
+  check(final === "1.6", "the final value is the one on release", final);
+  await page.context().close();
+}
+
+async function publishing(browser: Browser): Promise<void> {
+  console.log("\n— publishing, history, restore, storeroom —");
+  const page = await visitor(browser);
+  await freshBench(page);
+  await page.click("[data-publish-open]");
+  const title = `Check ${Date.now() % 100000}`;
+  await page.fill("#publish-title", title);
+  // a full slot asks first, naming what moves to the storeroom
+  const replace = page.locator('input[name="target"][data-group="replace"]').first();
+  if ((await replace.count()) > 0) {
+    await replace.check();
+    const plan = (await page.textContent("[data-plan]")) ?? "";
+    check(/Replaces ".+" on plinth \d/.test(plan), "a taken slot says what it replaces", plan);
+    await page.click('[data-publish] button[type="submit"]');
+    const asked = (await page.textContent("[data-ask-text]")) ?? "";
+    check(/moves to the storeroom/.test(asked) && (await page.locator("[data-ask]").isVisible()), "and asks before moving it", asked);
+    await page.screenshot({ path: ".shots/publish-confirm.png" });
+    await page.click('[data-ask] button[value="no"]');
+  }
+  // publish as a new version of slot 1's exhibit: no confirm needed
+  const version = page.locator('input[name="target"][data-group="version"]').first();
+  await version.check();
+  await page.screenshot({ path: ".shots/publish-form.png" });
+  const plan = (await page.textContent("[data-plan]")) ?? "";
+  check(/^Adds version \d+ to ".+"/.test(plan), "adding a version says which", plan);
+  await page.click('[data-publish] button[type="submit"]');
+  await page.waitForSelector('[data-view="exhibit"]:not([hidden]) [data-history] .version', { timeout: 3000 }).catch(() => null);
+  const heading = (await page.textContent("[data-ex-title]")) ?? "";
+  check(heading === title, "publishing shows the exhibit with its new title", heading);
+  const versions = await page.locator("[data-history] .version").count();
+  check(versions >= 2, "its history lists every version", String(versions));
+  // restore the oldest as a new version
+  const n0 = versions;
+  const restore = page.locator('[data-history] button:has-text("Restore as version")').last();
+  await restore.click();
+  await page.waitForFunction((n) => document.querySelectorAll("[data-history] .version").length === n + 1, n0, { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-history] .version").count()) === n0 + 1, "restore adds a version rather than changing one");
+  const top = (await page.locator("[data-history] .version").first().textContent()) ?? "";
+  check(/restored from version 1/.test(top), "and says where it came from", top.replace(/\s+/g, " ").slice(0, 90));
+  await page.screenshot({ path: ".shots/history.png" });
+
+  // remix onto a full bench is only "Replace the workbench", confirmed
+  check(await page.locator("[data-ex-remix]").isHidden(), "with a full bench, plain Remix isn't offered");
+  check(await page.locator("[data-ex-replace]").isVisible(), "Replace the workbench is, separately labelled");
+  const archivedBefore = Number((await page.textContent("[data-archive-count]")) ?? "0");
+  await page.click("[data-ex-replace]");
+  const asked = (await page.textContent("[data-ask-text]")) ?? "";
+  check(/Archived drafts/.test(asked), "and asks first, saying the bench is archived", asked);
+  await page.click("[data-ask-yes]");
+  await page.waitForFunction((n) => Number(document.querySelector("[data-archive-count]")?.textContent) > n, archivedBefore, { timeout: 3000 }).catch(() => null);
+  check(Number(await page.textContent("[data-archive-count]")) > archivedBefore, "the old bench is in Archived drafts");
+  await page.context().close();
+}
+
+async function disconnect(browser: Browser): Promise<void> {
+  console.log("\n— disconnected: look, don't edit —");
+  const page = await visitor(browser);
+  await freshBench(page);
+  await page.context().setOffline(true);
+  // EventSource notices a dead network on its own; kick it by closing the stream
+  await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  await page.waitForFunction(() => document.body.dataset.conn !== "live", null, { timeout: 15_000 }).catch(() => null);
+  const status = (await page.textContent("[data-status]")) ?? "";
+  check(/Reconnecting/.test(status) && (await page.locator("[data-status]").isVisible()), "it says it's reconnecting", status);
+  const enabled = await page.$$eval("[data-edit]", (els) => els.filter((e) => !(e as HTMLButtonElement).disabled && (e as HTMLElement).offsetParent !== null).length);
+  check(enabled === 0, "every control is disabled", `${enabled} still enabled`);
+  check((await page.locator('[data-parts] .part').count()) > 0, "and the view stays");
+  await page.screenshot({ path: ".shots/disconnected.png" });
+  await page.context().setOffline(false);
+  await live(page).catch(() => null);
+  check(await page.locator("#ribbon-turns").isEnabled(), "editing comes back after the first state of the new connection");
+  await page.context().close();
+}
+
+async function keyboard(browser: Browser): Promise<void> {
+  console.log("\n— keyboard only —");
+  const page = await visitor(browser);
+  await freshBench(page);
+  await page.focus("body");
+  const reached = new Set<string>();
+  for (let i = 0; i < 80; i++) {
+    await page.keyboard.press("Tab");
+    const what = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return "";
+      return el.dataset.go ? `go:${el.dataset.go}` : el.id || el.dataset.scene !== undefined ? el.id || "scene" : el.tagName;
+    });
+    reached.add(what);
+  }
+  check(reached.has("go:slot:1") && reached.has("go:bench"), "plinth buttons are in tab order");
+  check(reached.has("ribbon-turns") || [...reached].some((r) => r.startsWith("ribbon-")), "the sliders are in tab order");
+  check(reached.has("scene"), "the canvas takes focus");
+  // arrow keys on the canvas orbit the camera, and don't scroll the page
+  await page.focus("[data-scene]");
+  const y0 = await page.evaluate(() => scrollY);
+  const before = await page.screenshot({ clip: { x: 0, y: 0, width: 600, height: 600 } });
+  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(300);
+  const after = await page.screenshot({ clip: { x: 0, y: 0, width: 600, height: 600 } });
+  const gl = !(await page.evaluate(() => document.body.classList.contains("no-gl")));
+  if (gl) check(!before.equals(after), "arrow keys on the canvas turn the camera");
+  check((await page.evaluate(() => scrollY)) === y0, "without scrolling the page");
+  // Enter on a plinth selects it and its history
+  await page.focus('[data-go="slot:2"]');
+  await page.keyboard.press("Enter");
+  check((await page.getAttribute('[data-go="slot:2"]', "aria-pressed")) === "true", "Enter on a plinth selects it");
+  // a swatch by keyboard
+  await page.focus('[data-go="bench"]');
+  await page.keyboard.press("Enter");
+  const swatch = page.locator('input[type="radio"][data-part="ribbon"][data-key="colour"]').first();
+  await swatch.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(400);
+  const checked = await page.$eval('input[type="radio"][data-part="ribbon"][data-key="colour"]:checked', (e) => (e as HTMLInputElement).value).catch(() => "");
+  check(checked === "1", "arrow keys pick a colour", checked);
+  await page.context().close();
+}
+
 async function viewports(browser: Browser): Promise<void> {
   console.log("\n— both viewports —");
-  for (const [name, width, height, mobile] of [
-    ["desktop", 1440, 900, false],
-    ["phone", 390, 844, true],
-    ["phone-360", 360, 780, true],
+  for (const [name, opts, mobile] of [
+    ["desktop", DESKTOP, false],
+    ["phone", PHONE, true],
   ] as const) {
-    const page = await fresh(browser, { viewport: { width, height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 2 });
-    await page.evaluate(() => document.fonts.ready);
-    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-    check(scrollWidth === width, `${name}: no sideways scroll`, `${scrollWidth}px`);
-    // The page notes every flip of the touch query while the shot is taken:
-    // a flip means the phone shot shows the styles for a mouse.
+    const ctx: BrowserContext = await browser.newContext({ ...opts });
+    const page = await ctx.newPage();
+    page.on("pageerror", (e) => check(false, "no script errors", e.message));
+    await page.goto(`${APP}/?v=${Date.now()}`);
+    await live(page);
+    const width = opts!.viewport!.width;
+    if (mobile) {
+      // headless --window-size has a minimum width; pin the phone through CDP
+      const cdp = await ctx.newCDPSession(page);
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 2, mobile: true });
+    }
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `.shots/${name}.png` });
     await page.evaluate(() => {
-      const query = matchMedia("(hover: none) and (pointer: coarse)");
-      const seen = [query.matches];
-      query.addEventListener("change", (e) => seen.push(e.matches));
+      const q = matchMedia("(hover: none) and (pointer: coarse)");
+      const seen = [q.matches];
+      q.addEventListener("change", (e) => seen.push(e.matches));
       Object.assign(window, { touchSeen: seen });
     });
-    await wholePage(page, `.shots/${name}.png`);
-    // The goal line is one line, at every size, even with the longest name a
-    // label allows in it (wide glyphs) and a two-digit count.
-    // The goal line is hidden until a building is one short of a tier; shown
-    // here to measure its worst case, then put back as it was.
-    const wasHidden = await page.$eval("[data-goal]", (el) => (el as HTMLElement).hidden);
-    const real = await page.$eval("[data-goal]", (el) => el.innerHTML);
-    await page.$eval("[data-goal]", (el) => {
-      (el as HTMLElement).hidden = false;
-      el.querySelector("[data-landmarks]")!.textContent = "90";
-      el.querySelector("[data-goal-lead]")!.textContent = "Closest: ";
-      el.querySelector("[data-goal-who]")!.textContent = "WWWWWWWWWWWWWWWWWWWWWWWW";
-      el.querySelector("[data-goal-tail]")!.textContent = "'s building, 6 of 8";
-      el.querySelector("[data-goal-unit]")!.textContent = " neighbours";
-      el.querySelector("[data-goal-tier]")!.textContent = " for silver";
-    });
-    const worst = await page.$eval("[data-goal]", (el) => {
-      const r = el.getBoundingClientRect();
-      const tail = el.querySelector("[data-goal-tier]")!.getBoundingClientRect();
-      return { h: Math.round(r.height), tailRight: Math.round(tail.right) };
-    });
-    await page.locator(".hud").screenshot({ path: `.shots/goal-worst-${name}.png` });
-    check(worst.tailRight <= width, `${name}: "6 of 8 for silver" stays on screen with a 24-character name`, `${worst.h}px tall, ends at ${worst.tailRight}px`);
-    // ...and with no neighbours anywhere yet, the hint in its place.
-    await page.$eval("[data-goal]", (el) => {
-      el.querySelector("[data-goal-lead]")!.textContent = "Start one: build beside someone";
-      el.querySelector("[data-goal-who]")!.textContent = "";
-      el.querySelector("[data-goal-tail]")!.textContent = "";
-      el.querySelector("[data-goal-unit]")!.textContent = "";
-      el.querySelector("[data-goal-tier]")!.textContent = "";
-    });
-    const hint = await page.$eval("[data-goal-lead]", (el) => ({ right: Math.round(el.getBoundingClientRect().right), cut: el.scrollWidth > el.clientWidth }));
-    check(hint.right <= width, `${name}: the start-one hint stays on screen`, `ends at ${hint.right}px${hint.cut ? ", cut short with 90 raised" : ""}`);
-    await page.$eval("[data-landmarks]", (el) => (el.textContent = "0"));
-    check(!(await page.$eval("[data-goal-lead]", (el) => el.scrollWidth > el.clientWidth)), `${name}: and isn't cut short with none raised`);
-    await page.$eval("[data-goal]", (el, html) => (el.innerHTML = html), real);
-    const goal = await page.$eval("[data-goal]", (el) => {
-      const r = el.getBoundingClientRect();
-      const lh = parseFloat(getComputedStyle(el.querySelector("[data-landmarks]")!).fontSize);
-      return { h: Math.round(r.height), lh: Math.round(lh), right: Math.round(r.right), text: el.textContent ?? "" };
-    });
-    check(goal.h <= goal.lh * 1.5 && goal.right <= width, `${name}: the goal line fits on one line`, `${goal.h}px tall, "${goal.text}"`);
-    await page.$eval("[data-goal]", (el, h) => ((el as HTMLElement).hidden = h), wasHidden);
+    // with a sculpture on the bench and a part open
+    await freshBench(page);
+    await page.waitForTimeout(800);
+    const sw = await page.evaluate(() => document.documentElement.scrollWidth);
+    check(sw === width, `${name}: no sideways scroll`, `${sw}px`);
+    await page.screenshot({ path: `.shots/${name}-bench.png` });
     if (mobile) {
+      await wholePage(page, `.shots/${name}-whole.png`);
       const seen = await page.evaluate(() => (window as unknown as { touchSeen: boolean[] }).touchSeen);
-      check(seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
+      check(seen.length > 0 && seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
+      // the slider and the sculpture it changes: where they land
+      const slider = await page.locator("#ribbon-turns").boundingBox();
+      check(!!slider && slider.width >= 150, "phone: sliders are wide enough to drag", `${Math.round(slider?.width ?? 0)}px`);
+      const small = await page.$$eval("button:not([hidden])", (els) => els.filter((e) => (e as HTMLElement).offsetParent && e.getBoundingClientRect().height < 32).map((e) => e.textContent?.trim()));
+      check(small.length === 0, "phone: every visible button is a comfortable tap", small.join(", "));
+    } else {
+      await page.click('[data-go="slot:1"]');
+      await page.waitForTimeout(1500);
+      await page.screenshot({ path: `.shots/${name}-plinth.png` });
     }
-    await page.context().close();
+    await ctx.close();
   }
 }
 
-async function phone(browser: Browser): Promise<void> {
-  console.log("\n— phone: tap to select, then confirm —");
-  const page = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-  const cell = await freeTile(page);
-  await page.fill("#label", "Thumb");
-  const tile = page.locator(`button.tile[value="${cell}"]`);
-  await tile.tap();
-  check((await tile.getAttribute("data-state")) === "free", "the first tap doesn't claim");
-  check(await page.locator(".confirm").isVisible(), "it shows the confirm bar");
-  const label = (await page.textContent(".confirm-claim")) ?? "";
-  check(label === "Build here", "the bar offers one button", label);
-  const title = (await page.textContent(".confirm-text")) ?? "";
-  check(/^\+\d+(\.\d)?\/min( · .+ \+20%)?$/.test(title), "and says what it would earn and whose income it raises, in numbers", title);
-  const box = await page.locator(".confirm-claim").boundingBox();
-  check((box?.height ?? 0) >= 44, "its button is a comfortable tap", `${Math.round(box?.height ?? 0)}px tall`);
-  await page.screenshot({ path: ".shots/phone-confirm.png" });
-  await page.locator(".confirm-claim").tap();
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await tile.getAttribute("data-state")) === "mine", "confirming claims it");
-  check(!(await page.locator(".confirm").isVisible()), "and the bar goes away");
-
-  // Tapping someone else's tile says whose it is: on a phone there's no hover.
-  const held = page.locator('button.tile[data-state="held"]').first();
-  if ((await held.count()) > 0) {
-    const name = (await held.getAttribute("title")) ?? "";
-    await held.tap();
-    const text = (await page.textContent(".confirm-text")) ?? "";
-    check(text.startsWith(`${name}'s `), "tapping a building names its owner", text);
-    check(!(await page.locator(".confirm-claim").isVisible()), "and offers no claim button");
-    await page.locator(".confirm-cancel").tap();
-  }
-
-  // Cancel leaves everything as it was.
-  const other = await freeTile(page);
-  await page.locator(`button.tile[value="${other}"]`).tap();
-  await page.locator(".confirm-cancel").tap();
-  check(!(await page.locator(".confirm").isVisible()), "Cancel closes the bar");
-  check((await page.getAttribute(`button.tile[value="${other}"]`, "data-state")) === "free", "and claims nothing");
+async function names(browser: Browser): Promise<void> {
+  console.log("\n— a name is text, never markup —");
+  const page = await visitor(browser);
+  await page.click("[data-rename-open]");
+  await page.fill("#rename-input", "<b>x</b><img src=x>");
+  await page.click('[data-rename] button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector("[data-you]")?.textContent?.includes("<b>x</b>"), null, { timeout: 3000 }).catch(() => null);
+  const shown = (await page.textContent("[data-you]")) ?? "";
+  check(shown.includes("<b>x</b><img src=x>"), "the name shows as typed", shown);
+  check((await page.locator("[data-people] b, [data-people] img").count()) === 0, "and no element came from it");
   await page.context().close();
 }
 
-// Finds a free tile with free neighbours all round, so a scene can be built
-// on any board without bumping into what earlier runs left behind.
-async function openPatch(page: Page): Promise<number> {
-  const states = await page.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
-  for (let r = 1; r < 11; r++) {
-    for (let c = 1; c < 10; c++) {
-      const ids = [-1, 0, 1].flatMap((dr) => [-1, 0, 1, 2].map((dc) => (r + dr) * 12 + c + dc));
-      if (ids.every((id) => states[id] === "free")) return r * 12 + c;
-    }
-  }
-  throw new Error("no open 3x4 patch on the board; reseed it");
-}
-
-async function claimAs(page: Page, name: string, cell: number): Promise<void> {
-  await page.fill("#label", name);
-  await clickTile(page, cell);
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 });
-}
-
-async function effects(browser: Browser): Promise<void> {
-  console.log("\n— your choice, shown —");
-  const mia = await fresh(browser);
-  const kai = await fresh(browser);
-  const me = await fresh(browser);
-  await me.waitForTimeout(400);
-  const centre = await openPatch(me);
-  const [left, right] = [centre - 1, centre + 1];
-
-  await claimAs(mia, "Mia", left);
-  await claimAs(kai, "Kai", right);
-  await me.waitForTimeout(300);
-
-  // Watch Mia's page for a +1 appearing on Mia's own tile.
-  const miaFloat = mia.waitForSelector(`button.tile[value="${left}"] .rise[data-delta="up"]`, { timeout: 3000 }).catch(() => null);
-  await claimAs(me, "Me", centre);
-
-  const myNotice = (await me.textContent('[data-notice="claimed"]')) ?? "";
-  check(/^Your building is up! \+14\/min · (Mia and Kai|Kai and Mia) \+20%$/.test(myNotice), "my claim says it's up, its income, and whose it raised", myNotice);
-  check((await miaFloat) !== null, "Mia sees +1 float off her tile");
-  await mia.waitForSelector('[data-notice="arrived"]', { timeout: 3000 }).catch(() => null);
-  const miaNotice = (await mia.textContent('[data-notice="arrived"]').catch(() => null)) ?? "";
-  check(miaNotice === "Me built beside you · +20%", "Mia is told who built beside her", miaNotice);
-  check((await me.locator('[data-notice]').count()) === 1, "I get one message, not one per channel");
-  // Freeze the badge mid-flight so the screenshot shows what a player sees.
-  await mia.addStyleTag({ content: ".rise { animation-play-state: paused !important; animation-delay: -0.25s !important; }" });
-  const badge = mia.locator(`button.tile[value="${left}"]`);
-  await badge.evaluate((el) => {
-    const r = document.createElement("span");
-    r.className = "rise";
-    r.dataset.delta = "up";
-    r.textContent = "+1";
-    el.append(r);
-  });
-  await mia.locator("[data-stage]").screenshot({ path: ".shots/effects-mia.png" });
-
-  // I move far away: Mia and Kai drop, and both are told.
-  const miaDrop = mia.waitForSelector(`button.tile[value="${left}"] .rise[data-delta="down"]`, { timeout: 3000 }).catch(() => null);
-  // Far away and with no claimed neighbours, so the move lifts nobody.
-  const states = await me.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
-  const lonely = (id: number): boolean =>
-    states[id] === "free" &&
-    [-13, -12, -11, -1, 1, 11, 12, 13].every((d) => id + d < 0 || id + d > 143 || states[id + d] === "free");
-  const far = [...Array(144).keys()].filter((id) => Math.abs((id % 12) - (centre % 12)) > 2 || Math.abs(Math.floor(id / 12) - Math.floor(centre / 12)) > 2).find(lonely);
-  if (far === undefined) throw new Error("no lonely free tile left; reseed the board");
-  await clickTile(me, far);
-  await me.click(".move-button");
-  await me.waitForSelector(`button.tile[value="${far}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  const moved = (await me.textContent('[data-notice="moved"]').catch(() => null)) ?? "";
-  check(moved === "Moved! +10/min", "my move says so, and my income", moved);
-  check((await miaDrop) !== null, "Mia sees −1 float off her tile");
-  await mia.waitForSelector('[data-notice="left"]', { timeout: 3000 }).catch(() => null);
-  const left2 = (await mia.textContent('[data-notice="left"]').catch(() => null)) ?? "";
-  check(left2 === "Me moved away · \u221220%", "Mia is told her neighbour moved away", left2);
-
-  for (const p of [mia, kai, me]) await p.context().close();
-}
-
-// The tile's data-* hooks, as a short string for a check's detail.
-const hooks = (page: Page, cell: number): Promise<Record<string, string | undefined>> =>
-  page.$eval(`button.tile[value="${cell}"]`, (el) => ({ ...(el as HTMLElement).dataset }));
-// The inspector's heading and facts, as one line with a space between each.
-const inspectText = (page: Page): Promise<string> =>
-  page.$eval("[data-inspect]", (el) => [...el.querySelectorAll("h2, dt, dd")].map((e) => (e.textContent ?? "").trim()).join(" ")).catch(() => "");
-// Whether an element is really on screen: [hidden] can lose to a display rule.
-const shown = (page: Page, sel: string): Promise<boolean> =>
-  page.$eval(sel, (el) => getComputedStyle(el).display !== "none").catch(() => false);
-// Whether it's rendered at all, an ancestor's [hidden] included.
-const rendered = (page: Page, sel: string): Promise<boolean> =>
-  page.$eval(sel, (el) => el.checkVisibility()).catch(() => false);
-
-async function preview(browser: Browser): Promise<void> {
-  console.log("\n— preview and inspector, by mouse and keyboard —");
-  const mia = await fresh(browser);
-  const me = await fresh(browser);
-  await me.waitForTimeout(400);
-  const centre = await openPatch(me);
-  const left = centre - 1;
-  await claimAs(mia, "Mia", left);
-  await me.waitForSelector(`button.tile[value="${left}"][data-state="held"]`, { timeout: 3000 });
-  check((await me.getAttribute("[data-conn]", "data-conn")) === "live", "the connection line says live");
-
-  // Hover a free tile beside Mia: it previews its height and Mia's rise.
-  const before = await me.$$eval("button.tile", (els) => els.map((e) => `${(e as HTMLElement).dataset.state}:${(e as HTMLElement).dataset.height}`).join());
-  await hoverTile(me, centre);
-  const target = await hooks(me, centre);
-  check(target.preview === "target" && target.previewHeight === "2", "hovering a free plot previews its height (level 1 + 1 neighbour)", JSON.stringify(target));
-  const gain = await me.$eval(`button.tile[value="${centre}"] .beacon`, (el) => ({ data: (el as HTMLElement).dataset.gain, drawn: getComputedStyle(el, "::after").content }));
-  check(gain.data === "+12/min" && gain.drawn === '"+12/min"', "and floats +12/min over the ghost building", JSON.stringify(gain));
-  const lift = await me.$eval(`button.tile[value="${left}"] .beacon`, (el) => getComputedStyle(el, "::after").content);
-  check(lift === '"+20%"', "and +20% over the neighbour it would lift", lift);
-  check((await hooks(me, left)).preview === "lift", "and marks the neighbour it would lift");
-  check(
-    (await me.$$eval("[data-preview]", (els) => els.length)) === 2,
-    "and nothing else",
-    `${await me.$$eval("[data-preview]", (els) => els.map((e) => (e as HTMLButtonElement).value).join())}`,
-  );
-  const facts = await inspectText(me);
-  // (plus, once the goal line is up, what it does for the nearest crown)
-  check((await shown(me, "[data-inspect]")) && /^Free plot Earns \+12\/min Lifts Mia \+20%( Landmark .+)?$/.test(facts), "the inspector says the income there and whose it raises", facts);
-  await me.locator("[data-stage]").screenshot({ path: ".shots/preview-hover.png" });
-  const after = await me.$$eval("button.tile", (els) => els.map((e) => `${(e as HTMLElement).dataset.state}:${(e as HTMLElement).dataset.height}`).join());
-  check(after === before, "previewing changes no real state");
-
-  // Hover Mia's tile: who holds it and how long it's safe.
-  if (await reachable(me, left)) {
-    await me.hover(`button.tile[value="${left}"]`);
-    const info = await inspectText(me);
-    check(/^Mia's Small House Earns \+\d+\/min Neighbours \d of \d Lease \d+ h \d+ m left$/.test(info), "hovering a building shows its owner, type, income and lease left", info);
-  }
-
-  // Moving the mouse off the board clears it all.
-  await me.mouse.move(2, 2);
-  check((await me.$$eval("[data-preview]", (els) => els.length)) === 0, "leaving the board clears the preview");
-  check(!(await shown(me, "[data-inspect]")), "and hides the inspector");
-
-  // Keyboard alone reaches the same information.
-  await me.press("#label", "Enter"); // lands on the board
-  // A key press makes the focus keyboard-visible. Step away and back; at a
-  // board edge one order can't move, so try the other.
-  for (const [away, back] of [["ArrowLeft", "ArrowRight"], ["ArrowRight", "ArrowLeft"]]) {
-    await me.evaluate((c) => (document.querySelector(`button.tile[value="${c}"]`) as HTMLElement).focus(), String(left));
-    await me.keyboard.press(away);
-    await me.keyboard.press(back);
-    if ((await me.evaluate(() => (document.activeElement as HTMLButtonElement).value)) === String(left)) break;
-  }
-  const keyed = await me.evaluate(() => (document.activeElement as HTMLButtonElement).value);
-  const keyInfo = ((await me.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
-  check(keyed === String(left) && /Mia/.test(keyInfo), "the keyboard reaches the inspector", `focused ${keyed}: ${keyInfo.trim()}`);
-  const describedBy = await me.evaluate(() => document.activeElement?.getAttribute("aria-describedby") ?? "");
-  check(describedBy !== "" && (await me.$(`#${describedBy}[data-inspect]`)) !== null, "and the focused tile is described by it", describedBy);
-  await me.keyboard.press("Tab"); // off the board
-  await me.waitForTimeout(50);
-  check(!(await shown(me, "[data-inspect]")), "leaving the board by keyboard hides it");
-
-  await mia.context().close();
-  await me.context().close();
-}
-
-async function claiming(browser: Browser): Promise<void> {
-  console.log("\n— a claim in flight —");
-  const page = await fresh(browser);
-  const watcher = await fresh(browser);
-  await page.waitForTimeout(400);
-  const cell = Number(await freeTile(page));
-  await page.fill("#label", "Slow");
-
-  // The claim reaches the server, but its reply is held back: the stream
-  // shows the new board first, and the page must still not say "claimed"
-  // until the reply confirms it. Every post is counted.
-  let posts = 0;
-  let release = (): void => {};
-  await page.route("**/claim", async (route) => {
-    posts++;
-    const reply = await route.fetch();
-    await new Promise<void>((done) => (release = done));
-    await route.fulfill({ response: reply });
-  });
-  const fresh1 = watcher.waitForSelector(`button.tile[value="${cell}"][data-fresh]`, { timeout: 4000 }).catch(() => null);
-  while (!(await reachable(page, cell))) await turnLeft(page);
-  await page.click(`button.tile[value="${cell}"]`);
-  await page.waitForTimeout(100);
-  check((await hooks(page, cell)).pending === "", "the tile shows pending while the claim runs");
-  await page.click(`button.tile[value="${cell}"]`);
-  await page.focus(`button.tile[value="${cell}"]`);
-  await page.keyboard.press("Enter");
-  await page.waitForTimeout(150);
-  check(posts === 1, "a second click or Enter while pending posts nothing", `${posts} post(s)`);
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check(
-    (await page.locator('[data-notice="claimed"]').count()) === 0 && !/claimed/i.test((await page.textContent("[data-announce]")) ?? ""),
-    "the stream showing it first doesn't announce success before the reply",
-  );
-  check((await hooks(page, cell)).pending === "", "and it stays pending until the reply");
-  release();
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  await page.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 3000 }).catch(() => null);
-  check((await hooks(page, cell)).pending === undefined, "and pending clears when it answers");
-  const said = (await page.textContent('[data-notice="claimed"]').catch(() => "")) ?? "";
-  check(/^Your building is up! \+\d+\/min/.test(said), "success says the building is up", said);
-  await page.waitForTimeout(100);
-  const spoken = (await page.textContent("[data-announce]")) ?? "";
-  check(/^Your building is up, earning \d+ coins a minute\./.test(spoken), "and a full sentence is announced to screen readers", spoken);
-
-  // Someone else's claim is marked on the watcher's board, briefly.
-  check((await fresh1) !== null, "another page marks the fresh claim");
-  await watcher.waitForTimeout(2300);
-  check((await hooks(watcher, cell)).fresh === undefined, "and the mark goes after about two seconds");
-  check(
-    await watcher.evaluate(() => !document.activeElement || !document.activeElement.classList.contains("tile")),
-    "without taking the watcher's focus",
-  );
-  await page.unroute("**/claim");
-  await page.context().close();
-
-  // Failures say why, and never show a claim as made: on a page with no
-  // land yet, so each click is a claim, not a move.
-  const empty = await fresh(browser);
-  await empty.fill("#label", "Fails");
-  const other = Number(await freeTile(empty));
-  for (const [what, handler, pattern] of [
-    ["the network failing", (r: import("playwright-core").Route) => r.abort("internetdisconnected"), /^Can't reach the server: nothing claimed$/],
-    ["a 403", (r: import("playwright-core").Route) => r.fulfill({ status: 403, body: "Cross-site request refused" }), /^Refused: reload and try again$/],
-    ["a 402", (r: import("playwright-core").Route) => r.fulfill({ status: 402, contentType: "application/json", body: '{"error":"coins"}' }), /^Not enough coins$/],
-    ["a 429", (r: import("playwright-core").Route) => r.fulfill({ status: 429, contentType: "application/json", body: '{"error":"cooldown"}' }), /^Not yet: cooling down$/],
-    ["a 409", (r: import("playwright-core").Route) => r.fulfill({ status: 409, contentType: "application/json", body: '{"error":"taken"}' }), /^Someone got there first$/],
-    ["a 400", (r: import("playwright-core").Route) => r.fulfill({ status: 400, contentType: "application/json", body: '{"error":"label"}' }), /^Name: 1 to 24 characters$/],
-  ] as const) {
-    await empty.route("**/claim", handler);
-    await clickTile(empty, other);
-    await empty.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 3000 }).catch(() => null);
-    // A lost request may still have reached the server, so the page first
-    // says it's checking, and says nothing was claimed only once the live
-    // board still shows the tile free (slow-connection fix 3).
-    if (what === "the network failing") {
-      const first = ((await empty.textContent("[data-notices]")) ?? "").trim();
-      check(/^Connection lost: checking your claim$/.test(first), "a lost claim first says it's checking, not that nothing was claimed", first);
-      // Wait for the 3 s follow-up rather than a fixed sleep: a loaded
-      // machine ran it late and read "checking" again.
-      await empty.waitForFunction(() => /nothing claimed/.test(document.querySelector("[data-notices]")?.textContent ?? ""), null, { timeout: 8000 }).catch(() => null);
-    }
-    const text = ((await empty.textContent("[data-notices]")) ?? "").trim();
-    check(pattern.test(text), `${what} is explained`, text);
-    check((await hooks(empty, other)).state === "free", `and after ${what} the tile isn't shown as mine`);
-    await empty.unroute("**/claim");
-  }
-
-  // A claim the server made but whose reply was lost is reported as made,
-  // never "nothing claimed": the board the stream brought is the truth.
-  // Its own page, so `empty` still holds no land for the Space check below.
-  const replyless = await fresh(browser);
-  await replyless.fill("#label", "Replyless");
-  const lost = Number(await freeTile(replyless));
-  await replyless.route("**/claim", async (r) => {
-    await r.fetch();
-    await r.abort("internetdisconnected");
-  });
-  await clickTile(replyless, lost);
-  await replyless.waitForFunction(() => !document.querySelector("[data-pending]"), null, { timeout: 5000 }).catch(() => null);
-  await replyless.waitForTimeout(500);
-  const lostText = ((await replyless.textContent("[data-notices]")) ?? "").trim();
-  check(!/nothing claimed/i.test(lostText), "a claim whose reply was lost is never reported as not made", lostText);
-  check((await hooks(replyless, lost)).state === "mine", "and the tile shows as mine");
-  await replyless.context().close();
-
-  // Space claims a focused tile too.
-  const spaced = Number(await freeTile(empty));
-  await empty.press("#label", "Enter");
-  await empty.evaluate((c) => (document.querySelector(`button.tile[value="${c}"]`) as HTMLElement).focus(), String(spaced));
-  await empty.keyboard.press("Space");
-  await empty.waitForSelector(`button.tile[value="${spaced}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await hooks(empty, spaced)).state === "mine", "Space claims the focused tile");
-
-  await empty.context().close();
-  await watcher.context().close();
-}
-
-async function touchInspect(browser: Browser): Promise<void> {
-  console.log("\n— phone: tap to inspect and preview —");
-  const ana = await fresh(browser);
-  const page = await fresh(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-  await page.waitForTimeout(400);
-  const centre = await openPatch(page);
-  await claimAs(ana, "Ana", centre - 1);
-  await page.waitForSelector(`button.tile[value="${centre - 1}"][data-state="held"]`, { timeout: 3000 });
-
-  await page.locator(`button.tile[value="${centre}"]`).tap();
-  const t = await hooks(page, centre);
-  check(t.selected === "" && t.preview === "target", "tapping a free tile selects and previews it", JSON.stringify(t));
-  check((await hooks(page, centre - 1)).preview === "lift", "and marks whom it would lift");
-  await page.screenshot({ path: ".shots/phone-preview.png" });
-
-  await page.locator(`button.tile[value="${centre - 1}"]`).tap();
-  const info = ((await page.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
-  check((await shown(page, "[data-inspect]")) && /^Ana's Small House/.test(info.trim()) && / left$/.test(info.trim()), "tapping a building inspects it", info.trim());
-  check((await page.$$eval("[data-preview]", (els) => els.length)) === 0, "and a held tile previews nothing");
-  // The free plot tapped before any name was typed is no longer the plan once
-  // a building is being looked at: it loses its ring, and Enter in the name
-  // field builds nothing behind the player's back. Found on the live site.
-  check((await hooks(page, centre)).wanted === undefined, "tapping a building drops the plot picked before a name was typed");
-  const posts: string[] = [];
-  const listen = (r: import("playwright-core").Request): void => void (r.method() === "POST" && posts.push(r.url()));
-  page.on("request", listen);
-  await page.fill("#label", "Stale");
-  await page.press("#label", "Enter");
-  await page.waitForTimeout(600);
-  page.off("request", listen);
-  check(posts.length === 0 && (await hooks(page, centre)).state === "free", "and Enter in the name field then builds nothing", posts.join(" "));
-  await page.fill("#label", "");
-  await page.locator(".confirm-cancel").tap();
-  check((await page.$$eval("[data-selected], [data-preview]", (els) => els.length)) === 0, "Cancel clears the selection and preview");
-  check(!(await shown(page, "[data-inspect]")), "and the inspector");
-  await ana.context().close();
-  await page.context().close();
-}
-
-// --- the room's goal, waves and landmarks (docs/adr/0004) ---
-
-// A player who exists only as a cookie: seeded through the HTTP API, never
-// the database, like any script client would.
-type Player = { pid: string; label: string };
-const player = (label: string): Player => ({ pid: randomUUID(), label });
-async function seed(p: Player, cellId: number): Promise<void> {
-  const res = await fetch(`${APP}/claim`, {
-    method: "POST",
-    headers: { cookie: `pid=${p.pid}`, "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ cellId, label: p.label }),
-  });
-  if (res.status !== 200) throw new Error(`seeding ${p.label} on ${cellId}: ${res.status}`);
-}
-const around = (id: number): number[] =>
-  [-13, -12, -11, -1, 1, 11, 12, 13].map((d) => id + d);
-// The neighbours a plot really has: 3 at a corner, 5 on an edge, else 8.
-const ring = (id: number): number[] => around(id).filter((x) => x >= 0 && x < 144 && Math.abs((x % 12) - (id % 12)) <= 1);
-const goalText = (page: Page): Promise<string> => page.$eval("[data-goal]", (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim());
-
-async function goalLine(browser: Browser): Promise<void> {
-  console.log("\n— the goal: the building nearest its next crown, and plots that help (ADR 6) —");
-  const me = await fresh(browser);
-  await me.waitForTimeout(400);
-  const TIERS = [
-    { tier: "bronze", n: 3 },
-    { tier: "silver", n: 5 },
-    { tier: "gold", n: 8 },
-  ];
-  // The building nearest its next tier, worked out here from the board's own
-  // hooks (data-neighbours, data-tier): fewest still needed, then the higher
-  // tier, then more neighbours, then the lower cell. A tier a plot has no
-  // room for (a corner 3, an edge 5) is never its next.
-  const read = async () => {
-    const tiles = await me.$$eval("button.tile", (els) =>
-      els.map((e) => ({ state: (e as HTMLElement).dataset.state, n: Number((e as HTMLElement).dataset.neighbours ?? 0), tier: (e as HTMLElement).dataset.tier ?? null, label: e.getAttribute("title") })),
-    );
-    const room = (id: number) => ring(id).length;
-    const next = (id: number) => {
-      const t = TIERS[tiles[id].tier ? TIERS.findIndex((x) => x.tier === tiles[id].tier) + 1 : 0];
-      return t && t.n <= room(id) ? t : null;
-    };
-    let top = -1;
-    tiles.forEach((t, id) => {
-      const nx = next(id);
-      if (t.state === "free" || !nx) return;
-      if (top < 0) return void (top = id);
-      const a = { d: nx.n - t.n, r: TIERS.indexOf(nx), n: t.n };
-      const tn = next(top)!;
-      const b = { d: tn.n - tiles[top].n, r: TIERS.indexOf(tn), n: tiles[top].n };
-      if (a.d < b.d || (a.d === b.d && (a.r > b.r || (a.r === b.r && a.n > b.n)))) top = id;
-    });
-    return { tiles, top, next: top < 0 ? null : next(top) };
-  };
-  // Hidden until a crown stands or a building is one short of its next tier.
-  const crowns = Number(await me.textContent("[data-landmarks]"));
-  const first = await read();
-  const short = first.next ? first.next.n - first.tiles[first.top].n : Infinity;
-  if (crowns === 0 && short > 1) {
-    check(!(await rendered(me, "[data-goal]")), "the goal line is hidden while nobody is near a crown", `nearest is ${short} short`);
-    const patch = await openPatch(me);
-    await seed(player("Seed"), patch);
-    await seed(player("Ring0"), patch - 13);
-    await me.waitForSelector(`button.tile[value="${patch - 13}"][data-state="held"]`, { timeout: 3000 });
-    check(!(await rendered(me, "[data-goal]")), "and still hidden two short of bronze");
-    await seed(player("Ring1"), patch - 12);
-    await me.waitForFunction(() => document.querySelector("[data-goal]")?.checkVisibility() ?? false, null, { timeout: 3000 }).catch(() => null);
-    check(await rendered(me, "[data-goal]"), "and shown once a building is one short of bronze");
-  }
-  const before = await goalText(me);
-  check((await rendered(me, "[data-goal]")) && /^\d+ landmarks? raised · Closest: .+, \d of [358] neighbours for (bronze|silver|gold)$/.test(before), "the goal line names the next tier", before);
-  let { tiles, top, next } = await read();
-  const named = tiles[top].state === "mine" ? "your building" : `${tiles[top].label}'s building`;
-  check(before.endsWith(`Closest: ${named}, ${tiles[top].n} of ${next!.n} neighbours for ${next!.tier}`), "and the nearest building on the board", before);
-  const gaps = ring(top).filter((id) => tiles[id].state === "free");
-  const watch = me.waitForFunction((was) => (document.querySelector("[data-goal]")?.textContent ?? "").replace(/\s+/g, " ").trim() !== was, before, { timeout: 3000 }).catch(() => null);
-  await seed(player("Helper"), gaps[0]);
-  check((await watch) !== null, "and moves on when that building gains a neighbour", await goalText(me));
-  ({ tiles, top, next } = await read());
-  const name = tiles[top].state === "mine" ? "your building" : `${tiles[top].label}'s building`;
-  const open = ring(top).filter((id) => tiles[id].state === "free");
-  const k = tiles[top].n;
-
-  const gap = open[0];
-  const glowing = await me.$$eval("button.tile[data-helps]", (els) => els.map((e) => Number((e as HTMLButtonElement).value)));
-  check(open.length > 0 && open.every((id) => glowing.includes(id)), "every gap round the closest building glows", `gaps ${open.join(",")}; glowing ${glowing.join(",")}`);
-  const glow = await me.$eval(`button.tile[value="${gap}"]`, (el) => getComputedStyle(el).boxShadow);
-  check(/255, 176, 0/.test(glow), "the glow is drawn", glow.slice(0, 60));
-  await hoverTile(me, gap);
-  const facts = await inspectText(me);
-  check(facts.includes(`Landmark ${name} → ${k + 1} of ${next!.n} for ${next!.tier}`) || /Landmark completes (bronze|silver|gold)!/.test(facts), "the inspector says what a glowing plot would do", facts);
-  await me.locator("[data-stage]").screenshot({ path: ".shots/goal-helps.png" });
-  await me.mouse.move(2, 2);
-  await me.locator(".hud").screenshot({ path: ".shots/goal-line.png" });
-  await me.context().close();
-}
-
-async function landmarks(browser: Browser): Promise<void> {
-  console.log("\n— a landmark raised by nine people —");
-  const watcher = await fresh(browser);
-  const calm = await fresh(browser, { reducedMotion: "reduce" });
-  await watcher.waitForTimeout(400);
-  const centre = await openPatch(watcher);
-  const countBefore = Number(await watcher.textContent("[data-landmarks]"));
-  // Watcher's focus sits in the name field; a celebration mustn't move it.
-  await watcher.focus("#label");
-
-  // Nine people, the holder first, then the ring. Names at their worst: one
-  // as long as a label can be.
-  const nine = ["Holder Hana", "Kai", "Zoe", "Ari", "Bartholomew Fitzgerald-X", "Cy", "Di", "Ed", "Flo"].map(player);
-  await seed(nine[0], centre);
-  const ring = around(centre);
-  // Bronze first (ADR 6): the third neighbour crowns the centre, and every
-  // page gets the lighter line, no burst.
-  const bronze = watcher.waitForSelector('.cheer[data-tier="bronze"]:not([hidden])', { timeout: 3000 }).catch(() => null);
-  for (let i = 0; i < 3; i++) await seed(nine[i + 1], ring[i]);
-  check((await bronze) !== null, "bronze tells every page in a lighter line");
-  const light = ((await watcher.textContent(".cheer")) ?? "").trim();
-  check(/^Bronze crown at row \d+, column \d+: .+$/.test(light), "naming where and who", light);
-  check((await watcher.$(`button.tile[value="${centre}"] .burst`)) === null, "with no burst");
-  check((await watcher.getAttribute(`button.tile[value="${centre}"]`, "data-tier")) === "bronze", "and the tower wears a bronze crown");
-  await watcher.locator(".toasts").screenshot({ path: ".shots/landmark-bronze-toast.png" });
-  for (let i = 3; i < 7; i++) await seed(nine[i + 1], ring[i]);
-  const burst = watcher.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
-  const calmBurst = calm.waitForSelector(`button.tile[value="${centre}"] .burst`, { timeout: 3000 }).catch(() => null);
-  await seed(nine[8], ring[7]);
-
-  check((await burst) !== null, "the watching page bursts over the new landmark");
-  // Up by one on an empty patch; by more if the block also finished a tower
-  // beside an earlier run's.
-  check(Number(await watcher.textContent("[data-landmarks]")) > countBefore, "and the count goes up", `${countBefore} → ${await watcher.textContent("[data-landmarks]")}`);
-  check((await watcher.$("[data-landmarks][data-bump]")) !== null, "with a bump");
-  const cheer = ((await watcher.textContent(".cheer")) ?? "").trim();
-  check((await shown(watcher, ".cheer")) && nine.every((p) => cheer.includes(p.label)), "one line names all nine", cheer);
-  await watcher.waitForTimeout(150);
-  check(((await watcher.textContent("[data-announce]")) ?? "") === cheer, "and it's announced", (await watcher.textContent("[data-announce]")) ?? "");
-  check(await watcher.evaluate(() => document.activeElement?.id === "label"), "focus stays where it was");
-  check((await watcher.$(`button.tile[value="${centre}"] .crown`)) !== null, "the tower wears a crown");
-  const aria = (await watcher.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
-  check(aria.endsWith(`Gold landmark raised by ${nine.slice(0, 8).map((p) => p.label).join(", ")} and Flo`), "and its label names who raised it", aria);
-  // Frozen mid-burst for the screenshot.
-  await watcher.addStyleTag({ content: ".burst { animation-play-state: paused !important; animation-delay: -0.5s !important; }" });
-  await watcher.screenshot({ path: ".shots/landmark.png" });
-  await watcher.locator("[data-stage]").screenshot({ path: ".shots/landmark-stage.png" });
-
-  check((await calmBurst) !== null, "under reduced motion it's marked too");
-  const still = await calm.$eval(`button.tile[value="${centre}"] .burst`, (el) => getComputedStyle(el).animationName).catch(() => "gone");
-  check(still === "none", "standing still", still);
-
-  // The crown, up close, in greyscale, after the moment has passed.
-  await watcher.waitForTimeout(3200);
-  check((await watcher.$$(".burst")).length === 0, "the burst goes by itself");
-  const late = await fresh(browser, { deviceScaleFactor: 4, reducedMotion: "reduce" });
-  await late.waitForTimeout(500);
-  check((await late.$(`button.tile[value="${centre}"] .crown`)) !== null, "a page opened later shows the crown");
-  check((await late.$$(".burst")).length === 0 && !(await shown(late, ".cheer")), "but doesn't replay the celebration");
-  const box = await late.locator(`button.tile[value="${centre}"]`).boundingBox();
-  if (box) {
-    const clip = { x: box.x - box.width * 1.2, y: box.y - box.height * 2.4, width: box.width * 3.4, height: box.height * 4 };
-    await late.screenshot({ path: ".shots/landmark-crown.png", clip });
-    await late.addStyleTag({ content: "html { filter: grayscale(1); }" });
-    await late.screenshot({ path: ".shots/landmark-crown-grey.png", clip });
-  }
-  await hoverTile(late, centre);
-  const facts = ((await late.textContent("[data-inspect]")) ?? "").replace(/\s+/g, " ");
-  check(/Landmark\s*Gold, raised by Holder Hana, Kai/.test(facts), "the inspector names the landmark's raisers", facts.trim());
-  for (const p of [watcher, calm, late]) await p.context().close();
-}
-
-// --- the city economy (docs/adr/0005) ---
-
-// A POST as a seeded player, through HTTP like any script client.
-async function postAs(p: Player, route: string, body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
-  const res = await fetch(`${APP}${route}`, {
-    method: "POST",
-    headers: { cookie: `pid=${p.pid}`, "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(body),
-  });
-  return { status: res.status, json: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-}
-// A page whose cookie is a known pid, so seeded players can act on it.
-async function freshAs(browser: Browser, p: Player, opts: Parameters<Browser["newContext"]>[0] = {}): Promise<Page> {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...opts });
-  await ctx.addCookies([{ name: "pid", value: p.pid, url: APP }]);
-  const page = await ctx.newPage();
-  page.on("pageerror", (e) => check(false, "no script errors", e.message));
-  await page.goto(`${APP}/?v=${Date.now()}`);
-  await page.waitForTimeout(400);
-  return page;
-}
-const hudText = (page: Page, key: string): Promise<string> => page.$eval(`[data-hud-${key}]`, (el) => el.textContent ?? "");
-const coinsOf = async (page: Page): Promise<number> => Number(await hudText(page, "coins"));
-const noticeOf = async (page: Page): Promise<string> => ((await page.textContent("[data-notices]")) ?? "").trim();
-
-// A free plot whose 8 neighbours are free too, for a fresh block.
-async function claimOwn(browser: Browser, name: string): Promise<{ me: Player; page: Page; cell: number }> {
-  const me = player(name);
-  const page = await freshAs(browser, me);
-  const cell = await openPatch(page);
-  await claimAs(page, name, cell);
-  return { me, page, cell };
-}
-
-async function economy(browser: Browser): Promise<void> {
-  console.log("\n— the economy: claim, collect, upgrade, and controls that appear only when usable —");
-  const me = player("Wally");
-  const page = await freshAs(browser, me);
-  const watcher = await fresh(browser);
-  check(!(await rendered(page, "[data-wallet]")) && !(await rendered(page, '[data-act="upgrade"]')), "before a claim there's no wallet and no Upgrade");
-  const cell = await openPatch(page);
-  await claimAs(page, "Wally", cell);
-  check((await noticeOf(page)) === "Your building is up! +10/min", "a claim says the building is up", await noticeOf(page));
-  check((await page.getAttribute(`button.tile[value="${cell}"]`, "data-level")) === "1", "and a Small House stands on it");
-  check((await rendered(page, "[data-wallet]")) && (await hudText(page, "coins")) === "100" && (await hudText(page, "rate")) === "+10/min", "the wallet shows coins and +10/min", `${await hudText(page, "coins")}, ${await hudText(page, "rate")}`);
-  const ring = await page.$eval("[data-hud-lease]", (el) => ({ label: el.getAttribute("aria-label"), title: el.getAttribute("title"), shown: el.checkVisibility() }));
-  check(ring.shown && /^Lease: 2[34] h \d+ m left$/.test(ring.label ?? "") && ring.label === ring.title, "the lease is a ring, named and titled with the time left", JSON.stringify(ring));
-  const plotRing = await page.$eval(`button.tile[value="${cell}"] .ring`, (el) => getComputedStyle(el).display);
-  check(plotRing === "block", "and a ring round the building's foot", plotRing);
-
-  // Absent, not disabled: no Upgrade at 100 coins, no Renew at 24 h, and no
-  // Collect until a coin waits.
-  check(!(await rendered(page, '[data-act="upgrade"]')), "with 100 coins there's no Upgrade button at all");
-  check((await page.$$eval("[data-renew-hours]", (els) => els.filter((e) => e.checkVisibility()).length)) === 0, "with 24 h left there's no Renew");
-  check((await page.$$("[data-why], .act-why")).length === 0 && (await page.$$eval("button:disabled", (els) => els.filter((e) => e.checkVisibility()).length)) === 0, "and no disabled button explaining itself anywhere");
-  await page.locator("[data-wallet]").screenshot({ path: ".shots/wallet-new.png" });
-
-  // Income waits: Collect appears, and a +N ticks up over the building.
-  await page.waitForSelector('[data-act="collect"]:not([hidden])', { timeout: 9000 }).catch(() => null);
-  check(await rendered(page, '[data-act="collect"]'), "once a coin waits, Collect appears");
-  const o0 = Number((await page.textContent(`button.tile[value="${cell}"] .owed`))?.replace("+", "") ?? NaN);
-  await page.waitForTimeout(6500); // 10 coins/min: one coin every 6 s
-  const o1 = Number((await page.textContent(`button.tile[value="${cell}"] .owed`))?.replace("+", "") ?? NaN);
-  check(o1 > o0, "and a +N over the building ticks up", `${o0} → ${o1}`);
-  await page.locator("[data-stage]").screenshot({ path: ".shots/income-waiting.png" });
-
-  // Collect: coins fly to the wallet, which counts up; Collect goes away.
-  const before = await coinsOf(page);
-  await page.click('[data-act="collect"]');
-  await page.waitForSelector(".flying-coin", { timeout: 2000 }).catch(() => null);
-  const flying = await page.$$eval(".flying-coin", (els) => els.length);
-  await page.screenshot({ path: ".shots/collect.png" });
-  check(flying > 0, "Collect sends coins flying to the wallet", `${flying} coins`);
-  await page.waitForFunction((b) => Number(document.querySelector("[data-hud-coins]")?.textContent) > b, before, { timeout: 3000 }).catch(() => null);
-  const after = await coinsOf(page);
-  check(after > before, "and the wallet counts up", `${before} → ${after}`);
-  check((await noticeOf(page)) === `+${after - before} collected`, "saying how many, in a word", await noticeOf(page));
-  check(!(await rendered(page, '[data-act="collect"]')), "and Collect goes away with nothing waiting");
-
-  // Four neighbours each help once: 200 coins, so Upgrade appears.
-  const helpers = ["Hal", "Hope", "Hugh", "Hana"].map(player);
-  const ringIds = around(cell);
-  for (let i = 0; i < helpers.length; i++) {
-    await seed(helpers[i], ringIds[i]);
-    const r = await postAs(helpers[i], "/help", { cellId: cell });
-    if (r.status !== 200) throw new Error(`helper ${i}: ${r.status} ${JSON.stringify(r.json)}`);
-  }
-  await page.waitForSelector('[data-act="upgrade"]:not([hidden])', { timeout: 3000 }).catch(() => null);
-  const upLabel = await page.getAttribute('[data-act="upgrade"]', "aria-label");
-  check((await rendered(page, '[data-act="upgrade"]')) && (await hudText(page, "next")) === "Townhouse" && (await hudText(page, "cost")) === "150", "with enough coins, Upgrade appears, naming the Townhouse and its cost", `${await hudText(page, "next")} ${await hudText(page, "cost")}`);
-  check(upLabel === "Upgrade to Townhouse for 150 coins", "and says so to a screen reader", upLabel ?? "");
-  check((await hudText(page, "rate")) === "+18/min", "four neighbours: +18/min", await hudText(page, "rate"));
-  await page.locator("[data-wallet]").screenshot({ path: ".shots/wallet-upgrade.png" });
-
-  const seen = watcher.waitForSelector(`button.tile[value="${cell}"][data-level="2"]`, { timeout: 3000 }).catch(() => null);
-  const started = Date.now();
-  await page.click('[data-act="upgrade"]');
-  await page.waitForSelector(`button.tile[value="${cell}"][data-level="2"]`, { timeout: 3000 }).catch(() => null);
-  check((await page.getAttribute(`button.tile[value="${cell}"]`, "data-level")) === "2", "Upgrade turns the Small House into a Townhouse");
-  check((await hudText(page, "rate")) === "+36/min", "the wallet follows", await hudText(page, "rate"));
-  check((await noticeOf(page)) === "Townhouse! +36/min", "and says so in a line", await noticeOf(page));
-  check((await seen) !== null && Date.now() - started < 1000, "another browser sees the upgrade within a second", `${Date.now() - started} ms`);
-  check(!(await rendered(page, '[data-act="upgrade"]')), "and Upgrade goes, now out of reach");
-  const roof = await page.$eval(`button.tile[value="${cell}"] .roof`, (el) => getComputedStyle(el, "::before").content);
-  check(roof !== "none", "and a Townhouse draws a different roofline", roof);
-
-  // Without JavaScript the same actions are plain forms.
-  const nojs = await (async () => {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: false });
-    await ctx.addCookies([{ name: "pid", value: me.pid, url: APP }]);
-    const p = await ctx.newPage();
-    await p.goto(`${APP}/?v=${Date.now()}`);
-    return p;
-  })();
-  await nojs.waitForTimeout(2500);
-  await nojs.reload();
-  const forms = await nojs.$$eval("button[formaction]", (els) => els.map((e) => e.getAttribute("formaction")));
-  check(["/collect", "/upgrade", "/renew"].every((a) => forms.includes(a)), "without JavaScript, collect, upgrade and renew are form buttons", forms.join(" "));
-  const c0 = Number(await nojs.textContent("[data-hud-coins]"));
-  if (await rendered(nojs, '[data-act="collect"]')) {
-    await nojs.click('[data-act="collect"]');
-    await nojs.waitForURL(/notice=(collected|nothing-to-collect)/, { timeout: 3000 }).catch(() => null);
-    check(/notice=collected/.test(nojs.url()) && Number(await nojs.textContent("[data-hud-coins]")) > c0, "and Collect posts and reloads with more coins", nojs.url());
-    check(((await nojs.textContent("[data-notices]")) ?? "").trim() === "Collected!", "saying so in a word");
-  } else check(false, "the no-JS page shows Collect when income waits");
-  await nojs.context().close();
-
-  await buildingLevels(browser);
-  for (const p of [page, watcher]) await p.context().close();
-}
-
-// The five building types side by side, drawn by the real stylesheet on
-// real plots: a page with its tiles' levels set by hand, for the camera
-// only (nothing is posted).
-async function buildingLevels(browser: Browser): Promise<void> {
-  const page = await fresh(browser, { deviceScaleFactor: 3, reducedMotion: "reduce" });
-  await page.evaluate(() => {
-    const tiles = [...document.querySelectorAll<HTMLButtonElement>("button.tile")];
-    tiles.forEach((t) => {
-      t.dataset.state = "free";
-      delete t.dataset.level;
-      t.style.setProperty("--h", "0");
-      delete t.dataset.helps;
-      delete t.dataset.lease;
-      delete t.dataset.landmark;
-      t.querySelector(".crown")?.remove();
-      t.querySelector(".initials")!.textContent = "";
-    });
-    [1, 2, 3, 4, 5].forEach((level, i) => {
-      const t = tiles[5 * 12 + 2 + i * 2];
-      t.dataset.state = i === 2 ? "mine" : "held";
-      t.dataset.level = String(level);
-      t.style.setProperty("--h", String(level));
-      t.style.setProperty("--hue", String([200, 20, 320, 140, 260][i]));
-    });
-    const soon = tiles[8 * 12 + 4];
-    soon.dataset.state = "held";
-    soon.dataset.level = "2";
-    soon.dataset.lease = "soon";
-    soon.style.setProperty("--h", "2");
-    soon.style.setProperty("--hue", "40");
-  });
-  const box = await page.locator(".board").boundingBox();
-  if (box) {
-    const clip = { x: box.x + box.width * 0.1, y: box.y + box.height * 0.2, width: box.width * 0.8, height: box.height * 0.6 };
-    await page.screenshot({ path: ".shots/buildings.png", clip });
-    await page.addStyleTag({ content: "html { filter: grayscale(1); }" });
-    await page.screenshot({ path: ".shots/buildings-grey.png", clip });
-  }
-  await page.context().close();
-  const one = await fresh(browser, { deviceScaleFactor: 1, reducedMotion: "reduce" });
-  await one.locator("[data-stage]").screenshot({ path: ".shots/buildings-1x.png" });
-  await one.context().close();
-}
-
-async function relocation(browser: Browser): Promise<void> {
-  console.log("\n— relocating: preview, confirm, cooldown —");
-  const { page, cell } = await claimOwn(browser, "Remy");
-  const watcher = await fresh(browser);
-  const states = await page.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
-  const dest = [...Array(144).keys()].find(
-    (id) => states[id] === "free" && Math.abs((id % 12) - (cell % 12)) > 3 && around(id).every((n) => n < 0 || n > 143 || Math.abs((n % 12) - (id % 12)) > 1 || states[n] === "free"),
-  );
-  if (dest === undefined) throw new Error("no lonely free plot left; reseed the board");
-  check(!(await rendered(page, ".move-button")), "no Move button until a free plot is picked");
-  await clickTile(page, dest);
-  const facts = await inspectText(page);
-  const label = ((await page.textContent(".move-button")) ?? "").trim();
-  check(facts === "Free plot Earns +10/min" && label === "Move here · 50" && (await rendered(page, ".move-button")), "picking a free plot shows what it earns, and Move here with its cost", `${facts} | ${label}`);
-  check((await hooks(page, dest)).preview === "target", "and previews the building there");
-  check((await hooks(page, dest)).state === "free", "nothing moves before the confirm");
-  await page.screenshot({ path: ".shots/relocate-preview.png" });
-  const seen = watcher.waitForSelector(`button.tile[value="${dest}"][data-state="held"]`, { timeout: 3000 }).catch(() => null);
-  const started = Date.now();
-  await page.click(".move-button");
-  await page.waitForSelector(`button.tile[value="${dest}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await hooks(page, dest)).state === "mine" && (await hooks(page, cell)).state === "free", "confirming moves the building");
-  check((await coinsOf(page)) === 50, "for 50 coins", String(await coinsOf(page)));
-  check((await seen) !== null && Date.now() - started < 1000, "another browser sees the move within a second", `${Date.now() - started} ms`);
-  // Cooling down: a free plot offers no Move at all.
-  const another = (await openPatch(page)) + 1;
-  await clickTile(page, another);
-  await page.waitForTimeout(100);
-  check((await rendered(page, "[data-inspect]")) && !(await rendered(page, ".move-button")), "during the cooldown a free plot is inspected, with no Move button");
-  for (const p of [page, watcher]) await p.context().close();
-
-  // On a phone the move is the confirm bar, under the thumb.
-  const ph = player("Phoebe");
-  const phone = await freshAs(browser, ph, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-  const home = await openPatch(phone);
-  await seed(ph, home);
-  await phone.reload();
-  await phone.waitForTimeout(400);
-  const far = (await openPatch(phone)) + 13;
-  await tapTile(phone, far);
-  const bar = await phone.locator(".confirm-claim").boundingBox();
-  check((await phone.textContent(".confirm-claim")) === "Move here · 50" && (bar?.y ?? 0) > 700, "on a phone the move is confirmed from a bar at the bottom", `${await phone.textContent(".confirm-claim")} at y=${Math.round(bar?.y ?? 0)}`);
-  await phone.screenshot({ path: ".shots/relocate-phone.png" });
-  await phone.locator(".confirm-claim").tap();
-  await phone.waitForSelector(`button.tile[value="${far}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await hooks(phone, far)).state === "mine", "and confirming moves it");
-  await phone.context().close();
-}
-
-async function renewal(browser: Browser): Promise<void> {
-  console.log("\n— renewing a lease: offered only under 6 hours, up to 48 —");
-  const { me, page, cell } = await claimOwn(browser, "Rena");
-  // Three neighbours help: 100 + 150 = 250 coins.
-  const ring = around(cell);
-  for (const [i, h] of ["Ned", "Nia", "Noor"].map(player).entries()) {
-    await seed(h, ring[i]);
-    await postAs(h, "/help", { cellId: cell });
-  }
-  await page.waitForFunction(() => Number(document.querySelector("[data-hud-coins]")?.textContent) >= 250, null, { timeout: 3000 }).catch(() => null);
-  check((await page.$$eval("[data-renew-hours]", (els) => els.filter((e) => e.checkVisibility()).length)) === 0, "with 24 h left there's no Renew, however many coins");
-  // A lease only gets under 6 h by waiting 18 h, so the page's clock is
-  // moved on instead (nothing is posted until the renewal itself).
-  const lease0 = await page.getAttribute(`button.tile[value="${cell}"]`, "data-lease-ends-at");
-  await page.clock.install({ time: new Date(new Date(lease0!).getTime() - 5 * 3_600_000) });
-  await page.clock.runFor(1100);
-  await page.waitForSelector("[data-renew-hours]:not([hidden])", { timeout: 3000 }).catch(() => null);
-  const opts = await page.$$eval("[data-renew-hours]", (els) => els.filter((e) => e.checkVisibility()).map((e) => e.getAttribute("aria-label")));
-  check(opts.join(" | ") === "Renew lease 6 hours for 100 coins | Renew lease 12 hours for 180 coins", "under 6 h, Renew appears with only the options you can afford", opts.join(" | "));
-  const ringLabel = (await page.getAttribute("[data-hud-lease]", "aria-label")) ?? "";
-  check(/^Lease: [45] h \d+ m left$/.test(ringLabel), "and the ring has drained, its name the time left", ringLabel);
-  await page.locator("[data-wallet]").screenshot({ path: ".shots/renew-open.png" });
-  await page.clock.resume();
-  await page.click('[data-renew-hours="12"]');
-  await page.waitForFunction((l) => document.querySelector(`button.tile[data-state="mine"]`)?.getAttribute("data-lease-ends-at") !== l, lease0, { timeout: 3000 }).catch(() => null);
-  const lease1 = await page.getAttribute(`button.tile[value="${cell}"]`, "data-lease-ends-at");
-  const added = (new Date(lease1!).getTime() - new Date(lease0!).getTime()) / 3_600_000;
-  check(Math.round(added) === 12, "renewing 12 h extends the lease by 12 h", `${added.toFixed(2)} h`);
-  check(/^Lease renewed · \d+ h left$/.test(await noticeOf(page)), "and says so in a line", await noticeOf(page));
-  // Now at 36 h of a 48 h cap: 24 h is past it, whatever the coins.
-  for (const [i, h] of ["Oz", "Ola"].map(player).entries()) {
-    await seed(h, ring[3 + i]);
-    await postAs(h, "/help", { cellId: cell });
-  }
-  const r = await postAs(me, "/renew", { hours: 24 });
-  check(r.status === 400 && r.json.error === "max-lease", "the server refuses a renewal past 48 h", `${r.status} ${JSON.stringify(r.json)}`);
-  await page.context().close();
-}
-
-async function helping(browser: Browser): Promise<void> {
-  console.log("\n— helping a neighbour —");
-  const ana = player("Anya");
-  const ben = player("Bram");
-  const a = await freshAs(browser, ana);
-  const b = await freshAs(browser, ben);
-  const centre = await openPatch(a);
-  await claimAs(a, "Anya", centre);
-  await claimAs(b, "Bram", centre + 1);
-  await a.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
-  check(!(await rendered(a, ".help-button")), "no Help button until a neighbour's building is picked");
-  await clickTile(a, centre + 1);
-  const label = (await a.textContent(".help-button")) ?? "";
-  const name = (await a.getAttribute(".help-button", "aria-label")) ?? "";
-  check(label === "Help Bram · +50" && (await rendered(a, ".help-button")), "a neighbour's inspector offers Help", label);
-  check(name === "Help Bram: 50 coins to them, 20 to you", "with a full accessible name", name);
-  const bCoins = await coinsOf(b);
-  const started = Date.now();
-  const seen = b.waitForFunction((c) => Number(document.querySelector("[data-hud-coins]")?.textContent) === c + 50, bCoins, { timeout: 3000 }).catch(() => null);
-  await a.click(".help-button");
-  await a.waitForSelector('[data-notice="helped"]', { timeout: 3000 }).catch(() => null);
-  check((await noticeOf(a)) === "Helped! +50 to them, +20 to you", "Anya is told, in a line", await noticeOf(a));
-  check((await coinsOf(a)) === 120, "and gets 20 coins", String(await coinsOf(a)));
-  check((await seen) !== null && Date.now() - started < 1000, "Bram's page shows his 50 coins within a second", `${Date.now() - started} ms`);
-  check(!(await rendered(a, ".help-button")), "then Help goes away while it cools down");
-  await a.screenshot({ path: ".shots/help.png" });
-  const states = await a.$$eval("button.tile", (els) => els.map((e) => (e as HTMLElement).dataset.state));
-  const farHeld = states.findIndex((s, id) => s === "held" && !around(centre).includes(id));
-  if (farHeld >= 0 && (await reachable(a, farHeld))) {
-    await a.hover(`button.tile[value="${farHeld}"]`);
-    check(!(await rendered(a, ".help-button")), "a building not beside mine offers no Help");
-  }
-  for (const p of [a, b]) await p.context().close();
-  const nojs = await fresh(browser, { javaScriptEnabled: false });
-  check((await nojs.$$(".help-button, .wave-button, .waved")).length === 0, "without JavaScript there's no Help button, and no wave anywhere");
-  await nojs.context().close();
-}
-
-
-// --- returning a favour (docs/adr/0008) ---
-async function returning(browser: Browser): Promise<void> {
-  console.log("\n— returning a favour: help back inside the hour —");
-  const ana = player("Kai");
-  const ben = player("Mia");
-  const a = await freshAs(browser, ana);
-  const b = await freshAs(browser, ben);
-  const centre = await openPatch(a);
-  await claimAs(a, "Kai", centre);
-  await claimAs(b, "Mia", centre + 1);
-  await a.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
-  await b.waitForSelector(`button.tile[value="${centre}"][data-state="held"]`, { timeout: 3000 });
-  check((await a.$$("button.tile[data-return]")).length === 0, "nothing glows before anyone has helped");
-  // Kai helps Mia; Mia's page lights Kai's building
-  const glow = b.waitForSelector(`button.tile[value="${centre}"][data-return]`, { timeout: 3000 }).catch(() => null);
-  await clickTile(a, centre + 1);
-  await a.click(".help-button");
-  await a.waitForSelector('[data-notice="helped"]', { timeout: 3000 }).catch(() => null);
-  check((await glow) !== null, "Mia's page glows Kai's building once he's helped her");
-  check((await b.$$("button.tile[data-return]")).length === 1, "and only that one");
-  check((await a.$$("button.tile[data-return]")).length === 0, "Kai's own page glows nothing");
-  const aria = (await b.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
-  check(/Helped you: help back for 30 more each$/.test(aria), "the glow has words for a screen reader", aria);
-  const ring = await b.$eval(`button.tile[value="${centre}"]`, (el) => getComputedStyle(el).boxShadow);
-  check(/141, 224, 141/.test(ring), "the glow is drawn green", ring.slice(0, 60));
-  const badge = await b.$eval(`button.tile[value="${centre}"] .beacon`, (el) => getComputedStyle(el, "::after").content);
-  check(badge === '"+30"', "with +30 floating over the roof", badge);
-  // the glow alone, close up and still, before the tile is selected
-  const sharp = await freshAs(browser, ben, { deviceScaleFactor: 4, reducedMotion: "reduce" });
-  await sharp.waitForSelector(`button.tile[value="${centre}"][data-return]`, { timeout: 3000 }).catch(() => null);
-  const box = await sharp.$eval(`button.tile[value="${centre}"]`, (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: Math.max(0, r.x - 50), y: Math.max(0, r.y - 70), width: r.width + 140, height: r.height + 110 };
-  });
-  await sharp.screenshot({ path: ".shots/return-glow-4x.png", clip: box });
-  await sharp.context().close();
-  await clickTile(b, centre);
-  const label = (await b.textContent(".help-button")) ?? "";
-  const name = (await b.getAttribute(".help-button", "aria-label")) ?? "";
-  check(label === "Help back +30 each" && (await rendered(b, ".help-button")), "Mia's Help reads Help back +30 each", label);
-  check(name === "Help Kai back: 80 coins to them, 50 to you", "with a full accessible name", name);
-  await b.locator("[data-stage]").screenshot({ path: ".shots/return-glow.png" });
-  const clip = await b.$eval(`button.tile[value="${centre}"]`, (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: Math.max(0, r.x - 80), y: Math.max(0, r.y - 80), width: r.width + 160, height: r.height + 160 };
-  });
-  await b.screenshot({ path: ".shots/return-close.png", clip });
-  await b.screenshot({ path: ".shots/return-inspector.png" });
-  const kai = await coinsOf(a);
-  const mia = await coinsOf(b);
-  const paid = a.waitForFunction((c) => Number(document.querySelector("[data-hud-coins]")?.textContent) === c + 80, kai, { timeout: 3000 }).catch(() => null);
-  await b.click(".help-button");
-  await b.waitForSelector('[data-notice="returned"]', { timeout: 3000 }).catch(() => null);
-  check((await noticeOf(b)) === "Helped back! +30 each", "Mia is told, in a line", await noticeOf(b));
-  check((await coinsOf(b)) === mia + 50, "and gets 20 + 30", `${mia} -> ${await coinsOf(b)}`);
-  check((await paid) !== null, "Kai's page shows his 50 + 30");
-  check((await b.$$("button.tile[data-return]")).length === 0, "the glow goes once the favour is returned");
-  await a.click('[data-tool="log"] > button, button[aria-controls*="log"], [data-tools] button[title="City activity"]').catch(() => undefined);
-  const log = await a.$eval("[data-events]", (el) => el.textContent ?? "").catch(() => "");
-  check(log.includes("Mia returned Kai's help"), "the city log says Mia returned Kai's help", log.slice(0, 80));
-  for (const p of [a, b]) await p.context().close();
-}
-
-// --- parks (docs/adr/0007) ---
-async function parks(browser: Browser): Promise<void> {
-  console.log("\n— parks: a public good placed beside a neighbour —");
-  const ana = player("Pia");
-  const ben = player("Quin");
-  const a = await freshAs(browser, ana);
-  const b = await freshAs(browser, ben);
-  const centre = await openPatch(a);
-  await claimAs(a, "Pia", centre);
-  await claimAs(b, "Quin", centre + 2);
-  await a.waitForSelector(`button.tile[value="${centre + 2}"][data-state="held"]`, { timeout: 3000 });
-  // a free plot beside my own building only: no Park offered
-  await clickTile(a, centre - 1);
-  check(!(await rendered(a, ".park-button")), "a plot beside only my own building offers no Park");
-  // the plot between us, beside Quin
-  await clickTile(a, centre + 1);
-  const label = (await a.textContent(".park-button")) ?? "";
-  const name = (await a.getAttribute(".park-button", "aria-label")) ?? "";
-  check(label === "Place park (60)" && (await rendered(a, ".park-button")), "the plot beside Quin's building offers Place park (60)", label);
-  check(name === "Place a park here for 60 coins: lifts Quin for 2 hours", "with a full accessible name", name);
-  const started = Date.now();
-  const seen = b.waitForSelector(`button.tile[value="${centre + 1}"][data-state="park"]`, { timeout: 3000 }).catch(() => null);
-  await a.click(".park-button");
-  await a.waitForSelector('[data-notice="parked"]', { timeout: 3000 }).catch(() => null);
-  check((await noticeOf(a)) === "Park open! 2 h", "Pia is told, in a line", await noticeOf(a));
-  check((await coinsOf(a)) === 40, "and pays 60 coins", String(await coinsOf(a)));
-  check((await seen) !== null && Date.now() - started < 1000, "Quin's page shows the park within a second", `${Date.now() - started} ms`);
-  const tileAt = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"]`, (el) => ({ state: (el as HTMLElement).dataset.state, h: (el as HTMLElement).dataset.height, yours: (el as HTMLElement).dataset.yours !== undefined, aria: el.getAttribute("aria-label") }));
-  check((await tileAt(a, centre + 1)).yours && !(await tileAt(b, centre + 1)).yours, "it's marked as Pia's on her page only");
-  check((await tileAt(b, centre + 2)).h === "2" && (await tileAt(a, centre)).h === "1", "it lifts Quin to height 2, and never Pia", `${(await tileAt(b, centre + 2)).h}, ${(await tileAt(a, centre)).h}`);
-  await b.waitForSelector('[data-notice="arrived"]', { timeout: 2000 }).catch(() => null);
-  check(/Pia opened a park beside you/.test(await noticeOf(b)), "Quin hears Pia opened a park beside him", await noticeOf(b));
-  const look = await a.$eval(`button.tile[value="${centre + 1}"]`, (el) => getComputedStyle(el).backgroundImage);
-  check(/radial-gradient/.test(look), "the park draws as a green lawn with a tree", look.slice(0, 60));
-  await a.locator("[data-stage]").screenshot({ path: ".shots/park-pia.png" });
-  await b.locator("[data-stage]").screenshot({ path: ".shots/park-quin.png" });
-  const clip = await a.$eval(`button.tile[value="${centre + 1}"]`, (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: Math.max(0, r.x - 60), y: Math.max(0, r.y - 60), width: r.width + 120, height: r.height + 120 };
-  });
-  await a.screenshot({ path: ".shots/park-close.png", clip });
-  // clicking a park says whose it is and never posts
-  await clickTile(b, centre + 1);
-  check((await tileAt(b, centre + 1)).state === "park", "clicking someone's park doesn't claim it");
-  for (const p of [a, b]) await p.context().close();
-  const nojs = await fresh(browser, { javaScriptEnabled: false });
-  check((await nojs.$$(".park-button")).length === 0, "without JavaScript there's no Park button");
-  await nojs.context().close();
-}
-
-// --- zoning (docs/adr/0009) ---
-async function zoning(browser: Browser): Promise<void> {
-  console.log("\n— zoning: a factory beside a neighbour, shown on the roof —");
-  const kai = player("Kai");
-  const mia = player("Mia");
-  const a = await freshAs(browser, kai);
-  const b = await freshAs(browser, mia);
-  const centre = await openPatch(a);
-  await claimAs(a, "Kai", centre);
-  await claimAs(b, "Mia", centre + 1);
-  await a.waitForSelector(`button.tile[value="${centre + 1}"][data-state="held"]`, { timeout: 3000 });
-  check((await a.getAttribute(`button.tile[value="${centre}"]`, "data-zone")) === "civic", "a new building is civic");
-  const markShown = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"] .zone-mark`, (el) => getComputedStyle(el).display !== "none");
-  check(!(await markShown(a, centre)), "a civic building draws no zone icon");
-  // Kai's own building offers the other zones with their cost
-  await clickTile(a, centre);
-  const buttons = await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).map((e) => [e.textContent, e.getAttribute("aria-label")]));
-  check(
-    JSON.stringify(buttons.map((x) => x[0])) === JSON.stringify(["Market · 40", "Factory · 40"]),
-    "Kai's inspector offers Market · 40 and Factory · 40",
-    JSON.stringify(buttons.map((x) => x[0])),
-  );
-  check(buttons[1]?.[1] === "Zone your building a factory for 40 coins: +35% you, \u221210% neighbours", "with a full accessible name", buttons[1]?.[1] ?? "");
-  // nobody else's building offers a rezone
-  await clickTile(a, centre + 1);
-  check((await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).length)) === 0, "Mia's building offers Kai no rezone");
-  await clickTile(a, centre);
-  const before = await coinsOf(a);
-  const heard = b.waitForSelector('[data-notice="zoned"]', { timeout: 3000 }).catch(() => null);
-  const started = Date.now();
-  await a.click('.zone-button[data-zone="factory"]');
-  await a.waitForSelector('[data-notice="rezoned"]', { timeout: 3000 }).catch(() => null);
-  check((await noticeOf(a)) === "Factory! +15.5/min", "Kai is told, in a line", await noticeOf(a));
-  check((await coinsOf(a)) === before - 40, "and pays 40 coins", `${before} -> ${await coinsOf(a)}`);
-  check((await heard) !== null && Date.now() - started < 1500, "Mia hears it within a second or so", `${Date.now() - started} ms`);
-  check((await noticeOf(b)) === "Kai built a factory beside you \u00b7 \u221210%", "in one line, with what it costs her", await noticeOf(b));
-  await b.waitForSelector(`button.tile[value="${centre}"][data-zone="factory"]`, { timeout: 2000 }).catch(() => null);
-  check(await markShown(b, centre), "Mia's page draws the factory on Kai's roof");
-  check(await markShown(a, centre), "and so does Kai's");
-  check((await a.$$eval(".zone-button", (els) => els.filter((e) => (e as HTMLElement).offsetParent !== null).length)) === 0, "the rezone buttons go while it cools down");
-  const aria = (await b.getAttribute(`button.tile[value="${centre}"]`, "aria-label")) ?? "";
-  check(/Kai's Small House, factory, height/.test(aria), "the icon has words for a screen reader", aria);
-  check((await hudText(b, "rate")) === "+11/min", "Mia's income shows the factory's −10%", await hudText(b, "rate"));
-  // the preview counts zones: Zoe, with no land yet, looks at the plot
-  // below Kai's factory and beside Mia. Kai gains a civic neighbour (+20%);
-  // Mia gains one but already has the factory, so +20% too; and Zoe's own
-  // +N/min has the factory's −10% in it: 100 + 40 − 10.
-  const zoe = player("Zoe");
-  const c = await freshAs(browser, zoe);
-  await hoverTile(c, centre + 12);
-  const pct = (id: number) => c.$eval(`button.tile[value="${id}"] .beacon`, (el) => (el as HTMLElement).dataset.pct ?? "");
-  check((await pct(centre)) === "+20%" && (await pct(centre + 1)) === "+20%", "the preview marks each neighbour's own change", `${await pct(centre)}, ${await pct(centre + 1)}`);
-  const gain = await c.$eval(`button.tile[value="${centre + 12}"] .beacon`, (el) => (el as HTMLElement).dataset.gain ?? "");
-  check(gain === "+13/min", "and the plot's +N/min counts the factory's −10%", gain);
-  // the icons, close up and still: a market too, from Zoe
-  await claimAs(c, "Zoe", centre + 12);
-  await postAs(zoe, "/rezone", { zone: "market" });
-  for (const p of [a, b, c]) await p.context().close();
-  const sharp = await freshAs(browser, mia, { deviceScaleFactor: 4, reducedMotion: "reduce" });
-  await sharp.waitForSelector(`button.tile[value="${centre + 12}"][data-zone="market"]`, { timeout: 3000 }).catch(() => null);
-  check(await markShown(sharp, centre + 12), "a market draws its own icon");
-  const box = await sharp.$eval(`button.tile[value="${centre}"]`, (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: Math.max(0, r.x - 70), y: Math.max(0, r.y - 80), width: r.width + 180, height: r.height + 170 };
-  });
-  await sharp.screenshot({ path: ".shots/zoning-4x.png", clip: box });
-  await sharp.locator("[data-stage]").screenshot({ path: ".shots/zoning.png" });
-  await sharp.context().close();
-}
-
-// --- districts and mayors (docs/adr/0010) ---
-// A mayor needs levels that take hours of income, so this plays a board
-// seeded with `node scripts/seed-demo.ts districts` on a fresh DB_PATH; on
-// any other board it says so and checks only the grid lines.
-async function districts(browser: Browser): Promise<void> {
-  console.log("\n— districts: the grid, the mayor's star, and taking the seat —");
-  const as = (name: keyof typeof DISTRICT_PIDS): Player => ({ pid: DISTRICT_PIDS[name], label: name });
-  const at = (name: string) => DISTRICT_SCENE.find(([n]) => n === name)![1];
-  const page = await freshAs(browser, as("Rex"));
-  // the grid: a line every four plots, painted on the board itself
-  const grid = await page.$eval(".board", (el) => getComputedStyle(el, "::before").backgroundImage);
-  check((grid.match(/linear-gradient/g) ?? []).length === 4, "the board draws four district lines", grid.slice(0, 60));
-  const seeded = (await page.getAttribute(`button.tile[value="${at("Kai")}"]`, "data-level")) === "3";
-  if (!seeded) {
-    console.log("  (not the seeded districts board: run seed-demo.ts districts on a fresh DB_PATH to check mayors)");
-    await page.context().close();
-    return;
-  }
-  const mayors = () => page.$$eval("button.tile[data-mayor]", (els) => els.map((e) => Number((e as HTMLButtonElement).value)));
-  const starShown = (p: Page, id: number) => p.$eval(`button.tile[value="${id}"] .mayor-mark`, (el) => getComputedStyle(el).display !== "none");
-  check(JSON.stringify(await mayors()) === JSON.stringify([at("Kai")]), "Kai, top of district 5 over two Lv2s, is its only mayor", JSON.stringify(await mayors()));
-  check(await starShown(page, at("Kai")), "and wears a star on his roof");
-  check(!(await starShown(page, at("Bo"))) && !(await starShown(page, at("Cy"))), "a tie at Lv3 is no mayor: no star");
-  const aria = (await page.getAttribute(`button.tile[value="${at("Kai")}"]`, "aria-label")) ?? "";
-  check(/mayor of district 5/.test(aria), "the star has words for a screen reader", aria);
-  // the star, the crown and the factory sign on one roof, none on another
-  const boxes = await page.$eval(`button.tile[value="${at("Kai")}"]`, (el) =>
-    [".mayor-mark", ".zone-mark", ".crown"].map((s) => {
-      const r = el.querySelector(s)!.getBoundingClientRect();
-      return { s, x: r.x, y: r.y, w: r.width, h: r.height };
-    }),
-  );
-  const overlap = (a: (typeof boxes)[number], b: (typeof boxes)[number]) =>
-    Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-  const star = boxes[0];
-  const hit = boxes.slice(1).map((b) => overlap(star, b) / (star.w * star.h));
-  check(star.w > 4 && hit.every((f) => f < 0.25), "the star stands clear of the zone sign and the crown", hit.map((f) => f.toFixed(2)).join(", "));
-  // the inspector says who's mayor, and what Rex needs
-  await clickTile(page, at("Rex"));
-  const facts = await page.$eval("[data-inspect-facts]", (el) => el.textContent ?? "");
-  check(facts.includes("District 8Lv4 to be mayor"), "Rex's inspector says what it takes", facts);
-  await hoverTile(page, at("Kai"));
-  const kai = await page.$eval("[data-inspect-facts]", (el) => el.textContent ?? "");
-  check(/District 5Mayor \+16%/.test(kai), "Kai's says Mayor +16%", kai);
-  // Rex upgrades: Ivy is now mayor over him, and both are told in a line
-  const ivy = await freshAs(browser, as("Ivy"));
-  const heard = ivy.waitForSelector('[data-notice="mayor"]', { timeout: 3000 }).catch(() => null);
-  await page.click('[data-act="upgrade"]');
-  await page.waitForSelector('[data-notice="upgraded"], [data-notice="mayor"]', { timeout: 3000 }).catch(() => null);
-  check((await heard) !== null && (await noticeOf(ivy)) === "You're mayor! +8%", "Ivy is told she's mayor", await noticeOf(ivy));
-  await ivy.waitForSelector(`button.tile[value="${at("Ivy")}"][data-mayor]`, { timeout: 2000 }).catch(() => null);
-  check(await starShown(ivy, at("Ivy")), "and the star goes up on her roof");
-  // close up and still, at 4x
-  for (const p of [page, ivy]) await p.context().close();
-  // a visitor with no land, so no marker or income float of their own crowds the roofs
-  const sharp = await freshAs(browser, player("Onlooker"), { deviceScaleFactor: 4, reducedMotion: "reduce" });
-  const box = await sharp.$eval(`button.tile[value="${at("Kai")}"]`, (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: Math.max(0, r.x - 90), y: Math.max(0, r.y - 100), width: r.width + 200, height: r.height + 190 };
-  });
-  await sharp.screenshot({ path: ".shots/districts-4x.png", clip: box });
-  await sharp.locator("[data-stage]").screenshot({ path: ".shots/districts.png" });
-  await sharp.context().close();
-}
-
-// --- a stranger, cold: what's on the first screen, and the first minute ---
-
-// The words a person can actually see: text in rendered elements on the
-// screen, plus input placeholders and the logo's alt (its heading text).
-async function visibleWords(page: Page): Promise<string[]> {
-  return page.evaluate(() => {
-    const seen = (el: Element) => el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-    const onScreen = (el: Element) => {
-      const r = el.getBoundingClientRect();
-      return r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
-    };
-    const words: string[] = [];
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const el = n.parentElement!;
-      // roof initials are map labels on other people's buildings, not words to read
-      if (el.closest(".sr-only, script, style, h1, .initials") || !seen(el) || !onScreen(el)) continue;
-      words.push(...(n.textContent ?? "").split(/\s+/).filter(Boolean));
-    }
-    for (const i of document.querySelectorAll("input")) if (seen(i) && onScreen(i) && !i.value) words.push(...i.placeholder.split(/\s+/).filter(Boolean));
-    const logo = document.querySelector("h1");
-    if (logo && seen(logo)) words.push(...(logo.textContent ?? "").split(/\s+/).filter(Boolean));
-    return words;
-  });
-}
-
-async function stranger(browser: Browser): Promise<void> {
-  console.log("\n— a stranger, cold: the first screen and the first minute —");
-  for (const [name, width, height, mobile] of [
-    ["phone", 390, 844, true],
-    ["desktop", 1440, 900, false],
-  ] as const) {
-    const page = await fresh(browser, { viewport: { width, height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 2 });
-    await page.waitForTimeout(500);
-    await page.evaluate(() => document.fonts.ready);
-    const words = await visibleWords(page);
-    check(words.length > 0 && words.length < 25, `${name}: the first screen shows under 25 words`, `${words.length}: ${words.join(" ")}`);
-    for (const [what, sel] of [
-      ["the wallet", "[data-wallet]"],
-      ["Collect", '[data-act="collect"]'],
-      ["Upgrade", '[data-act="upgrade"]'],
-      ["a renewal", "[data-renew-hours]"],
-      ["the city activity", "[data-events]"],
-      ["the map key", ".legend"],
-      ["the camera buttons", "[data-camera] button"],
-      ["the keyboard hint", ".keys-hint"],
-      ["the goal line", "[data-goal]"],
-    ] as const) {
-      const visible = await page.$$eval(sel, (els) => els.some((e) => e.checkVisibility()));
-      check(!visible, `${name}: no ${what} on the first screen`);
-    }
-    const disabled = await page.$$eval("button:disabled", (els) => els.filter((e) => e.checkVisibility()).length);
-    check(disabled === 0, `${name}: no disabled button on the first screen`, `${disabled}`);
-    const tucked = await page.$$eval("details[data-tool] > summary", (els) => els.filter((e) => e.checkVisibility()).map((e) => e.textContent?.trim()));
-    check(tucked.length >= 3 && tucked.every((t) => t && t.length > 0), `${name}: the key, activity and camera sit behind named icons`, tucked.join(", "));
-    const glow = await page.$$eval('button.tile[data-state="free"]', (els) => els.map((el) => getComputedStyle(el).animationName));
-    check(glow.length > 0 && glow.every((a) => a === "invite" || a === "helps"), `${name}: every free plot glows`, [...new Set(glow)].join(", "));
-    await page.screenshot({ path: `.shots/stranger-${name}-1-first.png` });
-
-    // The journey, using only what's on the screen: tap a glowing plot.
-    const cell = await openPatch(page);
-    if (mobile) await tapTile(page, cell);
-    else await clickTile(page, cell);
-    await page.waitForTimeout(200);
-    const focus = await page.evaluate(() => document.activeElement?.id ?? "");
-    const pulse = await page.$eval("#label", (el) => ({ want: (el as HTMLElement).dataset.want !== undefined, anim: getComputedStyle(el).animationName }));
-    check(focus === "label" && pulse.want && pulse.anim === "want", `${name}: tapping a plot with no name pulses the name field and focuses it`, `${focus}, ${JSON.stringify(pulse)}`);
-    check((await hooks(page, cell)).state === "free" && (await hooks(page, cell)).wanted === "", `${name}: and remembers the plot, unclaimed`);
-    check((await page.textContent("[data-announce]")) === "Type your name to build here.", `${name}: saying so to a screen reader`);
-    const ghost = await page.$eval(`button.tile[value="${cell}"] .beacon`, (el) => getComputedStyle(el, "::after").content);
-    check(ghost === '"+10/min"', `${name}: the plot shows what it would earn`, ghost);
-    await page.screenshot({ path: `.shots/stranger-${name}-2-name.png` });
-
-    // Type a name: Enter builds on the remembered plot.
-    await page.keyboard.type(`Cold${name}`);
-    await page.keyboard.press("Enter");
-    await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-    check((await hooks(page, cell)).state === "mine", `${name}: typing a name and pressing Enter builds there`);
-    check((await page.$$(`button.tile[value="${cell}"] .coin-burst`)).length > 0, `${name}: with a burst of coins`);
-    check((await noticeOf(page)) === "Your building is up! +10/min", `${name}: and one short line`, await noticeOf(page));
-    check(await rendered(page, "[data-wallet]"), `${name}: the wallet appears after the first claim`);
-    await page.waitForTimeout(150);
-    await page.screenshot({ path: `.shots/stranger-${name}-3-built.png` });
-
-    // Income ticks over the building; Collect appears; collect.
-    await page.waitForSelector(`button.tile[value="${cell}"] .owed`, { timeout: 9000 }).catch(() => null);
-    check((await page.textContent(`button.tile[value="${cell}"] .owed`)) === "+1", `${name}: income ticks up over the building`, (await page.textContent(`button.tile[value="${cell}"] .owed`)) ?? "none");
-    check(await rendered(page, '[data-act="collect"]'), `${name}: and Collect appears`);
-    await page.screenshot({ path: `.shots/stranger-${name}-4-waiting.png` });
-    const before = await coinsOf(page);
-    await (mobile ? page.locator('[data-act="collect"]').tap() : page.click('[data-act="collect"]'));
-    await page.waitForFunction((b) => Number(document.querySelector("[data-hud-coins]")?.textContent) > b, before, { timeout: 3000 }).catch(() => null);
-    check((await coinsOf(page)) > before, `${name}: Collect fills the wallet`, `${before} → ${await coinsOf(page)}`);
-    await page.screenshot({ path: `.shots/stranger-${name}-5-collected.png` });
-    await page.context().close();
-  }
-
-  // Tapping the remembered plot again, once a name is typed, also builds;
-  // and Enter in the field with nothing picked never claims.
-  const page = await fresh(browser);
-  await page.waitForTimeout(300);
-  await page.fill("#label", "Nobody");
-  await page.press("#label", "Enter");
-  await page.waitForTimeout(300);
-  check((await page.$$('button.tile[data-state="mine"]')).length === 0, "Enter in the name field with no plot picked claims nothing (not tile 0)");
-  await page.fill("#label", "");
-  const cell = await openPatch(page);
-  await clickTile(page, cell);
-  await page.fill("#label", "Again");
-  await clickTile(page, cell);
-  await page.waitForSelector(`button.tile[value="${cell}"][data-state="mine"]`, { timeout: 3000 }).catch(() => null);
-  check((await hooks(page, cell)).state === "mine", "picking the plot again once a name is there builds on it");
-  await page.context().close();
-
-  // Reduced motion: the cues stand still as highlights.
-  const calm = await fresh(browser, { reducedMotion: "reduce" });
-  await calm.waitForTimeout(300);
-  const still = await calm.$eval('button.tile[data-state="free"]:not([data-helps])', (el) => ({ anim: getComputedStyle(el).animationName, ring: getComputedStyle(el).boxShadow }));
-  check(still.anim === "none" && /255, 176, 0/.test(still.ring), "under reduced motion the free plots hold a steady gold edge", JSON.stringify(still));
-  await clickTile(calm, await openPatch(calm));
-  const field = await calm.$eval("#label", (el) => ({ anim: getComputedStyle(el).animationName, ring: getComputedStyle(el).boxShadow }));
-  check(field.anim === "none" && /255, 176, 0/.test(field.ring), "and the name field a steady gold ring", JSON.stringify(field));
-  await calm.context().close();
-
-  // The panels remember being opened, and survive storage being blocked.
-  const keep = await fresh(browser);
-  await keep.click('details[data-tool="key"] > summary');
-  check(await rendered(keep, ".legend"), "the map key opens from its icon");
-  // the toggle event is async: wait until it's been saved, then come back
-  await keep.waitForFunction(() => JSON.parse(localStorage.getItem("skyline-tools") ?? "{}").key === true, null, { timeout: 2000 }).catch(() => null);
-  await keep.reload();
-  await keep.waitForTimeout(300);
-  check(await rendered(keep, ".legend"), "and stays open on the next visit");
-  await keep.context().close();
-  const blocked = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await blocked.addInitScript(() => {
-    Object.defineProperty(window, "localStorage", { get: () => { throw new Error("blocked"); } });
-  });
-  const bp = await blocked.newPage();
-  const errors: string[] = [];
-  bp.on("pageerror", (e) => errors.push(e.message));
-  await bp.goto(`${APP}/?v=${Date.now()}`);
-  await bp.waitForTimeout(300);
-  await bp.click('details[data-tool="key"] > summary');
-  check(errors.length === 0 && (await rendered(bp, ".legend")), "with storage blocked the page still works", errors.join("; "));
-  await blocked.close();
-}
-
-// A board with a lot going on, for the eye: seeded through HTTP.
-async function richBoard(browser: Browser): Promise<void> {
-  console.log("\n— a busy board, for the screenshot —");
-  const page = await fresh(browser);
-  await page.waitForTimeout(300);
-  const centre = await openPatch(page);
-  const names = ["Mia", "Kai", "Zoe", "Ari", "Bo", "Cy"];
-  for (const [i, id] of [centre - 12, centre - 1, centre + 1, centre + 12, centre + 2, centre - 11].entries()) await seed(player(names[i]), id);
-  const me = player("Rich");
-  await seed(me, centre);
-  await postAs(player("x"), "/help", {}); // a refused post changes nothing
-  const mine = await freshAs(browser, me);
-  await mine.waitForTimeout(1500);
-  await mine.evaluate(() => scrollTo(0, 0));
-  await mine.waitForTimeout(300);
-  await mine.screenshot({ path: ".shots/rich-desktop.png" });
-  const phone = await freshAs(browser, me, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-  await phone.waitForTimeout(1500);
-  await phone.screenshot({ path: ".shots/rich-phone.png" });
-  check(true, "busy board captured");
-  for (const p of [page, mine, phone]) await p.context().close();
-}
-
-// A full board must still draw. A roof triangle cut with clip-path on a
-// rotated piece costs Chrome a mask layer padded 1000px each side; with 70
-// houses that passed a gigabyte, and the GPU dropped layers: walls, roofs,
-// the floor and half the wallet went missing on screen while every DOM box
-// still measured fine. So this measures the compositor too, not only layout.
-async function busyBoard(browser: Browser): Promise<void> {
-  console.log("\n— a full board still draws: faces, 3D, the wallet, the layer budget —");
-  const probe = await fresh(browser);
-  await probe.waitForTimeout(300);
-  const free = await probe.$$eval('button.tile[data-state="free"]', (els) => els.map((e) => Number((e as HTMLButtonElement).value)));
-  const held = 144 - free.length;
-  const want = Math.max(0, 100 - held);
-  const fill = free.slice(-want);
-  const people: Player[] = [];
-  for (const [i, id] of fill.entries()) {
-    const p = player(`B${i}`);
-    await seed(p, id);
-    people.push(p);
-  }
-  await probe.context().close();
-  const me = people[0] ?? player("Busy");
-  if (!people.length) await seed(me, free[0]);
-  const page = await freshAs(browser, me);
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => scrollTo(0, 0));
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  const taken = await page.$$eval('button.tile:not([data-state="free"])', (els) => els.length);
-  check(taken >= 100, "at least 100 plots held", `${taken}`);
-
-  // Side faces: a sample of 20 held tiles, each face with a real size.
-  const faces = await page.$$eval('button.tile:not([data-state="free"])', (els) => {
-    const pick = els.filter((_, i) => i % Math.max(1, Math.floor(els.length / 20)) === 0).slice(0, 20);
-    return pick.map((t) => {
-      const sides = t.querySelector(".sides")!.getBoundingClientRect();
-      const roof = t.querySelector(".roof")!.getBoundingClientRect();
-      const pseudo = ["::before", "::after"].map((p) => getComputedStyle(t, p).content !== "none");
-      return { id: (t as HTMLButtonElement).value, w: sides.width, h: sides.height, roof: roof.width * roof.height, pseudo: pseudo.every(Boolean) };
-    });
-  });
-  check(faces.length === 20, "20 held tiles sampled", `${faces.length}`);
-  check(faces.length > 0 && faces.every((f) => f.w > 0 && f.h > 0 && f.roof > 0 && f.pseudo), "every sampled tile draws its side faces and roof", JSON.stringify(faces.filter((f) => !(f.w > 0 && f.h > 0 && f.roof > 0 && f.pseudo)).slice(0, 3)));
-
-  // Nothing between the board and a face may flatten preserve-3d.
-  const flatteners = await page.$$eval('button.tile:not([data-state="free"]) .sides', (els) => {
-    const bad: string[] = [];
-    for (const face of els) {
-      for (let el: Element | null = face; el && !el.classList.contains("stage"); el = el.parentElement) {
-        const s = getComputedStyle(el);
-        const why = [
-          s.filter !== "none" && `filter ${s.filter}`,
-          s.overflow !== "visible" && `overflow ${s.overflow}`,
-          Number(s.opacity) < 1 && `opacity ${s.opacity}`,
-          s.isolation === "isolate" && "isolation",
-          s.willChange !== "auto" && `will-change ${s.willChange}`,
-          s.clipPath !== "none" && `clip-path ${s.clipPath}`,
-          s.mixBlendMode !== "normal" && `blend ${s.mixBlendMode}`,
-        ].filter(Boolean);
-        if (why.length) bad.push(`${el.className || el.tagName}: ${why.join(", ")}`);
-      }
-    }
-    return [...new Set(bad)];
-  });
-  check(flatteners.length === 0, "nothing between the board and a face flattens 3D", flatteners.slice(0, 3).join(" | "));
-
-  // The rotated roof pieces must not be clipped: that's what cost the layers.
-  const clippedRoofs = await page.$$eval(".tile[data-level] .roof, .tile[data-level] .gable", (els) => {
-    let n = 0;
-    for (const el of els) for (const p of ["::before", "::after"]) if (getComputedStyle(el, p).clipPath !== "none") n++;
-    return n;
-  });
-  check(clippedRoofs === 0, "no roof piece is cut with clip-path", `${clippedRoofs} clipped`);
-
-  // The compositor's own bill: every layer's size, from Chrome.
-  const cdp = await page.context().newCDPSession(page);
-  const layers: { width: number; height: number }[] = await new Promise((resolve) => {
-    cdp.on("LayerTree.layerTreeDidChange", (e: { layers?: { width: number; height: number }[] }) => e.layers && resolve(e.layers));
-    void cdp.send("LayerTree.enable");
-  });
-  const mb = Math.round(layers.reduce((s, l) => s + l.width * l.height * 4, 0) / 1e6);
-  const huge = layers.filter((l) => l.width * l.height > 1440 * 900 * 1.5).length;
-  check(layers.length > 100 && mb < 400, "the board's layers fit a GPU budget (< 400 MB)", `${layers.length} layers, ${mb} MB`);
-  check(huge <= 4, "no pile of viewport-sized layers", `${huge} huge`);
-  await cdp.detach();
-
-  // The wallet: its box holds its content, and it's painted on screen.
-  const wallet = await page.$eval("[data-wallet]", (el) => {
-    const r = el.getBoundingClientRect();
-    const kids = [...el.children].filter((c) => getComputedStyle(c).display !== "none").map((c) => c.getBoundingClientRect());
-    const bottom = Math.max(...kids.map((k) => k.bottom));
-    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, contentBottom: bottom, kids: kids.length };
-  });
-  check(wallet.kids > 0 && wallet.contentBottom <= wallet.bottom + 1 && wallet.bottom - wallet.top >= wallet.contentBottom - wallet.top, "the wallet's box holds its content", JSON.stringify(wallet));
-  const shot = await page.screenshot();
-  const painted = await page.evaluate(
-    async ({ b64, box }) => {
-      const img = new Image();
-      img.src = `data:image/png;base64,${b64}`;
-      await img.decode();
-      const c = document.createElement("canvas");
-      c.width = img.width;
-      c.height = img.height;
-      const g = c.getContext("2d")!;
-      g.drawImage(img, 0, 0);
-      const k = img.width / innerWidth;
-      // the bottom row of the wallet, where a cut-off panel shows page background
-      const y = Math.round((box.bottom - 10) * k);
-      let differ = 0;
-      const bg = g.getImageData(2, 2, 1, 1).data;
-      for (let x = Math.round((box.left + 12) * k); x < (box.right - 12) * k; x += 4) {
-        const d = g.getImageData(x, y, 1, 1).data;
-        if (Math.abs(d[0] - bg[0]) + Math.abs(d[1] - bg[1]) + Math.abs(d[2] - bg[2]) > 24) differ++;
-      }
-      return differ;
-    },
-    { b64: shot.toString("base64"), box: wallet },
-  );
-  check(painted > 5, "the wallet's lower edge is painted, not cut off", `${painted} painted samples`);
-  await page.screenshot({ path: ".shots/busy-board.png" });
-  await page.context().close();
-}
-
-const SECTIONS = {
-  stranger,
-  realtime,
-  keyboard,
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
+  firstVisit,
   noScript,
-  effects,
-  phone,
-  preview,
-  claiming,
-  touchInspect,
-  hitTesting,
-  goalLine,
-  landmarks,
-  economy,
-  relocation,
-  renewal,
-  helping,
-  parks,
-  returning, // after parks: its two buildings would sit just outside parks' open patch
-  zoning,
-  districts,
+  noWebGL,
+  realtime,
+  dragging,
+  publishing,
+  disconnect,
+  keyboard,
   viewports,
-  richBoard,
-  busyBoard,
+  names,
 };
 
-// HEADED=1 runs a real, GPU-backed window parked off-screen: the busy board's
-// layer drop showed there and only partly in headless.
+// HEADED=1 runs a real, GPU-backed window parked off-screen: headless can
+// hide GPU failures (CLAUDE.md, "Things this stack keeps getting wrong").
 const browser = await chromium.launch({
   executablePath: CHROME,
   headless: !process.env.HEADED,
