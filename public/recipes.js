@@ -143,10 +143,15 @@ export const RECIPES = {
   },
 };
 
-/** The starting numbers for a recipe: every part at its defaults. */
+/**
+ * The starting numbers for a recipe: every part at its defaults.
+ * @param {string} recipeId
+ * @returns {Record<string, Record<string, number>>}
+ */
 export function defaultParts(recipeId) {
-  const recipe = RECIPES[recipeId];
+  const recipe = Object.hasOwn(RECIPES, recipeId) ? RECIPES[recipeId] : null;
   if (!recipe) throw new Error(`no recipe ${recipeId}`);
+  /** @type {Record<string, Record<string, number>>} */
   const parts = {};
   for (const [partId, part] of Object.entries(recipe.parts)) {
     parts[partId] = {};
@@ -164,6 +169,9 @@ const snap = (p, v) => Number((p.min + Math.round((v - p.min) / p.step) * p.step
  * unknown recipe, part or parameter, a non-number, or a number outside the
  * range. Out of range is refused, never clamped (CLAUDE.md, Decisions).
  * Own keys only, so `constructor` or `__proto__` is never a parameter.
+ * @param {string} recipeId
+ * @param {string} partId
+ * @param {unknown} values
  * @returns {{ ok: true, values: Record<string, number> } | { ok: false, reason: string }}
  */
 export function checkEdit(recipeId, partId, values) {
@@ -190,6 +198,8 @@ export function checkEdit(recipeId, partId, values) {
  * Checks a whole sculpture (a recipe id and every part's numbers), as held in
  * the database or copied from an exhibit. Every part and parameter must be
  * present and in range.
+ * @param {string} recipeId
+ * @param {unknown} parts
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
 export function checkSculpture(recipeId, parts) {
