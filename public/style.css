@@ -97,13 +97,43 @@ select {
   height: 100%;
   touch-action: none;
   cursor: grab;
-  --panel-cover: calc(var(--panel-w) + 24px);
 }
 .scene:active {
   cursor: grabbing;
 }
 .scene:focus-visible {
   box-shadow: inset 0 0 0 3px var(--ivory-hi);
+}
+
+.home {
+  position: absolute;
+  top: 108px;
+  left: 20px;
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--ivory-hi);
+  font: inherit;
+  font-weight: 700;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.home svg {
+  width: 20px;
+  height: 20px;
+}
+.home:hover {
+  filter: brightness(1.15);
+}
+.home:focus-visible {
+  outline: 3px solid var(--ivory-hi);
+  outline-offset: 2px;
 }
 
 .status {
@@ -936,8 +966,10 @@ body.no-gl .scene {
     position: relative;
     height: var(--stage-h);
   }
-  .scene {
-    --panel-cover: 0px;
+  .home {
+    top: 10px;
+    left: 12px;
+    min-height: 40px;
   }
   .top {
     position: static;

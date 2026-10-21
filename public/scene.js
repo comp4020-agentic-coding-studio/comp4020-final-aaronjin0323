@@ -5,7 +5,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VISITOR_COLOURS } from "./recipes.js";
-import { frameHeight } from "./ui-logic.js";
+import { clearFrame, frameHeight, viewOffsetFor } from "./ui-logic.js";
 import { animate, buildSculpture, disposeSculpture } from "./sculpture.js";
 
 const TAU = Math.PI * 2;
@@ -140,7 +140,11 @@ function arches() {
     arc.rotation.y = mid + Math.PI / 2;
     arc.castShadow = true;
     bay.add(pillar, cap, arc);
-    bay.userData = { angle: mid, mats: [mat, trim] };
+    // points along the curve, for telling when a frame cuts through it
+    arc.updateMatrix();
+    const r = span / 2 - 0.05;
+    const curve = [...Array(9)].map((_, k) => new THREE.Vector3(Math.cos((k / 8) * Math.PI) * r, Math.sin((k / 8) * Math.PI) * r, 0).applyMatrix4(arc.matrix));
+    bay.userData = { angle: mid, mats: [mat, trim], curve };
     bays.push(bay);
     g.add(bay);
   }
@@ -150,10 +154,13 @@ function arches() {
 
 /** Fades the bays on the camera's side of the room, so the arches frame the
  * gallery from behind rather than block it from in front. */
+function bayOpacity(angle, camYaw) {
+  const d = Math.abs(((((angle - camYaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI);
+  return 0.04 + 0.96 * THREE.MathUtils.smoothstep(d, 0.9, 1.6);
+}
 function fadeBays(bays, camYaw) {
   for (const bay of bays) {
-    const d = Math.abs(((((bay.userData.angle - camYaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI);
-    const o = 0.04 + 0.96 * THREE.MathUtils.smoothstep(d, 0.9, 1.6);
+    const o = bayOpacity(bay.userData.angle, camYaw);
     for (const m of bay.userData.mats) {
       m.opacity = o;
       m.depthWrite = o > 0.95;
@@ -180,6 +187,7 @@ function plinth(slot) {
   const inward = slotPos(slot).normalize().multiplyScalar(-1.15);
   plate.position.set(inward.x, 0.01, inward.z);
   plate.rotation.z = Math.atan2(inward.x, inward.z) + Math.PI;
+  plate.userData.flat = true;
   g.add(body, band, top, plate);
   g.userData.pick = `slot:${slot}`;
   for (const m of [body, band, top]) m.userData.pick = `slot:${slot}`;
@@ -299,7 +307,7 @@ function plants() {
   return g;
 }
 
-export async function createScene(canvas, { reducedMotion, time, onPick }) {
+export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -315,7 +323,10 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   scene.environmentIntensity = 0.55;
 
   const rim = arches();
-  scene.add(skyDome(), clouds(), floor(), rim, plants());
+  // the sky, the clouds and the floor are the backdrop: never in the way
+  const backdrop = [skyDome(), clouds(), floor()];
+  for (const b of backdrop) b.userData.backdrop = true;
+  scene.add(...backdrop, rim, plants());
 
   scene.add(new THREE.HemisphereLight("#ffe2c8", "#7a6aa8", 1.1));
   const sun = new THREE.DirectionalLight("#ffc79a", 2.4);
@@ -343,29 +354,37 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   scene.add(wb.group);
 
   // ---- camera: orbit around a focus point; drag and arrow keys turn it
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900);
+  // the vertical field of view of the clear part of the scene
+  const CLEAR_FOV = 42;
+  const camera = new THREE.PerspectiveCamera(CLEAR_FOV, 1, 0.1, 900);
   // yaw 0 looks in between plinths 6 and 1, so neither hides the bench;
   // until the first state arrives, already inside the pavilion
   const view = { yaw: 0, pitch: 0.22, dist: 7, focus: new THREE.Vector3(0, 1.3, 0) };
   const goal = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, focus: view.focus.clone() };
   let interacting = 0;
-  let side = 0; // px the panel covers on the right
+  // The clear rectangle: the canvas minus whatever lies over it, in canvas
+  // px, and the offset frame that centres the picture on it.
+  let clear = { x: 0, y: 0, w: 1, h: 1 };
+  let full = { fullW: 1, fullH: 1, offX: 0, offY: 0 };
+  // the half-angle tangents of the clear rectangle, and its vertical fov
+  const clearTan = () => {
+    const t = Math.tan((camera.fov * Math.PI) / 360);
+    return { v: (t * clear.h) / full.fullH, h: (t * clear.w) / full.fullH };
+  };
+  const clearFov = () => (2 * Math.atan(clearTan().v) * 180) / Math.PI;
+  // whether the visitor has turned, dragged or zoomed since the last aim
+  let moved = false;
+  const setMoved = (m) => {
+    if (m === moved) return;
+    moved = m;
+    onMoved(m);
+  };
 
   // the yaw equal to `a` (mod a turn) nearest the current goal, so the
   // camera takes the short way round
   const nearestYaw = (a) => goal.yaw + ((((a - goal.yaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
 
-  // The selected exhibit's vertical extent, from what's actually on the
-  // plinth; an empty plinth frames as an ordinary one.
   const box = new THREE.Box3();
-  function fitSlot(slot) {
-    const holder = plinths.get(slot)?.holder;
-    box.makeEmpty();
-    if (holder && holder.children.length) box.setFromObject(holder);
-    const lo = box.isEmpty() ? PLINTH_H : Math.min(box.min.y, PLINTH_H);
-    const hi = box.isEmpty() ? PLINTH_H + 1.5 : box.max.y;
-    return frameHeight(lo, hi, camera.fov, camera.aspect);
-  }
 
   // The bench view stands inside the pavilion, between plinths 6 and 1,
   // looking slightly down at the bench sculpture as it is now: on a phone a
@@ -383,11 +402,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     // the sculpture itself, with only a sliver of glass under it
     const lo = Math.max(box.min.y, 0.45);
     const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
-    // the aspect of the part of the canvas the panel leaves clear
-    const aspect = (canvas.clientWidth - side) / canvas.clientHeight || camera.aspect;
-    const f = frameHeight(lo, box.max.y, camera.fov, aspect, tight ? 1.2 : 1.7, tight ? 2.5 : 4.6);
-    const tanH = Math.tan((camera.fov * Math.PI) / 360) * aspect;
-    const dist = Math.max(f.dist, (w * (tight ? 1.15 : 1.65)) / 2 / tanH + w / 2);
+    // fitted to the clear rectangle, not the whole canvas
+    const aspect = clear.w / clear.h;
+    const f = frameHeight(lo, box.max.y, clearFov(), aspect, tight ? 1.2 : 1.45, tight ? 2.5 : 3.8);
+    const tanH = clearTan().h;
+    const dist = Math.max(f.dist, (w * (tight ? 1.15 : 1.4)) / 2 / tanH + w / 2);
     // on a desktop, aim a little above the middle: the sculpture sits
     // lower, the glass falls behind the plinth row, the arches rise above
     const focusY = tight ? f.focusY : f.focusY + (box.max.y - lo) * 0.12;
@@ -395,20 +414,188 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     return { focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
   }
 
+  // ---- composing a close-up: measure what a pose would show
+  const ray = new THREE.Raycaster();
+  const probeCam = new THREE.PerspectiveCamera();
+  const ndc = new THREE.Vector2();
+  const v3 = new THREE.Vector3();
+  // The meshes that could get in the way: everything but the backdrop,
+  // the floor plates and the target itself (with its plinth or bench).
+  function obstacles(skip) {
+    const out = [];
+    const walk = (o) => {
+      if (o === skip || o.userData.backdrop || o.userData.flat) return;
+      if (!o.visible && !o.userData.mats) return;
+      if (o.isMesh) out.push(o);
+      for (const c of o.children) walk(c);
+    };
+    walk(scene);
+    return out;
+  }
+  const meshesOf = (root) => {
+    const out = [];
+    root.traverse((o) => o.isMesh && o.visible && out.push(o));
+    return out;
+  };
+  // a faded bay is see-through from this camera, so it's never in the way
+  const solid = (o, camYaw) => {
+    const bay = o.parent?.userData.mats ? o.parent.userData : null;
+    return !bay || bayOpacity(bay.angle, camYaw) >= 0.5;
+  };
+  // the target of a close-up: what to keep clear, what to fit
+  function targetOf(t) {
+    const holder = t === "bench" ? wb.holder : plinths.get(t).holder;
+    const root = t === "bench" ? wb.group : plinths.get(t).group;
+    box.makeEmpty();
+    if (holder.children.length) box.setFromObject(holder);
+    if (box.isEmpty()) {
+      const c = t === "bench" ? new THREE.Vector3(0, 0.66, 0) : slotPos(t).setY(PLINTH_H);
+      box.set(c.clone().add(new THREE.Vector3(-0.6, 0, -0.6)), c.clone().add(new THREE.Vector3(0.6, 1.3, 0.6)));
+    }
+    // an empty plinth: its top is what has to be seen
+    const meshes = meshesOf(holder);
+    if (!meshes.length && t !== "bench") meshes.push(plinths.get(t).top);
+    return { box: box.clone(), meshes, skip: root };
+  }
+  const corners = (b) => [...Array(8)].map((_, i) => new THREE.Vector3(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z));
+  function screenRect(c, b) {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of corners(b)) {
+      if (v3.copy(p).applyMatrix4(c.matrixWorldInverse).z > -0.05) return null; // behind the lens
+      p.project(c);
+      const sx = ((p.x + 1) / 2) * w;
+      const sy = ((1 - p.y) / 2) * h;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+    }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  const castAt = (c, sx, sy) => {
+    ndc.set((sx / canvas.clientWidth) * 2 - 1, -(sy / canvas.clientHeight) * 2 + 1);
+    ray.setFromCamera(ndc, c);
+  };
+  /** What camera `c` shows of a target: its rect on the canvas, the share
+   * of rays to it that hit something else first, the share of the clear
+   * view taken by something near the lens, and arches the top edge cuts. */
+  function measure(c, target, obs, grid = 5) {
+    const camYaw = Math.atan2(c.position.x, c.position.z);
+    const rect = screenRect(c, target.box);
+    if (!rect) return null;
+    const all = [...target.meshes, ...obs];
+    const mine = new Set(target.meshes);
+    let occ = 0, vis = 0;
+    for (let i = 0; i < grid; i++) {
+      for (let j = 0; j < grid; j++) {
+        castAt(c, rect.x + ((i + 0.5) / grid) * rect.w, rect.y + ((j + 0.5) / grid) * rect.h);
+        const hits = ray.intersectObjects(all, false).filter((hh) => solid(hh.object, camYaw));
+        const first = hits.findIndex((hh) => mine.has(hh.object));
+        if (first === 0) vis++;
+        else if (first > 0) occ++;
+      }
+    }
+    let near = 0, rays = 0;
+    const gx = grid + 1, gy = grid - 1;
+    for (let i = 0; i < gx; i++) {
+      for (let j = 0; j < gy; j++) {
+        castAt(c, clear.x + ((i + 0.5) / gx) * clear.w, clear.y + ((j + 0.5) / gy) * clear.h);
+        rays++;
+        const hit = ray.intersectObjects(obs, false).find((hh) => solid(hh.object, camYaw));
+        if (hit && hit.distance < NEAR) near++;
+      }
+    }
+    // An arch is cut when part of its curve is in the picture and part
+    // runs off the top edge or behind the lens: a stump, not an arch.
+    let cuts = 0;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    for (const bay of rim.userData.bays) {
+      if (bayOpacity(bay.userData.angle, camYaw) < 0.3) continue;
+      let shown = 0, gone = 0;
+      for (const p of bay.userData.curve) {
+        if (v3.copy(p).applyMatrix4(c.matrixWorldInverse).z > -0.1) { gone++; continue; }
+        v3.copy(p).project(c);
+        const x = ((v3.x + 1) / 2) * w;
+        const y = ((1 - v3.y) / 2) * h;
+        if (y < 0) gone++;
+        else if (x >= 0 && x <= w && y <= h) shown++;
+      }
+      if (shown && gone) cuts++;
+    }
+    // how far the target spills out of the clear rectangle, in px
+    const m = 10;
+    const outside = Math.max(0, clear.x + m - rect.x) + Math.max(0, rect.x + rect.w - (clear.x + clear.w - m)) + Math.max(0, clear.y + m - rect.y) + Math.max(0, rect.y + rect.h - (clear.y + clear.h - m));
+    return { rect, occluded: occ + vis ? occ / (occ + vis) : 1, near: near / rays, cuts, outside };
+  }
+  const NEAR = 1.8;
+  const posed = (c, focus, yaw, pitch, dist) => {
+    c.position.set(focus.x + Math.sin(yaw) * Math.cos(pitch) * dist, focus.y + Math.sin(pitch) * dist, focus.z + Math.cos(yaw) * Math.cos(pitch) * dist);
+    c.lookAt(focus);
+    c.updateMatrixWorld();
+    return c;
+  };
+  // inside the ring of arches, under the height of an arch's crown
+  const inside = (c) => Math.hypot(c.position.x, c.position.z) < INSIDE_R && c.position.y < 4.6 && c.position.y > 0.5;
+  const turn = (a, b) => Math.abs(((((a - b + Math.PI) % TAU) + TAU) % TAU) - Math.PI);
+  /** The close-up of plinth `slot`: of poses round it, inside the pavilion,
+   * the one with the least in front of the exhibit, nothing big at the
+   * lens, no arch cut through its curve, and the exhibit clear of every
+   * panel, preferring a nearer, more frontal view from the centre side. */
+  function compose(slot) {
+    probeCam.copy(camera);
+    const target = targetOf(slot);
+    const obs = obstacles(target.skip);
+    const b = target.box;
+    // with a little of the plinth top under it, for footing
+    b.min.y = Math.min(b.min.y, PLINTH_H - 0.15);
+    const focus = b.getCenter(new THREE.Vector3());
+    const radius = b.getSize(new THREE.Vector3()).length() / 2;
+    const t = clearTan();
+    const d0 = Math.max(2.6, (radius * 1.02) / Math.min(t.v, t.h));
+    const front = slotAngle(slot) + Math.PI + 0.35;
+    const coarse = [];
+    for (let k = 0; k < 24; k++) {
+      const yaw = (k / 24) * TAU;
+      for (const pitch of [0.12, 0.24, 0.38, 0.52]) {
+        // the nearest distance that keeps it clear of the panels
+        for (const f of [0.8, 0.9, 1, 1.1, 1.22, 1.36, 1.52, 1.7, 1.9]) {
+          const c = posed(probeCam, focus, yaw, pitch, d0 * f);
+          if (!inside(c)) break;
+          const r = screenRect(c, b);
+          if (!r) break;
+          const m = 10;
+          if (r.x < clear.x + m || r.y < clear.y + m || r.x + r.w > clear.x + clear.w - m || r.y + r.h > clear.y + clear.h - m) continue;
+          const prior = 0.9 * (f - 0.8) + 0.6 * Math.abs(pitch - 0.24) + 0.18 * turn(yaw, front);
+          coarse.push({ yaw, pitch, dist: d0 * f, prior });
+          break;
+        }
+      }
+    }
+    const score = (q, grid) => {
+      const mm = measure(posed(probeCam, focus, q.yaw, q.pitch, q.dist), target, obs, grid);
+      if (!mm) return Infinity;
+      return 14 * mm.occluded + 10 * mm.near + 1.4 * mm.cuts + 0.05 * mm.outside + q.prior;
+    };
+    for (const q of coarse) q.score = score(q, 3);
+    coarse.sort((x, y) => x.score - y.score);
+    const best = coarse.slice(0, 8).map((q) => ({ ...q, score: score(q, 5) })).sort((x, y) => x.score - y.score)[0];
+    // nothing fits inside (a huge exhibit): the old view, from the centre side
+    return { focus, ...(best ?? { yaw: front, pitch: 0.24, dist: d0 }) };
+  }
+
   function aimAt(selected) {
+    applyClear();
+    setMoved(false);
     if (selected.kind === "slot") {
-      const a = slotAngle(selected.slot);
-      const p = slotPos(selected.slot);
-      // from the centre side, a little round, with the arches and the sky
-      // behind the exhibit, standing back far enough for all of it
-      const f = fitSlot(selected.slot);
-      goal.focus.set(p.x, f.focusY, p.z);
-      goal.yaw = nearestYaw(a + Math.PI + 0.35);
-      goal.pitch = 0.24;
-      goal.dist = f.dist;
+      const q = compose(selected.slot);
+      goal.focus.copy(q.focus);
+      goal.yaw = nearestYaw(q.yaw);
+      goal.pitch = q.pitch;
+      goal.dist = q.dist;
     } else if (selected.kind === "bench") {
       const f = benchFit(innerWidth < 600);
       goal.focus.set(0, f.focusY, 0);
+      goal.yaw = nearestYaw(0);
       goal.dist = f.dist;
       goal.pitch = f.pitch;
     } else {
@@ -419,19 +606,30 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     }
   }
 
+  // Measure what lies over the canvas and centre the picture on the rest:
+  // the canvas becomes a window onto a larger frame, so what's aimed at
+  // sits in the middle of the part nobody's panel covers.
+  function applyClear() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    const r = canvas.getBoundingClientRect();
+    clear = clearFrame({ x: r.left, y: r.top, w, h }, covers());
+    if (clear.w < 40 || clear.h < 40) clear = { x: 0, y: 0, w, h };
+    full = viewOffsetFor(w, h, clear);
+    // the aspect of the whole (offset) frame, or the picture stretches;
+    // and a lens wide enough that the clear part alone sees CLEAR_FOV
+    camera.aspect = full.fullW / full.fullH;
+    camera.fov = (2 * Math.atan((Math.tan((CLEAR_FOV * Math.PI) / 360) * full.fullH) / clear.h) * 180) / Math.PI;
+    camera.setViewOffset(full.fullW, full.fullH, full.offX, full.offY, w, h);
+    camera.updateProjectionMatrix();
+  }
   const resize = () => {
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     if (!w || !h) return;
     renderer.setSize(w, h, false);
-    side = Number(getComputedStyle(canvas).getPropertyValue("--panel-cover").replace("px", "")) || 0;
-    // the aspect of the whole (offset) frame, or the picture stretches
-    camera.aspect = (w + side) / h;
-    // Shift the picture left by half the panel, so what's selected sits in
-    // the part of the screen the panel doesn't cover.
-    if (side) camera.setViewOffset(w + side, h, side, 0, w, h);
-    else camera.clearViewOffset();
-    camera.updateProjectionMatrix();
+    applyClear();
     wake();
   };
   new ResizeObserver(resize).observe(canvas);
@@ -450,6 +648,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     goal.yaw = drag.yaw - dx * 0.006;
     goal.pitch = THREE.MathUtils.clamp(drag.pitch + dy * 0.004, 0.08, 1.15);
     interacting = performance.now();
+    if (drag.moved >= 6) setMoved(true);
     wake();
   });
   const endDrag = (e) => {
@@ -466,6 +665,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       e.preventDefault();
       goal.dist = THREE.MathUtils.clamp(goal.dist * Math.exp(e.deltaY * 0.001), 4, 22);
       interacting = performance.now();
+      setMoved(true);
       wake();
     },
     { passive: false },
@@ -482,13 +682,13 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     }
     e.preventDefault();
     interacting = performance.now();
+    setMoved(true);
     wake();
   });
 
-  const ray = new THREE.Raycaster();
   function pick(e) {
     const r = canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObjects([...[...plinths.values()].map((p) => p.group), wb.group], true).find((h) => {
       for (let o = h.object; o; o = o.parent) if (o.userData.pick) return true;
@@ -589,29 +789,25 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     if (!still || settling) wake();
   }
 
-  // for the browser check: where the camera stands and where the bench
-  // sculpture lands on the canvas, against the part the panel leaves clear
-  canvas.probe = () => {
-    box.makeEmpty();
-    if (wb.holder.children.length) box.setFromObject(wb.holder);
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const v = new THREE.Vector3();
-    for (let i = 0; i < 8; i++) {
-      v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(camera);
-      const sx = ((v.x + 1) / 2) * w;
-      const sy = ((1 - v.y) / 2) * h;
-      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
-    }
-    x0 = Math.max(x0, 0); y0 = Math.max(y0, 0); x1 = Math.min(x1, w - side); y1 = Math.min(y1, h);
+  // For the browser check: where the camera stands, the clear rectangle,
+  // and what the camera now shows of a target ("bench" or a slot), all in
+  // canvas px, measured with a finer grid than the composer uses.
+  canvas.probe = (t = "bench") => {
+    camera.updateMatrixWorld();
+    const target = targetOf(t);
+    const m = measure(camera, target, obstacles(target.skip), 7);
     return {
       camR: Math.hypot(camera.position.x, camera.position.z),
       camY: camera.position.y,
+      yaw: view.yaw,
       archR: FLOOR_R - 0.45,
       archTop: 3.4,
-      box: { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) },
-      view: { x: 0, y: 0, w: w - side, h },
+      view: { ...clear },
+      box: m?.rect ?? { x: 0, y: 0, w: 0, h: 0 },
+      occluded: m?.occluded ?? 1,
+      near: m?.near ?? 1,
+      cuts: m?.cuts ?? 99,
+      moved,
     };
   };
 
@@ -619,6 +815,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   wake();
 
   return {
+    /** back to the opening pose, from wherever the visitor has turned */
+    home() {
+      aimAt({ kind: "bench" });
+      wake();
+    },
     update(state, sel, draftParts, holding = false) {
       const changed = JSON.stringify(sel) !== JSON.stringify(selected);
       last = state;

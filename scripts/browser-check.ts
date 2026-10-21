@@ -632,9 +632,79 @@ async function opening(browser: Browser): Promise<void> {
   }
 }
 
+// Every plinth close-up, at both sizes: the exhibit is clear of every
+// panel (as the DOM measures them), nothing stands in front of it, nothing
+// big crowds the lens, no arch is cut through its curve. Then the Gallery
+// button: there on a plinth and after a drag, and it brings the opening
+// view back (CLAUDE.md, "A plinth close-up is composed").
+async function focus(browser: Browser): Promise<void> {
+  console.log("\n— plinth close-ups, and back to the gallery —");
+  for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
+    await page.waitForTimeout(400);
+    const opening = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
+    check(await page.locator("[data-home]").isHidden(), `${label}: no Gallery button on the opening view`);
+    const bad: string[] = [];
+    for (let slot = 1; slot <= 6; slot++) {
+      await page.click(`[data-go="slot:${slot}"]`);
+      await page.waitForTimeout(150);
+      await twoFrames(page);
+      const r = await page.evaluate((slot) => {
+        const canvas = document.querySelector("[data-scene]")!;
+        const c = canvas.getBoundingClientRect();
+        const p = (canvas as any).probe(slot);
+        const box = { l: c.left + p.box.x, t: c.top + p.box.y, r: c.left + p.box.x + p.box.w, b: c.top + p.box.y + p.box.h };
+        const panels = [".panel", ".brand", "[data-people]", "[data-nav]", "[data-home]", ".top"]
+          .map((q) => [q, document.querySelector(q)] as const)
+          .filter(([, n]) => n && (n as Element).checkVisibility())
+          .map(([q, n]) => [q, (n as Element).getBoundingClientRect()] as const);
+        // a little slack for the exhibit's own shadow and the pulse ring
+        const hit = panels.filter(([, b]) => b.width && b.left < box.r - 4 && b.right > box.l + 4 && b.top < box.b - 4 && b.bottom > box.t + 4).map(([q]) => q);
+        const offCanvas = box.l < c.left - 2 || box.r > c.right + 2 || box.t < c.top - 2 || box.b > c.bottom + 2;
+        return { ...p, hit, offCanvas, home: !(document.querySelector("[data-home]") as HTMLElement).hidden };
+      }, slot);
+      const why = [
+        r.hit.length ? `under ${r.hit.join(",")}` : "",
+        r.offCanvas ? "off the canvas" : "",
+        r.occluded >= 0.03 ? `${Math.round(r.occluded * 100)}% hidden` : "",
+        r.near >= 0.03 ? `${Math.round(r.near * 100)}% near foreground` : "",
+        r.cuts ? `${r.cuts} arch cut` : "",
+        r.camR >= r.archR ? "camera outside" : "",
+        r.box.w * r.box.h < 0.08 * r.view.w * r.view.h ? "too small" : "",
+        r.home ? "" : "no Gallery button",
+      ].filter(Boolean);
+      if (why.length) bad.push(`${slot}: ${why.join(", ")}`);
+      if (slot === 2 || slot === 5) await page.screenshot({ path: `.shots/focus-${label}-${slot}.png` });
+    }
+    check(bad.length === 0, `${label}: every plinth close-up is clear, unblocked, uncut and uncrowded`, bad.join("; ") || "6 plinths");
+    // back to the gallery
+    await page.click("[data-home]");
+    await page.waitForTimeout(1600);
+    const back = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
+    const pressed = await page.getAttribute('[data-go="bench"]', "aria-pressed");
+    check(pressed === "true" && Math.abs(back.camR - opening.camR) < 0.3 && Math.abs(back.camY - opening.camY) < 0.3 && (await page.locator("[data-home]").isHidden()), `${label}: Gallery brings back the opening view`, `r ${back.camR.toFixed(2)}/${opening.camR.toFixed(2)}, y ${back.camY.toFixed(2)}/${opening.camY.toFixed(2)}`);
+    // a drag away from the opening view offers it too, and Escape takes it
+    const sc = (await page.locator("[data-scene]").boundingBox())!;
+    const y0 = sc.y + sc.height * 0.4;
+    await page.mouse.move(sc.x + sc.width * 0.3, y0);
+    await page.mouse.down();
+    await page.mouse.move(sc.x + sc.width * 0.45, y0 + 20, { steps: 6 });
+    await page.mouse.up();
+    const shown = await page.locator("[data-home]").isVisible();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(1600);
+    const esc = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
+    const turned = Math.abs(((((esc.yaw - opening.yaw + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI);
+    check(shown && turned < 0.05 && (await page.locator("[data-home]").isHidden()), `${label}: a drag offers Gallery, and Escape goes back`, `shown ${shown}, yaw ${esc.yaw.toFixed(2)}/${opening.yaw.toFixed(2)}`);
+    await page.context().close();
+  }
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   opening,
+  focus,
   noScript,
   noWebGL,
   realtime,

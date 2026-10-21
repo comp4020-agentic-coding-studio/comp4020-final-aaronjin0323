@@ -87,6 +87,7 @@ let offset = 0;
 let selected = /** @type {{kind: "bench"} | {kind: "slot", slot: number} | {kind: "exhibit", id: number}} */ ({ kind: "bench" });
 const historyCache = new Map();
 let scene = null;
+let cameraMoved = false; // the visitor turned, dragged or zoomed the camera
 
 const serverNow = () => Date.now() + offset;
 const editable = () => canEdit(conn);
@@ -203,6 +204,7 @@ function render() {
   renderExhibit();
   renderDrawers();
   renderConnection();
+  renderHome();
   scene?.update(state, selected, currentDraftParts(), [...sending.values()].some((x) => x.held));
 }
 
@@ -279,6 +281,25 @@ function select(next, { focusHeading = false } = {}) {
   // on the phone the plinth row scrolls sideways: bring the chosen one into it
   $("[data-plinths] [aria-pressed='true']")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion.matches ? "auto" : "smooth" });
 }
+
+// Back to the gallery: shown whenever the view isn't the opening one.
+function renderHome() {
+  $("[data-home]").hidden = !scene || (selected.kind === "bench" && !cameraMoved);
+}
+function goHome() {
+  const wasBench = selected.kind === "bench";
+  select({ kind: "bench" });
+  if (wasBench) scene?.home();
+  $("[data-scene]").focus({ preventScroll: true });
+}
+$("[data-home]").addEventListener("click", goHome);
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented || $("[data-ask]").open) return;
+  if (e.target.closest?.("input:not([type=range]), select, textarea, form")) return;
+  if ($("[data-home]").hidden) return;
+  e.preventDefault();
+  goHome();
+});
 
 $("[data-plinths]").addEventListener("click", (e) => {
   const b = e.target.closest("[data-go]");
@@ -981,6 +1002,18 @@ async function startScene() {
       reducedMotion,
       time: () => sharedSeconds(Date.now(), offset),
       onPick: (pick) => select(pick === "bench" ? { kind: "bench" } : { kind: "slot", slot: Number(pick.split(":")[1]) }),
+      // what lies over the scene, so a close-up is composed in the rest
+      covers: () =>
+        [".panel", ".brand", "[data-people]", "[data-nav]", "[data-home]"]
+          .map((q) => $(q))
+          .filter((n) => n && n.checkVisibility())
+          .map((n) => n.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0)
+          .map((r) => ({ x: r.left, y: r.top, w: r.width, h: r.height })),
+      onMoved: (m) => {
+        cameraMoved = m;
+        renderHome();
+      },
     });
     if (state) scene.update(state, selected, currentDraftParts());
   } catch (err) {

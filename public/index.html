@@ -26,6 +26,7 @@
     <symbol id="i-remix" viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3M15 7a5 5 0 0 1 5 5M9 17a5 5 0 0 1-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4v11H3V8zM8 19v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
     <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 5h16v4H4zM5 9v10h14V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M10 6l-6 6 6 6M4 12h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   </svg>
   <a class="skip" href="#panel">Skip to the controls</a>
@@ -58,6 +59,7 @@
   <div class="stage" data-stage>
     <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in 3D. Drag, or use the arrow keys, to turn the camera."></canvas>
     <p class="status" data-status role="status" hidden></p>
+    <button type="button" class="home" data-home hidden aria-label="Back to the gallery" title="Back to the gallery (Esc)"><svg aria-hidden="true"><use href="#i-back"/></svg>Gallery</button>
   </div>
 
   <nav class="plinths" aria-label="Plinths and workbench" data-nav hidden>
