@@ -179,6 +179,12 @@ A reversible prototype. Read `docs/adr/0015-orbit-play.md`.
   anyone's ribbon edit moves every caught sphere on every screen with no
   write from the sphere's owner, and a bend never knocks one off. Held by
   `spec/orbit.test.ts`.
+- **A sphere appears where it was dropped.** The ride runs on the shared
+  clock (seconds since 1970), so `dropOn` takes that time and saves `along`
+  with the ride so far taken off; a caught sphere then starts at the point
+  it was dropped on, and a resting one sits within a centimetre of the drop
+  (fine steps: 1° around, 0.01 out and up). Test it at a real clock time,
+  never only at t = 0, which hid this once.
 - **Cause and effect are visible.** A caught sphere glows and is joined to
   the ribbon by a line, and so does a sphere being dragged the moment it
   would catch.
