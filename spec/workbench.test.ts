@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultParts } from "../public/recipes.js";
 import type { StateEvent } from "../src/types.ts";
-import { get, post, sleep, stateOf, type Visitor, visitor } from "./helpers.ts";
+import { get, open, post, sleep, stateOf, type Visitor, visitor } from "./helpers.ts";
 
 // Everything that touches the one shared draft, or a slot, lives in this file
 // and runs in order (CLAUDE.md, "there is one shared draft"). Vitest 5 has
@@ -313,5 +313,102 @@ describe("publishing", { concurrent: false }, () => {
     const after = (await get(null, "/exhibits/3")).body.versions;
     expect(after[0]).toMatchObject({ n: before.length + 1, restoredFrom: 1, title: first.title, parts: first.parts, recipe: first.recipe });
     expect(after.slice(1)).toEqual(before);
+  });
+});
+
+// Real-time is a test, not a claim (CLAUDE.md, "The checks"): two streams as
+// two visitors, an edit from one, seen by the other within 1000 ms.
+describe("live", { concurrent: false }, () => {
+  it("opens /events as an SSE stream: retry, then a state event straight away", async () => {
+    const a = visitor();
+    const s = await open(a);
+    try {
+      expect(s.headers.get("content-type")).toMatch(/^text\/event-stream/);
+      const first = await s.first();
+      expect(s.raw()).toMatch(/^retry: \d+\n\n/);
+      expect(s.events[0].event).toBe("state");
+      expect(first.present.map((p) => p.tag)).toContain(first.you.tag);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("shows an edit from one visitor on another's stream within 1000 ms", async () => {
+    await fresh();
+    const a = visitor();
+    const b = visitor();
+    await post(a, "/draft/start", { recipe: "loop" });
+    const [sa, sb] = await Promise.all([open(a), open(b)]);
+    try {
+      await Promise.all([sa.first(), sb.first()]);
+      const target = 4.5;
+      const seen = sb.next((s) => s.draft.parts?.ribbon.twist === target, 1000);
+      const sent = performance.now();
+      const r = await post(a, "/draft/edit", { part: "ribbon", values: { twist: target } });
+      expect(r.status).toBe(200);
+      const { state, at } = await seen;
+      expect(at - sent).toBeLessThan(1000);
+      // B sees A's lease as A's, not B's
+      expect(state.leases).toEqual([expect.objectContaining({ part: "ribbon", mine: false, holder: r.body.state.you })]);
+      expect(state.you.tag).not.toBe(r.body.state.you.tag);
+      expect(state.present.find((p) => p.tag === r.body.state.you.tag)?.editing).toEqual(["ribbon"]);
+    } finally {
+      sa.close();
+      sb.close();
+    }
+  });
+
+  it("lists who's here while their stream is open, and releases their leases at once when it closes", async () => {
+    await fresh();
+    const a = visitor();
+    const b = visitor();
+    await post(a, "/draft/start", { recipe: "bloom" });
+    const sb = await open(b);
+    try {
+      await sb.first();
+      const arrived = sb.next((s) => s.present.length > 0 && s.present.some((p) => p.tag !== s.you.tag && p.editing.length === 0));
+      const sa = await open(a);
+      const you = (await sa.first()).you;
+      await arrived;
+      expect((await stateOf(b)).present.map((p) => p.tag)).toContain(you.tag);
+      const leased = sb.next((s) => s.leases.some((l) => l.part === "stem"));
+      await post(a, "/draft/lease", { part: "stem" });
+      await leased;
+
+      // a second tab closing changes nothing: A is still here
+      const sa2 = await open(a);
+      await sa2.first();
+      sa2.close();
+      await sleep(300);
+      expect((await stateOf(b)).leases.map((l) => l.part)).toEqual(["stem"]);
+
+      const gone = sb.next((s) => !s.present.some((p) => p.tag === you.tag) && s.leases.length === 0, 1000);
+      sa.close();
+      await gone;
+      // and the part is free for anyone
+      expect((await post(b, "/draft/edit", { part: "stem", values: { bend: 0.9 } })).status).toBe(200);
+      await releaseAll(b);
+    } finally {
+      sb.close();
+    }
+  });
+
+  it("sends a renewal to every stream, so pages counting down see the new end", async () => {
+    await fresh();
+    const a = visitor();
+    const b = visitor();
+    await post(a, "/draft/start", { recipe: "arches" });
+    const first = (await post(a, "/draft/lease", { part: "stack" })).body.expiresAt;
+    const sb = await open(b);
+    try {
+      await sb.first();
+      await sleep(20);
+      const renewed = sb.next((s) => s.leases.some((l) => l.part === "stack" && l.expiresAt > first), 1000);
+      expect((await post(a, "/draft/lease", { part: "stack" })).status).toBe(200);
+      await renewed;
+    } finally {
+      sb.close();
+      await releaseAll(a);
+    }
   });
 });

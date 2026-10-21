@@ -274,7 +274,8 @@ type VersionRow = {
 type ExhibitRow = { id: number; slot: number | null };
 type CreditRow = { pid: string; name: string; colour: number; edits: number };
 
-export function openStore(path: string): Store {
+// `leaseMs` is for a test that watches a lease run out; the museum's is LEASE_MS.
+export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: number } = {}): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL");
@@ -556,7 +557,7 @@ export function openStore(path: string): Store {
         if (!partOf(d.recipe, part)) return refuse("bad-request", "No such part on this sculpture");
         const current = heldBy(part, now);
         if (current && current.pid !== pid) return held(current);
-        const expiresAt = new Date(now.getTime() + LEASE_MS).toISOString();
+        const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
         q.setLease.run(part, d.id, pid, expiresAt);
         return { ok: true as const, taken: !current, expiresAt };
       });
@@ -589,7 +590,7 @@ export function openStore(path: string): Store {
         authors[part] = me;
         q.setParts.run(JSON.stringify(parts), JSON.stringify(authors), d.id);
         q.credit.run(d.id, pid, me.name, me.colour, now.toISOString());
-        q.setLease.run(part, d.id, pid, new Date(now.getTime() + LEASE_MS).toISOString());
+        q.setLease.run(part, d.id, pid, new Date(now.getTime() + leaseMs).toISOString());
         return { ok: true as const, revision: d.revision + 1, values: checked.values, taken: !current };
       });
     },

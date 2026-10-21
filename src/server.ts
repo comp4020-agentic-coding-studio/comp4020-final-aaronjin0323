@@ -16,7 +16,9 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const DB_PATH = process.env.DB_PATH ?? "./.data/museum.db";
-const store = openStore(DB_PATH);
+// LEASE_MS (like SWEEP_MS and HEARTBEAT_MS below) is shortened by the
+// environment only so the log test can watch a lease run out.
+const store = openStore(DB_PATH, { leaseMs: Number(process.env.LEASE_MS) || undefined });
 
 // --- who is who ---
 
