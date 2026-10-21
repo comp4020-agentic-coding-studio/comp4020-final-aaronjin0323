@@ -60,8 +60,8 @@ describe("the server log", { concurrent: false }, () => {
   it("formats key=value, quoting strings and escaping what could fake a line", () => {
     expect(line("x", { who: { raw: "abc123" }, n: 3, ok: true, name: 'Mia "M"', gone: undefined })).toBe('x who=abc123 n=3 ok=true name="Mia \\"M\\""');
     expect(quote("a\nb")).toBe('"a\\nb"');
-    expect(quote("a b‮b")).toBe('"a\\u2028b\\u202eb"');
-    expect(JSON.parse(quote("a b‮b"))).toBe("a b‮b");
+    expect(quote("a\u2028b\u202eb")).toBe('"a\\u2028b\\u202eb"');
+    expect(JSON.parse(quote("a\u2028b\u202eb"))).toBe("a\u2028b\u202eb");
   });
 
   it("logs a new visitor, a rename and a page load by tag", async () => {
@@ -92,7 +92,7 @@ describe("the server log", { concurrent: false }, () => {
     const title = 'Moon "1"\nfake=line';
     const bad = await act(MIA, "/publish", { title, slot: 4 });
     expect(bad.status).toBe(400); // a newline isn't allowed in a title
-    const ok = await act(MIA, "/publish", { title: 'Moon "1" ‮', slot: 4 });
+    const ok = await act(MIA, "/publish", { title: 'Moon "1" \u202e', slot: 4 });
     expect(ok.status).toBe(200);
     const taken = await act(KAI, "/publish", { title: "Mine", slot: 1 });
     expect(taken.status).toBe(409);

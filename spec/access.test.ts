@@ -50,7 +50,7 @@ describe("visitors", () => {
     expect(ok.body.state.you.name).toBe("Mia <b>");
     expect((await stateOf(a)).you.name).toBe("Mia <b>");
 
-    for (const name of ["", "   ", "x".repeat(25), "a\nb", "a\u0000b", "a b", 42, null]) {
+    for (const name of ["", "   ", "x".repeat(25), "a\nb", "a\u0000b", "a\u2028b", 42, null]) {
       const r = await post(a, "/me", { name });
       expect(r.status, JSON.stringify(name)).toBe(400);
       expect(r.body).toMatchObject({ error: "bad-request", message: expect.any(String) });
