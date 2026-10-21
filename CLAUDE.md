@@ -155,7 +155,9 @@ Settled; change them here first, then in the code.
   colour and name: a dot in the "here now" strip, a ring on the part they're
   editing, a chip on every credit. Attention stays on the sculpture.
 - **Live text is a system font stack or an SIL OFL face** with its licence
-  beside it. AA contrast is measured on the rendered pixels over the sky.
+  beside it. AA contrast is measured on the rendered pixels over the sky,
+  by the `contrast` section of `scripts/browser-check.ts` (seen failing with
+  the title scrim removed).
 - **Every animation and transition has a `prefers-reduced-motion` path**:
   sculptures hold still at their saved pose, the camera stops drifting.
 

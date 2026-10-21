@@ -259,6 +259,8 @@ function select(next, { focusHeading = false } = {}) {
   if (focusHeading) $(selected.kind === "bench" ? "#bench-h" : "#exhibit-h")?.focus({ preventScroll: true });
   const panel = $(".panel");
   if (getComputedStyle(panel).overflowY === "auto") panel.scrollTo({ top: 0, behavior: reducedMotion.matches ? "auto" : "smooth" });
+  // on the phone the plinth row scrolls sideways: bring the chosen one into it
+  $("[data-plinths] [aria-pressed='true']")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion.matches ? "auto" : "smooth" });
 }
 
 $("[data-plinths]").addEventListener("click", (e) => {

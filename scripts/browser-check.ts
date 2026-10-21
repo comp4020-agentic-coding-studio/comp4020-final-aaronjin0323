@@ -420,6 +420,89 @@ async function viewports(browser: Browser): Promise<void> {
   }
 }
 
+// AA contrast measured on the rendered pixels behind each piece of visible
+// text (the sky and the 3D room are never flat): hide the text, capture,
+// and compare against the 5th-percentile pixel inside the element's border.
+async function contrast(browser: Browser): Promise<void> {
+  console.log("\n— contrast over the sky, on the pixels —");
+  for (const [name, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    for (const sel of ["bench", "slot:2"]) {
+      await page.click(`[data-go="${sel}"]`);
+      await page.waitForTimeout(1800);
+      const items = await page.evaluate(() => {
+        const out: { text: string; color: string; size: string; weight: string; box: { x: number; y: number; width: number; height: number } }[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const seen = new Set<Element>();
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          const e = n.parentElement!;
+          if (!n.textContent!.trim() || seen.has(e) || !e.offsetParent || getComputedStyle(e).visibility === "hidden") continue;
+          // clip to every scrolling ancestor: text scrolled out of view isn't read
+          const r0 = e.getBoundingClientRect();
+          let l = r0.left, t = Math.max(0, r0.top), rr = Math.min(innerWidth, r0.right), bb = Math.min(innerHeight, r0.bottom);
+          for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) {
+            const o = getComputedStyle(a);
+            if (/(auto|scroll|hidden)/.test(o.overflowX + o.overflowY)) {
+              const ar = a.getBoundingClientRect();
+              l = Math.max(l, ar.left); t = Math.max(t, ar.top); rr = Math.min(rr, ar.right); bb = Math.min(bb, ar.bottom);
+            }
+          }
+          if (rr - l < 12 || bb - t < 8) continue;
+          seen.add(e);
+          e.setAttribute("data-cx", "");
+          const cs = getComputedStyle(e);
+          out.push({ text: n.textContent!.trim().slice(0, 30), color: cs.color, size: cs.fontSize, weight: cs.fontWeight, box: { x: l, y: t, width: rr - l, height: bb - t } });
+        }
+        return out;
+      });
+      const style = await page.addStyleTag({ content: "[data-cx], [data-cx] * { color: transparent !important; text-shadow: none !important; }" });
+      await twoFrames(page);
+      const shot = (await page.screenshot()).toString("base64");
+      await style.evaluate((s) => (s as Element).remove());
+      await page.evaluate(() => document.querySelectorAll("[data-cx]").forEach((e) => e.removeAttribute("data-cx")));
+      const bad = await page.evaluate(
+        async ([b64, items, vw]) => {
+          const img = new Image();
+          img.src = `data:image/png;base64,${b64}`;
+          await img.decode();
+          const c = document.createElement("canvas");
+          c.width = img.width;
+          c.height = img.height;
+          const g = c.getContext("2d")!;
+          g.drawImage(img, 0, 0);
+          const px = g.getImageData(0, 0, img.width, img.height).data;
+          const dpr = img.width / (vw as number);
+          const ch = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+          const lum = (r: number, gg: number, b: number) => 0.2126 * ch(r) + 0.7152 * ch(gg) + 0.0722 * ch(b);
+          const out: string[] = [];
+          for (const it of items as typeof items extends (infer T)[] ? T[] : never) {
+            const m = it.color.match(/[\d.]+/g)!.map(Number);
+            if (m[3] !== undefined && m[3] < 0.1) continue;
+            const L = lum(m[0], m[1], m[2]);
+            const inset = 5;
+            const crs: number[] = [];
+            for (let y = Math.floor((it.box.y + inset) * dpr); y < (it.box.y + it.box.height - inset) * dpr; y += 2)
+              for (let x = Math.floor((it.box.x + inset) * dpr); x < (it.box.x + it.box.width - inset) * dpr; x += 2) {
+                const k = (y * img.width + x) * 4;
+                const Lb = lum(px[k], px[k + 1], px[k + 2]);
+                crs.push((Math.max(L, Lb) + 0.05) / (Math.min(L, Lb) + 0.05));
+              }
+            if (!crs.length) continue;
+            crs.sort((a, b) => a - b);
+            const worst = crs[Math.floor(crs.length * 0.05)];
+            const large = parseFloat(it.size) >= 24 || (parseFloat(it.size) >= 18.66 && Number(it.weight) >= 700);
+            if (worst < (large ? 3 : 4.5)) out.push(`"${it.text}" ${worst.toFixed(2)}`);
+          }
+          return out;
+        },
+        [shot, items, page.viewportSize()!.width] as const,
+      );
+      check(items.length > 0 && bad.length === 0, `${name}, ${sel}: every visible text is AA on what's behind it`, bad.length ? bad.join("; ") : `${items.length} measured`);
+    }
+    await page.context().close();
+  }
+}
+
 async function names(browser: Browser): Promise<void> {
   console.log("\n— a name is text, never markup —");
   const page = await visitor(browser);
@@ -444,6 +527,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   disconnect,
   keyboard,
   viewports,
+  contrast,
   names,
 };
 
