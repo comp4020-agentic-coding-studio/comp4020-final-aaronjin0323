@@ -209,6 +209,27 @@ carry the meaning and the words are labels. Read
   (`opening`), at both sizes: the camera is inside the pavilion, and the
   bench sculpture's on-screen box is at least a fifth of the uncovered
   scene's area and centred in it.
+- **A plinth close-up is composed, not just aimed.** Choosing a plinth
+  moves the camera to a pose picked by scoring candidates round the
+  plinth (angle, height, distance), all inside the pavilion. A pose loses
+  for each thing in front of the exhibit (another plinth, the bench, a
+  plant, a pillar), for large objects close to the lens, for an arch cut
+  part-way through its curve by the top of the frame, and for any part of
+  the exhibit under a panel. The picture is centred in the **clear
+  rectangle**: the canvas minus the side panel, the header pills and the
+  plinth row (`clearFrame` in `public/ui-logic.js`), so a fitted sculpture
+  never sits under them. Held by the browser check (`focus`), at both
+  sizes and for every plinth: the exhibit's on-screen box meets none of
+  the panels as the DOM measures them; under 3% of rays to it hit
+  something else first; under 3% of the clear view is a near foreground
+  object; no arch is cut through its curve.
+- **Back to the gallery is one obvious button.** Whenever the view isn't
+  the opening view (a plinth is chosen, or the camera was dragged, zoomed
+  or turned), a "Gallery" button sits in the scene's top-left corner. It
+  selects the workbench and returns the camera to the opening pose;
+  `Escape` does the same when focus isn't in a field. Held by `focus`: the
+  button shows on a plinth and after a drag, and pressing it restores the
+  opening pose.
 - **Visitors are coloured markers, never avatars.** A visitor shows as their
   colour and name: a dot in the "here now" strip, a ring on the part they're
   editing, a chip on every credit. Attention stays on the sculpture.
