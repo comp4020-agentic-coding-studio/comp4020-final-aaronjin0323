@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
-import type { StateEvent } from "../src/types.ts";
+import type { PosesEvent, StateEvent } from "../src/types.ts";
 
 // Shared by the HTTP spec files: a fixture visitor is a cookie, every POST
 // carries an Origin matching the host (as a browser's would), and a stream
@@ -60,6 +60,10 @@ export type Stream = {
   headers: Headers;
   next: (pred: (s: StateEvent) => boolean, ms?: number) => Promise<{ state: StateEvent; at: number }>;
   first: () => Promise<StateEvent>;
+  /** the next `poses` event matching a test, arriving after this call */
+  nextPoses: (pred: (p: PosesEvent) => boolean, ms?: number) => Promise<{ poses: PosesEvent; at: number }>;
+  /** every `poses` event received so far */
+  poses: () => PosesEvent[];
   close: () => void;
 };
 
@@ -100,13 +104,13 @@ export async function open(who: Visitor, base = baseUrl()): Promise<Stream> {
     }
   })();
 
-  const states = (): { state: StateEvent; at: number }[] =>
-    events.filter((e) => e.event === "state").map((e) => ({ state: JSON.parse(e.data) as StateEvent, at: e.at }));
+  const parsed = <T>(name: string): { value: T; at: number }[] =>
+    events.filter((e) => e.event === name).map((e) => ({ value: JSON.parse(e.data) as T, at: e.at }));
 
-  function next(pred: (s: StateEvent) => boolean, ms = 3000, from = 0): Promise<{ state: StateEvent; at: number }> {
+  function wait<T>(name: string, pred: (v: T) => boolean, ms: number, from: number): Promise<{ value: T; at: number }> {
     return new Promise((resolve, reject) => {
       const check = (): boolean => {
-        const hit = states().slice(from).find((s) => pred(s.state));
+        const hit = parsed<T>(name).slice(from).find((s) => pred(s.value));
         if (hit) {
           waiters.delete(check);
           clearTimeout(timer);
@@ -116,20 +120,30 @@ export async function open(who: Visitor, base = baseUrl()): Promise<Stream> {
       };
       const timer = setTimeout(() => {
         waiters.delete(check);
-        reject(new Error(`no matching state event within ${ms} ms`));
+        reject(new Error(`no matching ${name} event within ${ms} ms`));
       }, ms);
       waiters.add(check);
       check();
     });
   }
 
+  const next = async (pred: (s: StateEvent) => boolean, ms = 3000, from = 0): Promise<{ state: StateEvent; at: number }> => {
+    const { value, at } = await wait<StateEvent>("state", pred, ms, from);
+    return { state: value, at };
+  };
+
   return {
     events,
     raw: () => all,
     headers: res.headers,
     // only events that arrive after this call
-    next: (pred, ms) => next(pred, ms, states().length),
+    next: (pred, ms) => next(pred, ms, parsed("state").length),
     first: async () => (await next(() => true, 3000, 0)).state,
+    nextPoses: async (pred, ms = 3000) => {
+      const { value, at } = await wait<PosesEvent>("poses", pred, ms, parsed("poses").length);
+      return { poses: value, at };
+    },
+    poses: () => parsed<PosesEvent>("poses").map((p) => p.value),
     close: () => ctl.abort(),
   };
 }

@@ -3,12 +3,12 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
-import { VISITOR_COLOURS } from "../public/stage.js";
+import { SPHERES, VISITOR_COLOURS } from "../public/stage.js";
 import { openStore, SLOTS, type Snapshot } from "./db.ts";
 import { MARK, renderMuseum, SHELL } from "./html.ts";
 import { log, person, raw, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
-import type { ErrorCode, ExhibitView, Refusal, StateEvent, VisitorView } from "./types.ts";
+import type { ErrorCode, ExhibitView, PoseBody, PosesEvent, PoseView, Refusal, StateEvent, VisitorView } from "./types.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PRODUCTION = process.env.NODE_ENV === "production";
@@ -208,6 +208,51 @@ function broadcast(now = new Date()): Snapshot {
   return snap;
 }
 
+// --- poses (ADR 17) ---
+// Where each visitor stands and looks: the newest per visitor, in memory
+// only, never in the database or the `state` event. Every stream gets a
+// small `poses` event at most every POSE_SEND_MS, and only after something
+// changed: a new pose, or one gone (run out, or its visitor left). POSE_TTL_MS
+// is shortened by the environment only so a test can watch a pose run out.
+const POSE_TTL_MS = Number(process.env.POSE_TTL_MS) || 5_000;
+const POSE_GAP_MS = 100; // a visitor's poses closer than this are ignored
+const POSE_SEND_MS = 100;
+
+const poses = new Map<string, { pose: PoseBody; at: number }>();
+let posesDirty = false;
+
+// Everyone here with a pose that hasn't run out, the receiver included: the
+// page skips itself by tag. The same for every stream, so built once.
+function posesEvent(now: number): PosesEvent {
+  const here = new Set(presentPids());
+  const list: PoseView[] = [];
+  for (const [pid, { pose, at }] of poses) {
+    if (!here.has(pid) || now - at > POSE_TTL_MS) continue;
+    list.push({ ...store.view(pid), at: pose.at, look: pose.look, reach: pose.reach ?? null, holding: pose.holding ?? null, age: now - at });
+  }
+  return { t: now, poses: list };
+}
+
+const sendPoses = (stream: Stream, data: string): void => {
+  stream.res.write(`event: poses\ndata: ${data}\n\n`);
+};
+
+// The one place poses go out: run-out poses are dropped first (so their
+// going is sent too), then, if anything changed, every stream gets the list.
+setInterval(() => {
+  const now = Date.now();
+  const here = new Set(presentPids());
+  for (const [pid, { at }] of poses) {
+    if (now - at <= POSE_TTL_MS) continue;
+    poses.delete(pid);
+    if (here.has(pid)) posesDirty = true;
+  }
+  if (!posesDirty) return;
+  posesDirty = false;
+  const data = JSON.stringify(posesEvent(now));
+  for (const stream of streams) sendPoses(stream, data);
+}, POSE_SEND_MS).unref();
+
 function openStream(req: IncomingMessage, res: ServerResponse): void {
   const pid = identify(req, res);
   res.writeHead(200, {
@@ -227,11 +272,18 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
   // someone already here changes nothing, so only it is sent the state.
   if (arriving) broadcast(now);
   else sendState(stream, store.snapshot(now), now);
+  // A pose sent before this visitor's first stream shows from now on.
+  if (arriving && poses.has(pid)) posesDirty = true;
+  // A new page sees who's standing where at once, not at the next change.
+  const room = posesEvent(now.getTime());
+  if (room.poses.length) sendPoses(stream, JSON.stringify(room));
   req.on("close", () => {
     // a shutdown already cleared the set; don't log every stream twice
     if (!streams.delete(stream)) return;
     const leaving = !presentPids().includes(pid);
     const released = leaving ? store.releaseAll(pid) : [];
+    // their pose leaves with them, and everyone's next `poses` says so
+    if (leaving && poses.delete(pid)) posesDirty = true;
     log("stream.close", {
       who: who(pid),
       open: streams.size,
@@ -367,12 +419,12 @@ function only(body: Body, keys: string[]): void {
 type Done = { log?: Record<string, Value>; json?: Record<string, unknown>; quiet?: boolean };
 type Act = (pid: string, body: Body, now: Date, params: string[]) => Done;
 type Route = (req: IncomingMessage, res: ServerResponse, params?: string[]) => Promise<void>;
+type Answer = (pid: string, body: Body, now: Date, params: string[]) => Record<string, unknown>;
 
-// One POST, the same shape for every route: same origin, the requester's own
-// pid, a small JSON body, then the store's one transaction. Success is a 200
-// with the museum as the requester now sees it, and a broadcast; a refusal
-// is { error, message } with its status. Every outcome is one log line.
-function action(name: string, act: Act): Route {
+// One POST, the same front for every route: same origin, the requester's own
+// pid, a small JSON body. Success is a 200 with what `answer` returns; a
+// refusal is { error, message } with its status, and a log line.
+function route(name: string, answer: Answer): Route {
   return async (req, res, params = []) => {
     if (!sameOrigin(req)) {
       const c = cookies(req).pid;
@@ -393,10 +445,7 @@ function action(name: string, act: Act): Route {
         }
       }
       if (typeof body !== "object" || body === null || Array.isArray(body)) throw bad("the body must be a JSON object");
-      const done = act(pid, body as Body, now, params);
-      log(name, { who: who(pid), ...done.log });
-      const snap = done.quiet ? store.snapshot(now) : broadcast(now);
-      sendJson(res, 200, { ok: true, ...done.json, state: stateFor(pid, snap, now) });
+      sendJson(res, 200, answer(pid, body as Body, now, params));
     } catch (err) {
       if (!(err instanceof Refused)) throw err;
       log(`${name}.refused`, {
@@ -409,6 +458,18 @@ function action(name: string, act: Act): Route {
       sendJson(res, err.status, { error: err.error, message: err.message, ...err.extra });
     }
   };
+}
+
+// A change to the museum: the store's one transaction, then a 200 with the
+// museum as the requester now sees it, and a broadcast. Every outcome is one
+// log line.
+function action(name: string, act: Act): Route {
+  return route(name, (pid, body, now, params) => {
+    const done = act(pid, body, now, params);
+    log(name, { who: who(pid), ...done.log });
+    const snap = done.quiet ? store.snapshot(now) : broadcast(now);
+    return { ok: true, ...done.json, state: stateFor(pid, snap, now) };
+  });
 }
 
 const postMe = action("rename", (pid, body) => {
@@ -505,8 +566,36 @@ const postStore = action("store", (_pid, body, _now, [exhibit]) => {
   return { log: { exhibit: Number(exhibit), slot: r.slot }, json: { slot: r.slot } };
 });
 
+// n finite numbers, each within -max..max.
+function numbers(v: unknown, field: string, n: number, max: number): number[] {
+  if (!Array.isArray(v) || v.length !== n || !v.every((x) => typeof x === "number" && Number.isFinite(x) && Math.abs(x) <= max)) {
+    throw bad(`${field} must be ${n} numbers within -${max} to ${max}`);
+  }
+  return v;
+}
+
+// A pose (ADR 17): not a change to the museum, so no transaction, no state
+// in the answer and no broadcast; the `poses` timer sends it on. No log line
+// either (eight a second each); refusals are logged as on every route.
+const postPose = route("pose", (pid, body, now) => {
+  only(body, ["at", "look", "reach", "holding"]);
+  const [x, z] = numbers(body.at, "at", 2, 9);
+  const [yaw, pitch] = numbers(body.look, "look", 2, 1000);
+  if (Math.abs(pitch) > 1.5) throw bad("pitch must be within -1.5 to 1.5");
+  const reach = body.reach === undefined || body.reach === null ? null : numbers(body.reach, "reach", 3, 10);
+  const holding = body.holding ?? null;
+  if (holding !== null && !(typeof holding === "string" && SPHERES.includes(holding))) throw bad("holding must be a sphere or null");
+  const last = poses.get(pid);
+  if (last && now.getTime() - last.at < POSE_GAP_MS) return { ok: true, ignored: true };
+  const pose: PoseBody = { at: [x, z], look: [yaw, pitch], reach: reach && [reach[0], reach[1], reach[2]], holding };
+  poses.set(pid, { pose, at: now.getTime() });
+  if (presentPids().includes(pid)) posesDirty = true;
+  return { ok: true };
+});
+
 const POSTS: Record<string, Route> = {
   "/me": postMe,
+  "/pose": postPose,
   "/stage/grab": postGrab,
   "/stage/drop": postDrop,
   "/stage/gesture": postGesture,
