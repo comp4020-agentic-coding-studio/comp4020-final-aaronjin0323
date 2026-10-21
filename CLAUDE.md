@@ -204,7 +204,9 @@ Read `docs/adr/0014-explore-then-create.md`.
   room, so a slider's effect is visible as it moves. Held by the browser
   check (`phone-edit`): for every editing control on the bench, scrolled to
   and focused in turn, the sculpture's canvas stays fully on screen and the
-  control is on screen with it; and the page itself never scrolls.
+  control is on screen with it; the sculpture's own box is inside the
+  uncovered scene, unblocked (under 3% of rays to it hit something else)
+  and at least a fifth of its area; and the page itself never scrolls.
 - **Scrolling the controls never turns the scene.** In the phone layout the
   camera moves only when the visitor drags it, uses its keys, or picks
   something; the idle drift that circles the room on desktop is off, so a
@@ -217,21 +219,39 @@ Read `docs/adr/0014-explore-then-create.md`.
 
 ### The look
 
-- **A compact circular gallery suspended above dusk clouds.** Warm ivory
-  floors, open arches, peach light, restrained teal glass, chrome and coral
-  accents, a few sculptural plants and warm exhibit lighting. Playful and
-  calm. The palette is `PALETTE` in `public/recipes.js`.
-- **The opening view stands inside the pavilion.** The first thing a
-  visitor sees, and the view the workbench returns to, is taken from
-  within the ring of arches (camera inside the arch radius, below the arch
-  tops), a little above eye height, looking slightly down at the
-  workbench sculpture. That sculpture fills the middle of the visible
-  scene; two plinths and the arches with the dusk sky behind them frame
-  it. On first load the camera eases in a short way to that pose instead
-  of swooping from outside the room. Held by the browser check
-  (`opening`), at both sizes: the camera is inside the pavilion, and the
-  bench sculpture's on-screen box is at least a fifth of the uncovered
-  scene's area and centred in it.
+- **A warm, immersive gallery floating above sunset clouds.** Warm ivory
+  stone, peach light, restrained teal glass, chrome and coral accents, a
+  few sculptural plants and warm exhibit lighting. Playful and calm. The
+  palette is `PALETTE` in `public/recipes.js`. Held by the browser check
+  (`look`), on the opening view at both sizes:
+  - **The sky is a soft peach-to-lavender sunset**, never saturated
+    orange or dark purple: of the sky pixels above the horizon, the 90th
+    percentile chroma (max minus min channel) is under 100 of 255 and the
+    median lightness is over 0.6.
+  - **The arches are stone, standing on their pillars.** Twelve stone
+    pillars round the rim; each neighbouring pair carries a solid arch at
+    least 0.3 thick spanning between them along the ring (never sticking
+    out from it), and both of an arch's feet rest on pillar tops (the
+    probe's `archGap`, the furthest foot from its pillar top, under 0.1).
+  - **Depth behind the room:** at least three cloud layers at different
+    heights and distances, a hazy horizon, and at least three floating
+    islands, one of them in the opening view. All of it is backdrop,
+    never counted as being in the way.
+  - **Light that tells the materials apart:** a warm low sun from the
+    side, a cool ambient fill, soft shadows, and a soft contact shadow
+    on the floor under every plinth, the bench and each pillar, so stone
+    reads matte, chrome reflects and glass shows through.
+- **The opening view stands inside the pavilion, at visitor height.** The
+  first thing a visitor sees, and the view the workbench returns to, is
+  taken from within the ring of arches (camera inside the arch radius) at
+  about eye height (camera 1.3 to 2.0 above the floor), looking almost
+  level at the workbench sculpture. That sculpture is large in the middle
+  of the visible scene; two plinths and the arches with the sky behind
+  them frame it. On first load the camera eases in a short way to that
+  pose instead of swooping from outside the room. Held by the browser
+  check (`opening`), at both sizes: the camera is inside the pavilion and
+  at eye height, and the bench sculpture's on-screen box is at least a
+  quarter of the uncovered scene's area and centred in it.
 - **A plinth close-up is composed, not just aimed.** Choosing a plinth
   moves the camera to a pose picked by scoring candidates round the
   plinth (angle, height, distance), all inside the pavilion. A pose loses
