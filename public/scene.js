@@ -344,8 +344,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
 
   // ---- camera: orbit around a focus point; drag and arrow keys turn it
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900);
-  // yaw 0 looks in between plinths 6 and 1, so neither hides the bench
-  const view = { yaw: 0, pitch: 0.48, dist: 21, focus: new THREE.Vector3(0, 0.8, 0) };
+  // yaw 0 looks in between plinths 6 and 1, so neither hides the bench;
+  // until the first state arrives, already inside the pavilion
+  const view = { yaw: 0, pitch: 0.22, dist: 7, focus: new THREE.Vector3(0, 1.3, 0) };
   const goal = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, focus: view.focus.clone() };
   let interacting = 0;
   let side = 0; // px the panel covers on the right
@@ -366,20 +367,32 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     return frameHeight(lo, hi, camera.fov, camera.aspect);
   }
 
-  // On a phone the bench view is a close-up of the bench sculpture as it
-  // is now. It re-fits only when the shared draft changes (a release, or
+  // The bench view stands inside the pavilion, between plinths 6 and 1,
+  // looking slightly down at the bench sculpture as it is now: on a phone a
+  // tight close-up, on a desktop with room for the far plinths and arches
+  // round it. It re-fits only when the shared draft changes (a release, or
   // someone else's edit), never from the local preview mid-drag, so the
   // camera doesn't chase a slider while it moves.
-  function benchFit() {
+  const INSIDE_R = FLOOR_R - 1.0;
+  function benchFit(tight) {
+    // low, near eye height: the glass top reads as a thin lens, not a disc
+    const pitch = tight ? 0.16 : 0.1;
     box.makeEmpty();
     if (wb.holder.children.length) box.setFromObject(wb.holder);
-    if (box.isEmpty()) return { focusY: 1.6, dist: 7 };
+    if (box.isEmpty()) return { focusY: 1.2, dist: 6.6, pitch: 0.24 };
     // the sculpture itself, with only a sliver of glass under it
     const lo = Math.max(box.min.y, 0.45);
     const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
-    const f = frameHeight(lo, box.max.y, camera.fov, camera.aspect, 1.2, 2.5);
-    const tanH = Math.tan((camera.fov * Math.PI) / 360) * camera.aspect;
-    return { focusY: f.focusY, dist: Math.max(f.dist, (w * 1.15) / 2 / tanH + w / 2) };
+    // the aspect of the part of the canvas the panel leaves clear
+    const aspect = (canvas.clientWidth - side) / canvas.clientHeight || camera.aspect;
+    const f = frameHeight(lo, box.max.y, camera.fov, aspect, tight ? 1.2 : 1.7, tight ? 2.5 : 4.6);
+    const tanH = Math.tan((camera.fov * Math.PI) / 360) * aspect;
+    const dist = Math.max(f.dist, (w * (tight ? 1.15 : 1.65)) / 2 / tanH + w / 2);
+    // on a desktop, aim a little above the middle: the sculpture sits
+    // lower, the glass falls behind the plinth row, the arches rise above
+    const focusY = tight ? f.focusY : f.focusY + (box.max.y - lo) * 0.12;
+    // never back out through the arches
+    return { focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
   }
 
   function aimAt(selected) {
@@ -393,20 +406,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       goal.yaw = nearestYaw(a + Math.PI + 0.35);
       goal.pitch = 0.24;
       goal.dist = f.dist;
-    } else if (selected.kind === "bench" && innerWidth < 600 && last?.draft.recipe) {
-      const f = benchFit();
+    } else if (selected.kind === "bench") {
+      const f = benchFit(innerWidth < 600);
       goal.focus.set(0, f.focusY, 0);
       goal.dist = f.dist;
-      goal.pitch = 0.16;
-    } else if (selected.kind === "bench") {
-      // the whole floating floor, with sky and clouds round it, the bench
-      // in the middle
-      const narrow = innerWidth < 600;
-      // on a phone the stage is short and wide: aim higher so the floor
-      // fills it rather than floating over empty fog
-      goal.focus.set(0, narrow ? 1.6 : 0.2, 0);
-      goal.dist = narrow ? 22 : 23;
-      goal.pitch = 0.4;
+      goal.pitch = f.pitch;
     } else {
       // a storeroom exhibit isn't in the room: show the room
       goal.focus.set(0, 0.8, 0);
@@ -420,8 +424,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     const h = canvas.clientHeight;
     if (!w || !h) return;
     renderer.setSize(w, h, false);
-    camera.aspect = w / h;
     side = Number(getComputedStyle(canvas).getPropertyValue("--panel-cover").replace("px", "")) || 0;
+    // the aspect of the whole (offset) frame, or the picture stretches
+    camera.aspect = (w + side) / h;
     // Shift the picture left by half the panel, so what's selected sits in
     // the part of the screen the panel doesn't cover.
     if (side) camera.setViewOffset(w + side, h, side, 0, w, h);
@@ -584,6 +589,32 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     if (!still || settling) wake();
   }
 
+  // for the browser check: where the camera stands and where the bench
+  // sculpture lands on the canvas, against the part the panel leaves clear
+  canvas.probe = () => {
+    box.makeEmpty();
+    if (wb.holder.children.length) box.setFromObject(wb.holder);
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < 8; i++) {
+      v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(camera);
+      const sx = ((v.x + 1) / 2) * w;
+      const sy = ((1 - v.y) / 2) * h;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+    }
+    x0 = Math.max(x0, 0); y0 = Math.max(y0, 0); x1 = Math.min(x1, w - side); y1 = Math.min(y1, h);
+    return {
+      camR: Math.hypot(camera.position.x, camera.position.z),
+      camY: camera.position.y,
+      archR: FLOOR_R - 0.45,
+      archTop: 3.4,
+      box: { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) },
+      view: { x: 0, y: 0, w: w - side, h },
+    };
+  };
+
   resize();
   wake();
 
@@ -596,10 +627,18 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       sync();
       // after sync, so the framing measures the sculpture now on the plinth;
       // re-aimed when the selected exhibit itself changes shape
-      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : sel.kind === "bench" && innerWidth < 600 ? `bench:${state.draft.id}:${state.draft.revision}` : null;
+      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : sel.kind === "bench" ? `bench:${state.draft.id}:${state.draft.revision}` : null;
       // while a slider is held the framing waits for the release
       if (changed || !aimed || (shape !== aimedShape && !holding)) {
         aimAt(sel);
+        // the first view eases in a step, from just behind and to the side
+        // of where it settles, rather than swooping in from outside the room
+        if (!aimed) {
+          view.focus.copy(goal.focus);
+          view.pitch = goal.pitch + (still ? 0 : 0.05);
+          view.dist = goal.dist + (still ? 0 : 0.9);
+          view.yaw = goal.yaw - (still ? 0 : 0.22);
+        }
         aimed = true;
         aimedShape = shape;
       }

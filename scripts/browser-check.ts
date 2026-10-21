@@ -608,8 +608,33 @@ async function names(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
+// The camera's first settled pose, at both sizes: inside the ring of
+// arches, with the bench sculpture big and central in the part of the
+// scene the panel doesn't cover (CLAUDE.md, "The opening view").
+async function opening(browser: Browser): Promise<void> {
+  console.log("\n— the opening view —");
+  const setup = await visitor(browser);
+  await freshBench(setup);
+  await setup.context().close();
+  for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
+    await page.waitForTimeout(600);
+    const p = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
+    const inside = p.camR < p.archR && p.camY < p.archTop;
+    check(inside, `${label}: the camera stands inside the pavilion`, `r ${p.camR.toFixed(1)} of ${p.archR.toFixed(1)}, y ${p.camY.toFixed(1)}`);
+    const area = (p.box.w * p.box.h) / (p.view.w * p.view.h);
+    const cx = (p.box.x + p.box.w / 2 - p.view.x) / p.view.w;
+    const cy = (p.box.y + p.box.h / 2 - p.view.y) / p.view.h;
+    check(area >= 0.2 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the bench sculpture is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
+    await page.screenshot({ path: `.shots/opening-${label}.png` });
+    await page.context().close();
+  }
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
+  opening,
   noScript,
   noWebGL,
   realtime,
