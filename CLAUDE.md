@@ -199,9 +199,15 @@ words are labels. Read `docs/adr/0013-show-dont-tell.md`.
 - **Scrolling the controls never turns the scene.** In the phone layout the
   camera moves only when the visitor drags it, uses its keys, or picks
   something.
-- **Touch is the gesture.** A finger drag on a sphere throws it; a flick
-  across the ribbon plucks it; a tap on the bell rings it. A drag that
-  starts on nothing turns the camera.
+- **Touch is the gesture.** Dragging a sphere picks it up and letting go
+  throws it, at the speed the finger was moving; a tap on a sphere makes it
+  hop. A tap on the ribbon plucks it there; a tap on the bell rings it. A
+  drag that starts on nothing turns the camera. Your own gesture plays at
+  once on your screen, before the server answers; everyone else sees it
+  within a second.
+- **Sound follows what's in view**: the stage's events when the stage is
+  selected, a plinth's when it is. Silent until the visitor first touches
+  something; one icon button mutes it.
 - **Without WebGL** the page still lists exhibits and their history, and
   every gesture button still works.
 
