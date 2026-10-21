@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Impossible Museum</title>
+  <meta name="description" content="A small shared gallery above the clouds where visitors shape impossible sculptures together, exhibit them and remix each other's work.">
+  <meta name="theme-color" content="#3a3366">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='19' width='16' height='9' rx='2' fill='%23ef6f5e'/%3E%3Ccircle cx='16' cy='12' r='6.5' fill='%233fa7a3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#panel">Skip to the controls</a>
+
+  <header class="top">
+    <div class="brand">
+      <h1>Impossible Museum</h1>
+      <p class="lede" data-lede>Pick a sculpture to remix, or shape the one on the bench.</p>
+    </div>
+    <div class="people" data-people hidden>
+      <div class="you">
+        <span class="you-label">You are</span>
+        <span class="chip" data-you></span>
+        <button type="button" class="link" data-rename-open data-edit>Rename</button>
+      </div>
+      <form class="rename" data-rename hidden>
+        <label for="rename-input">Your name</label>
+        <input id="rename-input" name="name" maxlength="40" autocomplete="nickname" required data-edit>
+        <button type="submit" data-edit>Save</button>
+        <button type="button" class="link" data-rename-cancel>Cancel</button>
+        <p class="field-error" data-rename-error role="alert"></p>
+      </form>
+      <div class="here" aria-label="Here now">
+        <span class="here-label">Here now</span>
+        <ul class="here-list" data-here></ul>
+      </div>
+    </div>
+  </header>
+
+  <div class="stage" data-stage>
+    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in 3D. Drag, or use the arrow keys, to turn the camera."></canvas>
+    <p class="status" data-status role="status" hidden></p>
+  </div>
+
+  <nav class="plinths" aria-label="Plinths and workbench" data-nav hidden>
+    <ul class="plinth-list" data-plinths></ul>
+  </nav>
+
+  <main class="panel" id="panel" tabindex="-1">
+    <section class="listing-wrap" data-static aria-labelledby="listing-h">
+      <h2 id="listing-h">On display</h2>
+      <!--museum-->
+      <p class="hint">The workbench and the 3D gallery need JavaScript.</p>
+    </section>
+
+    <section class="view" data-view="bench" hidden aria-labelledby="bench-h">
+      <div class="view-head">
+        <p class="eyebrow">At the centre</p>
+        <h2 id="bench-h" tabindex="-1">The workbench</h2>
+      </div>
+      <div data-bench-empty hidden>
+        <p class="invite">The bench is empty. Start a sculpture from scratch, or choose one on a plinth and remix it.</p>
+        <ul class="starters" data-starters></ul>
+      </div>
+      <div data-bench-full hidden>
+        <p class="bench-meta"><span data-bench-recipe></span><span data-bench-based></span></p>
+        <p class="hint" data-bench-hint>Move a slider to shape a part. A part you're shaping is yours for a few seconds; anyone can take the others.</p>
+        <div class="parts" data-parts></div>
+        <div class="credits-block">
+          <h3>Shaped by</h3>
+          <ul class="chips" data-bench-credits></ul>
+        </div>
+        <div class="bench-actions">
+          <button type="button" class="primary" data-publish-open data-edit>Exhibit this…</button>
+          <button type="button" class="quiet" data-clear data-edit>Clear the bench</button>
+        </div>
+        <form class="publish" data-publish hidden aria-labelledby="publish-h">
+          <h3 id="publish-h">Exhibit the workbench</h3>
+          <label for="publish-title">Title</label>
+          <input id="publish-title" name="title" maxlength="60" required data-edit>
+          <fieldset class="targets">
+            <legend>Where it goes</legend>
+            <div data-targets></div>
+          </fieldset>
+          <p class="plan" data-plan aria-live="polite"></p>
+          <p class="field-error" data-publish-error role="alert"></p>
+          <div class="row">
+            <button type="submit" class="primary" data-edit>Publish</button>
+            <button type="button" class="quiet" data-publish-cancel>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="view" data-view="exhibit" hidden aria-labelledby="exhibit-h">
+      <div class="view-head">
+        <p class="eyebrow" data-ex-where></p>
+        <h2 id="exhibit-h" tabindex="-1" data-ex-title></h2>
+      </div>
+      <div data-ex-empty hidden>
+        <p class="invite" data-ex-empty-text></p>
+        <button type="button" class="primary" data-ex-publish-here data-edit>Exhibit the workbench here…</button>
+      </div>
+      <div data-ex-full hidden>
+        <p class="ex-meta" data-ex-meta></p>
+        <ul class="chips" data-ex-credits></ul>
+        <div class="row ex-actions">
+          <button type="button" class="primary" data-ex-remix data-edit>Remix onto the bench</button>
+          <button type="button" class="warn" data-ex-replace data-edit>Replace the workbench with this…</button>
+          <button type="button" class="quiet" data-ex-store data-edit>Move to the storeroom</button>
+        </div>
+        <div class="row ex-display" data-ex-display hidden>
+          <label for="display-slot">Put it on</label>
+          <select id="display-slot" data-display-slot data-edit></select>
+          <button type="button" data-display data-edit>Put on display</button>
+        </div>
+        <h3>History</h3>
+        <ol class="history" data-history aria-live="polite"></ol>
+      </div>
+    </section>
+
+    <section class="drawers" data-drawers hidden>
+      <details class="drawer" data-storeroom-box>
+        <summary>Storeroom <span class="count" data-storeroom-count></span></summary>
+        <p class="hint">Exhibits taken off display, with every version. Nothing published is deleted.</p>
+        <ul class="shelf" data-storeroom></ul>
+      </details>
+      <details class="drawer" data-archive-box>
+        <summary>Archived drafts <span class="count" data-archive-count></span></summary>
+        <p class="hint">Whenever the bench is cleared or replaced, what was on it is kept here.</p>
+        <ul class="shelf" data-archive></ul>
+      </details>
+    </section>
+
+    <p class="toast" data-toast role="alert" hidden></p>
+    <footer class="foot"><a href="/readme/">About this museum</a></footer>
+  </main>
+
+  <dialog class="ask" data-ask aria-labelledby="ask-text">
+    <form method="dialog">
+      <p id="ask-text" data-ask-text></p>
+      <div class="row">
+        <button value="yes" class="warn" data-ask-yes>Yes</button>
+        <button value="no" class="quiet" autofocus>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
