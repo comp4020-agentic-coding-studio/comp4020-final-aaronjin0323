@@ -407,10 +407,15 @@ body[data-mode="explore"] .foot {
 .card-text {
   min-width: 0;
 }
+/* beside Shape it and Play the title wraps to two lines before it's cut */
 .card-text h2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
 }
 .shape,
 .done {

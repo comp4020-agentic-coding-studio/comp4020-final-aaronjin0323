@@ -888,6 +888,9 @@ async function explore(browser: Browser): Promise<void> {
     const editingAtStart = await visibleEditing(page);
     check(cardShown && editingAtStart === 0, `${label}: it opens on a selection card, no editing controls`, `card ${cardShown}, ${editingAtStart} controls showing`);
     check(cardH <= (label === "phone" ? 240 : 280), `${label}: and the card is compact`, `${Math.round(cardH)}px`);
+    // the title is read whole beside Shape it and Play, not cut to "Loop & L…"
+    const title = await page.locator("#bench-h").evaluate((h) => ({ text: h.textContent ?? "", cut: h.scrollWidth > h.clientWidth + 1 || h.scrollHeight > h.clientHeight + 1 }));
+    check(!title.cut, `${label}: the bench title shows in full`, title.text);
     // the tab order has no hidden editor in it
     const tabbable = await page.locator(EDIT).evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility() && (e as HTMLElement).tabIndex >= 0).length);
     check(tabbable === 0, `${label}: nothing from the editor is in the tab order`, String(tabbable));
