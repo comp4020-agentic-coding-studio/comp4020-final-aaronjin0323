@@ -114,6 +114,34 @@ export type StateEvent = {
   archivedTotal: number;
 };
 
+/** POST /pose: where you stand and look, in metres and radians from the
+ * stage centre (y up). In memory only; never stored, never in `state`. */
+export type PoseBody = {
+  /** [x, z] on the floor, each within -9..9 */
+  at: [number, number];
+  /** [yaw, pitch]: yaw within -1000..1000, pitch within -1.5..1.5 */
+  look: [number, number];
+  /** where your hand or reticle points, world space, each within -10..10 */
+  reach?: [number, number, number] | null;
+  /** a sphere id; display only, the claim in `state` is the authority */
+  holding?: string | null;
+};
+
+/** Someone's newest pose as everyone sees it: never the pid. */
+export type PoseView = VisitorView & {
+  at: [number, number];
+  look: [number, number];
+  reach: [number, number, number] | null;
+  holding: string | null;
+  /** ms since the server received it */
+  age: number;
+};
+
+/** The SSE `poses` event: everyone present with a pose newer than 5 s, you
+ * included (the page skips itself by tag). At most every 100 ms, and only
+ * after something changed. */
+export type PosesEvent = { t: number; poses: PoseView[] };
+
 /** GET /archive?before=<id> */
 export type ArchivePage = { drafts: ArchivedDraftView[]; more: boolean };
 
