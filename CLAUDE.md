@@ -52,8 +52,8 @@ Settled; change them here first, then in the code.
 - **One gallery: six plinths and one workbench.** Six exhibition slots,
   numbered 1--6, and a single shared draft on the workbench. No rooms, no
   free-roaming avatars.
-- **Three recipes, bounded parts.** A sculpture is a recipe id plus numbers
-  for each of its three parts. The recipes and every parameter's range and
+- **Four recipes, bounded parts.** A sculpture is a recipe id plus numbers
+  for each of its parts (three each, or Orbit's five, ADR 15). The recipes and every parameter's range and
   step live in `public/recipes.js`, the one copy, imported by both the
   server (to refuse) and the page (to draw sliders and the sculpture). An
   out-of-range or unknown value is a `400`, never clamped. Nobody draws a
@@ -153,8 +153,8 @@ carry the meaning and the words are labels. Read
   main colour) with the title only as an accessible name and on hover/focus.
 - **Icons and colour over sentences.** Every action button is an icon with
   an accessible name and a tooltip; only the doors into making something
-  keep a word: Exhibit, "Shape it", Remix, Swap in, Gallery and Done
-  (ADR 14). Recipes are picked by a swatch of the
+  keep a word: Exhibit, "Shape it", Play, Undo, Remix, Swap in, Gallery
+  and Done (ADR 14, 15). Recipes are picked by a swatch of the
   sculpture, not a blurb. Who you are is your coloured dot; who's here is a
   row of dots. A part someone else is shaping wears their colour ring and
   their name only.
@@ -167,6 +167,37 @@ carry the meaning and the words are labels. Read
   in the editor's colour; a toast is at most four words.
 - **Nothing is lost for screen readers or keyboards.** Every hidden word
   still exists as an accessible name, and every action keeps a real button.
+
+### Orbit: pieces that affect each other (ADR 15)
+
+A reversible prototype. Read `docs/adr/0015-orbit-play.md`.
+
+- **A connection is a rule in `public/orbit.js`, never a stored link.** A
+  placed sphere within `CATCH` of the ribbon's path rides it. The rule
+  reads the ribbon's saved numbers at draw time, so anyone's ribbon edit
+  moves every caught sphere on every screen with no write from the sphere's
+  owner. Held by `spec/orbit.test.ts`.
+- **Cause and effect are visible.** A caught sphere glows and is joined to
+  the ribbon by a line, and so does a sphere being dragged the moment it
+  would catch.
+- **Direct manipulation, through the same edits.** Dragging a sphere or the
+  ribbon takes that part's lease and sends ordinary throttled edits. No new
+  route.
+- **Undo is yours alone.** It replays your own last edit's previous numbers
+  as a new edit, credited and broadcast. It never undoes someone else.
+- **On an Orbit draft the editor is pieces, Undo and Exhibit.** Sliders sit
+  in a closed "Fine-tune" disclosure, and the storeroom and archive drawers
+  are hidden.
+- **Every drag has a button** in tab order (Place/Return, Move along, More
+  or Fewer loops, Wider or Narrower).
+- **Reached by choice:** Orbit is the first starter, and "Play" on the bench
+  card starts one, asking first and archiving whatever is there. No
+  migration touches the live bench.
+- Held by the browser check (`orbit`): a drag places a sphere and it shows
+  as caught; a second visitor's ribbon change moves that sphere on the
+  first visitor's screen within a second; Undo puts the last edit back; the
+  keyboard path does the same as the drag; sliders, history and drawers
+  are out of sight.
 
 ### Explore, then create (ADR 14)
 
