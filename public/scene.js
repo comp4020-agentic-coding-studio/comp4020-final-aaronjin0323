@@ -551,6 +551,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   // ---- the loop: renders while anything moves, idles otherwise
   let raf = 0;
   let still = reducedMotion.matches;
+  // the pinned-scene shell in style.css starts at this width
+  const phoneLayout = matchMedia("(max-width: 860px)");
   reducedMotion.addEventListener("change", (e) => {
     still = e.matches;
     wake();
@@ -561,8 +563,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   function frame() {
     raf = 0;
     const t = still ? 0 : time();
-    // a slow drift around the room when nobody's touching it
-    if (!still && performance.now() - interacting > 6000 && !drag) goal.yaw += 0.0007;
+    // a slow drift around the room when nobody's touching it; never in the
+    // phone layout, where the scene sits over controls being scrolled
+    if (!still && !phoneLayout.matches && performance.now() - interacting > 6000 && !drag) goal.yaw += 0.0007;
     const k = still ? 1 : 0.08;
     view.yaw += (goal.yaw - view.yaw) * k;
     view.pitch += (goal.pitch - view.pitch) * k;
@@ -570,6 +573,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     view.focus.lerp(goal.focus, k);
     camera.position.set(view.focus.x + Math.sin(view.yaw) * Math.cos(view.pitch) * view.dist, view.focus.y + Math.sin(view.pitch) * view.dist, view.focus.z + Math.cos(view.yaw) * Math.cos(view.pitch) * view.dist);
     camera.lookAt(view.focus);
+    // the camera's angle, for the browser check to read
+    const yaw = view.yaw.toFixed(3);
+    if (canvas.dataset.yaw !== yaw) canvas.dataset.yaw = yaw;
     fadeBays(rim.userData.bays, Math.atan2(camera.position.x, camera.position.z));
     for (const { group } of shown.values()) animate(group, t);
     wb.ghost.rotation.z = t * 0.3;

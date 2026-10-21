@@ -560,6 +560,26 @@ async function phoneEdit(browser: Browser): Promise<void> {
     if (!r.sceneIn || !r.controlIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
   }
   check(controls.length >= 30 && misses.length === 0, "every bench control is worked with the sculpture on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
+  // scrolling the panel, for longer than the idle drift waits, leaves the
+  // camera where it was (with motion on: reduced motion stops the drift anyway)
+  const yaw = async () => Number(await page.locator("[data-scene]").getAttribute("data-yaw"));
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.locator("#panel").evaluate((p) => p.scrollTo({ top: 0 }));
+  await page.waitForTimeout(2500);
+  const yawBefore = await yaw();
+  const panelBox = (await page.locator("#panel").boundingBox())!;
+  await page.mouse.move(panelBox.x + panelBox.width / 2, panelBox.y + panelBox.height / 2);
+  const end = Date.now() + 8000;
+  for (let dir = 1; Date.now() < end; dir = -dir) {
+    for (let i = 0; i < 10; i++) {
+      await page.mouse.wheel(0, dir * 120);
+      await page.waitForTimeout(40);
+    }
+  }
+  const scrolled = await page.locator("#panel").evaluate((p) => p.scrollHeight > p.clientHeight);
+  const yawAfter = await yaw();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  check(Number.isFinite(yawBefore) && scrolled && Math.abs(yawAfter - yawBefore) < 0.005, "scrolling the controls never turns the scene", `yaw ${yawBefore} → ${yawAfter}`);
   // and a slider's change shows in the scene while it's on screen: the
   // canvas pixels differ before and after moving the last part's Scale
   const scale = page.locator('[data-view="bench"] input[data-key="scale"]').last();
