@@ -652,6 +652,103 @@ async function opening(browser: Browser): Promise<void> {
   }
 }
 
+// Orbit (CLAUDE.md, "Orbit"; ADR 15): Play starts one; dragging a sphere
+// from the shelf onto the ribbon places it and the ribbon catches it; a
+// second visitor reshaping the ribbon moves that sphere on the first
+// visitor's screen; Undo puts the last edit back; the keyboard does what a
+// drag does; sliders, history and drawers are out of sight.
+async function orbit(browser: Browser): Promise<void> {
+  console.log("\n— Orbit: pieces that affect each other —");
+  const a = await visitor(browser);
+  const b = await visitor(browser);
+  const probe = (p: Page) => p.evaluate(() => (document.querySelector("[data-scene]") as any).probe().orbit);
+  // from something else on the bench, so Play is offered and asks first
+  await post(a, "/draft/clear");
+  await post(a, "/draft/start", { recipe: "loop" });
+  await a.waitForSelector("[data-play]:not([hidden])", { timeout: 3000 }).catch(() => null);
+  // A starts it, by Play
+  await a.click("[data-play]", { timeout: 1500 }).catch(() => null);
+  await a.click("[data-ask-yes]", { timeout: 2000 }).catch(() => null);
+  const started = await a.waitForFunction(() => document.body.dataset.recipe === "orbit" && document.body.dataset.mode === "create" && !document.querySelector("[data-pieces]")!.hasAttribute("hidden"), null, { timeout: 4000 }).then(() => true, () => false);
+  check(started, "Play starts an Orbit, in the editor, with its pieces");
+  if (!started) {
+    await a.context().close();
+    await b.context().close();
+    return;
+  }
+  // the main experience: no slider, no history, no drawer in sight
+  const sliders = await a.locator('[data-view="bench"] input[type=range]').filter({ visible: true }).count();
+  const drawers = await a.locator("[data-drawers]").isVisible();
+  const history = await a.locator("[data-history], .history").filter({ visible: true }).count();
+  check(sliders === 0 && !drawers && history === 0, "sliders, history and drawers are out of sight", `${sliders} sliders, drawers ${drawers}, history ${history}`);
+  check(await a.locator("[data-undo]").isVisible() && await a.locator("[data-publish-open]").isVisible(), "Undo and Exhibit are there");
+  await a.waitForTimeout(1200);
+  // drag the chrome sphere from the shelf onto the ribbon
+  const o0 = await probe(a);
+  const box = (await a.locator("[data-scene]").boundingBox())!;
+  const from = o0?.shelf?.chrome;
+  const to = o0?.ribbon;
+  if (from && to) {
+    await a.mouse.move(box.x + from.x, box.y + from.y);
+    await a.mouse.down();
+    for (let i = 1; i <= 12; i++) await a.mouse.move(box.x + from.x + ((to.x - from.x) * i) / 12, box.y + from.y + ((to.y - from.y) * i) / 12);
+    const glowing = await a.locator("[data-scene]").getAttribute("data-catches");
+    await a.mouse.up();
+    check(glowing === "true", "a sphere dragged over the ribbon glows before it's dropped", `catches ${glowing}`);
+  } else check(false, "the shelf and ribbon are on screen to drag between", JSON.stringify(o0));
+  const placed = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome?.caught === true, null, { timeout: 3000 }).then(() => true, () => false);
+  const row = await a.locator('[data-piece-row="chrome"]').getAttribute("data-caught").catch(() => null);
+  check(placed, "dropped on the ribbon, the sphere is placed and caught", `row says caught ${row}`);
+  // B, a different visitor, reshapes the ribbon; A's sphere moves on A's screen
+  await b.click("[data-shape]").catch(() => null);
+  await b.waitForSelector("[data-pieces]:not([hidden])", { timeout: 3000 }).catch(() => null);
+  const posBefore = await a.evaluate(() => (document.querySelector("[data-scene]") as any).probe().orbit.spheres.chrome.world);
+  const t0 = Date.now();
+  await b.click('[data-ribbon="turns:1"]');
+  const moved = await a
+    .waitForFunction(
+      (before) => {
+        const w = (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome?.world;
+        return w && Math.hypot(w[0] - before[0], w[1] - before[1], w[2] - before[2]) > 0.05;
+      },
+      posBefore,
+      { timeout: 2000 },
+    )
+    .then(() => true, () => false);
+  const turnsA = await a.evaluate(() => (document.querySelector('[data-view="bench"] input[data-part="ribbon"][data-key="turns"]') as HTMLInputElement)?.value);
+  check(moved, "another visitor reshaping the ribbon moves your sphere on your screen", `${Date.now() - t0} ms, A sees loops ${turnsA}`);
+  // Undo, on A: A's last edit was the drop, so the sphere goes back to the shelf
+  await a.click("[data-undo]");
+  const undone = await a.waitForFunction(() => !(document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome, null, { timeout: 3000 }).then(() => true, () => false);
+  const turnsAfter = await a.evaluate(() => (document.querySelector('[data-view="bench"] input[data-part="ribbon"][data-key="turns"]') as HTMLInputElement)?.value);
+  check(undone && turnsAfter === turnsA, "Undo takes back your own last change, and leaves the other visitor's", `sphere back ${undone}, loops ${turnsA} → ${turnsAfter}`);
+  // the keyboard does what a drag does
+  await a.locator('[data-piece="teal:place"]').focus();
+  await a.keyboard.press("Enter");
+  const keyed = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.teal?.caught === true, null, { timeout: 3000 }).then(() => true, () => false);
+  check(keyed, "the keyboard places a sphere on the ribbon too");
+  await a.screenshot({ path: ".shots/orbit-desktop.png" });
+  // and it keeps: Exhibit is the ordinary publish, with both visitors credited
+  const credits = await a.locator("[data-bench-credits] li").count();
+  check(credits >= 2, "both visitors are credited on the draft", `${credits} contributors`);
+  await a.context().close();
+  await b.context().close();
+  // the phone, in the editor: pieces and the sculpture both in view
+  const ph = await visitor(browser, PHONE);
+  await ph.click("[data-shape]").catch(() => null);
+  await ph.waitForSelector("[data-pieces]:not([hidden])", { timeout: 3000 }).catch(() => null);
+  await ph.waitForTimeout(1200);
+  const pr = await ph.evaluate(() => {
+    const c = document.querySelector("[data-scene]") as any;
+    const p = c.probe();
+    const pieces = document.querySelector("[data-pieces]")!.getBoundingClientRect();
+    return { box: p.box, view: p.view, piecesIn: pieces.top < innerHeight && pieces.bottom > 0 && pieces.height > 40 };
+  });
+  check(pr.piecesIn && pr.box.w * pr.box.h > 0.15 * pr.view.w * pr.view.h, "phone: the pieces and the sculpture are both in view", JSON.stringify(pr.box));
+  await ph.screenshot({ path: ".shots/orbit-phone.png" });
+  await ph.context().close();
+}
+
 // The look of the opening view, at both sizes: a soft sunset sky, stone
 // arches standing on their pillars, depth behind the room, and light that
 // tells the materials apart (CLAUDE.md, "A warm, immersive gallery").
@@ -835,6 +932,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   explore,
   opening,
   look,
+  orbit,
   focus,
   noScript,
   noWebGL,

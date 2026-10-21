@@ -6,6 +6,7 @@
 // textContent. The decisions (throttle, lease display, publish flow,
 // connection) live in ui-logic.js, where a test can hold them.
 import { PALETTE, RECIPES, VISITOR_COLOURS, defaultParts } from "./recipes.js";
+import { SPHERES, dropOn, ribbonPoint, sphereAt } from "./orbit.js";
 import {
   INITIAL_CONN,
   LOCAL_HOLD,
@@ -194,7 +195,8 @@ function render() {
   $("[data-static]").hidden = true;
   $("[data-people]").hidden = false;
   $("[data-nav]").hidden = false;
-  $("[data-drawers]").hidden = false;
+  // history and archives stay out of the way while making an Orbit (ADR 15)
+  $("[data-drawers]").hidden = creating && state.draft.recipe === "orbit";
   if (selected.kind === "exhibit" && !findExhibit(selected.id)) selected = { kind: "bench" };
   if (selected.kind === "exhibit") {
     const e = findExhibit(selected.id);
@@ -330,7 +332,19 @@ function renderBench() {
   view.dataset.mode = creating ? "create" : "explore";
   $("[data-editor]").hidden = !creating;
   $("[data-shape]").hidden = empty || creating;
+  $("[data-play]").hidden = creating || d.recipe === "orbit";
   $("[data-done]").hidden = !creating;
+  // an Orbit draft is pieces, Undo and Exhibit; the sliders wait under
+  // Fine-tune (ADR 15). Every other recipe keeps its sliders open.
+  const orbit = d.recipe === "orbit";
+  document.body.dataset.recipe = d.recipe ?? "";
+  $("[data-pieces]").hidden = !orbit;
+  $("[data-undo]").hidden = !orbit;
+  const fine = $("[data-fine-tune]");
+  if (fine.dataset.for !== String(orbit)) {
+    fine.dataset.for = String(orbit);
+    fine.open = !orbit;
+  }
   $("[data-bench-thumb]").replaceChildren(swatchOf(d.recipe, d.parts));
   if (empty) {
     $("[data-bench-title]").textContent = "Workbench";
@@ -353,6 +367,7 @@ function renderBench() {
     buildParts(d.recipe);
   }
   updateParts();
+  if (orbit) renderPieces();
   $("[data-bench-credits]").replaceChildren(...d.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "edit") }))));
   if (!$("[data-publish]").hidden) renderTargets();
 }
@@ -361,7 +376,7 @@ function renderStarters() {
   const list = $("[data-starters]");
   if (list.childElementCount) return;
   list.replaceChildren(
-    ...Object.entries(RECIPES).map(([id, r]) =>
+    ...Object.entries(RECIPES).sort(([a], [b]) => (b === "orbit") - (a === "orbit")).map(([id, r]) =>
       el("li", {}, el("button", { type: "button", class: "starter", "data-edit": true, title: r.blurb, "aria-label": `Start ${/^[AEIOU]/.test(r.name) ? "an" : "a"} ${r.name}: ${r.blurb}`, onclick: () => startDraft(id) }, swatchOf(id, defaultParts(id)), el("span", { class: "starter-name", "aria-hidden": "true" }, r.name))),
     ),
   );
@@ -386,6 +401,181 @@ async function startDraft(recipe) {
 }
 $("[data-shape]").addEventListener("click", openEditor);
 $("[data-done]").addEventListener("click", leaveEditor);
+
+// ---- Orbit (ADR 15): Play, the pieces, Undo
+
+$("[data-play]").addEventListener("click", async () => {
+  if (state.draft.recipe) {
+    const name = RECIPES[state.draft.recipe].name;
+    if (!(await ask(`Start an Orbit? The ${name} on the bench is kept in Archived drafts.`, "Start an Orbit"))) return;
+    const c = await act("/draft/clear", {});
+    if (!c?.ok) return;
+  }
+  undo.length = 0;
+  startDraft("orbit");
+});
+
+/** Your own edits on this draft, newest last: each the part and the numbers
+ * it had before. Undo sends those numbers back as an ordinary edit. */
+const undo = [];
+let undoDraft = null;
+function remember(part, keys) {
+  const d = state.draft;
+  if (undoDraft !== d.id) {
+    undo.length = 0;
+    undoDraft = d.id;
+  }
+  const before = {};
+  for (const k of keys) before[k] = d.parts[part][k];
+  undo.push({ part, before });
+  if (undo.length > 30) undo.shift();
+}
+async function undoLast() {
+  const last = undo.pop();
+  if (!last || state.draft.id !== undoDraft) return toast("Nothing to undo");
+  const r = await post("/draft/edit", { part: last.part, values: last.before });
+  if (!r.ok) {
+    toast(refusalText(r.status, r.body));
+    return;
+  }
+  local.delete(last.part);
+  toast("Undone", "ok");
+  renderUndo();
+}
+function renderUndo() {
+  $("[data-undo]").dataset.blocked = undo.length && undoDraft === state?.draft.id ? "0" : "1";
+  applyEnabled();
+}
+$("[data-undo]").addEventListener("click", undoLast);
+
+/** One whole change to a part from a piece (a drop, a button): remembered
+ * for Undo, drawn at once, sent once with the part's lease. */
+async function pieceEdit(part, values) {
+  if (!editable() || !state.draft.recipe) return;
+  const lease = leaseState(state.leases, part, serverNow());
+  if (lease.kind === "held") return toast(`${lease.holder.name} has it`);
+  remember(part, Object.keys(values));
+  local.set(part, { values: { ...(local.get(part)?.values ?? {}), ...values }, until: Date.now() + LOCAL_HOLD + 400 });
+  scene?.setDraftOverride(currentDraftParts());
+  const r = await post("/draft/edit", { part, values });
+  if (!r.ok) {
+    undo.pop();
+    local.delete(part);
+    scene?.setDraftOverride(null);
+    toast(refusalText(r.status, r.body));
+  }
+  renderUndo();
+  if (state.draft.recipe) updateParts();
+  renderPieces();
+  // let go soon after, so the part is free for the next person
+  const s = sendState(part);
+  clearTimeout(s.release);
+  s.release = setTimeout(() => {
+    if (leaseState(state.leases, part, serverNow()).kind === "mine") post("/draft/release", { part });
+  }, RELEASE_IDLE);
+}
+
+// A ribbon drag: steps from where the drag began, sent throttled like a
+// slider, so others see the ribbon bend while it's held.
+let ribbonStart = null;
+function onPiece(ev) {
+  if (state?.draft.recipe !== "orbit" || !creating) return;
+  const d = state.draft;
+  if (ev.kind === "grab") {
+    if (ev.id === "ribbon") {
+      ribbonStart = { ...d.parts.ribbon };
+      remember("ribbon", ["turns", "radius"]);
+      holdPart("ribbon");
+    }
+    return;
+  }
+  if (ev.kind === "reshape" && ribbonStart) {
+    const p = RECIPES.orbit.parts.ribbon.params;
+    const turns = Math.min(p.turns.max, Math.max(p.turns.min, ribbonStart.turns + ev.loops));
+    const radius = Math.min(p.radius.max, Math.max(p.radius.min, Number((ribbonStart.radius + ev.reach).toFixed(2))));
+    edit("ribbon", "turns", turns, false);
+    edit("ribbon", "radius", radius, false);
+    return;
+  }
+  if (ev.kind === "release") {
+    if (ev.id === "ribbon") {
+      if (ribbonStart) {
+        const now = currentDraftParts().ribbon;
+        // nothing changed: forget the Undo step
+        if (now.turns === ribbonStart.turns && now.radius === ribbonStart.radius) undo.pop();
+        else edit("ribbon", "radius", now.radius, true);
+      }
+      ribbonStart = null;
+      letGo("ribbon");
+      renderUndo();
+      return;
+    }
+    if (ev.values) pieceEdit(ev.id, ev.values);
+  }
+}
+
+// The pieces as buttons: the keyboard's way to do what a drag does.
+function renderPieces() {
+  const d = state.draft;
+  const t = sharedSeconds(Date.now(), offset);
+  const list = $("[data-piece-list]");
+  const rows = SPHERES.map((id) => {
+    const s = shownValues(d.parts[id], local.get(id), Date.now());
+    const at = sphereAt(d.parts.ribbon, s, t);
+    const name = RECIPES.orbit.parts[id].name;
+    const lease = leaseState(state.leases, id, serverNow());
+    return { id, s, at, name, lease };
+  });
+  const sig = JSON.stringify(rows.map((r) => [r.id, r.s.placed, r.at.caught, r.s.colour, r.lease.kind]));
+  if (list.dataset.sig === sig) return renderUndo();
+  list.dataset.sig = sig;
+  const focused = document.activeElement?.closest?.("[data-piece]")?.dataset.piece;
+  list.replaceChildren(
+    ...rows.map(({ id, s, at, name, lease }) =>
+      el(
+        "li",
+        { class: `piece${at.caught ? " is-caught" : ""}${s.placed ? " is-placed" : ""}`, dataset: { pieceRow: id, caught: String(at.caught) }, style: { "--piece": PALETTE[s.colour]?.hex ?? "#ccc" } },
+        el("span", { class: "piece-ball", "aria-hidden": "true" }),
+        el("span", { class: "sr-only" }, `${name}: ${s.placed ? (at.caught ? "riding the ribbon" : "resting on the sculpture") : "on the shelf"}. `),
+        el(
+          "button",
+          { type: "button", class: "icon", "data-edit": true, dataset: { piece: `${id}:${s.placed ? "return" : "place"}`, blocked: lease.kind === "held" ? "1" : "0" }, "aria-label": s.placed ? `Return the ${name.toLowerCase()} to the shelf` : `Place the ${name.toLowerCase()} on the ribbon`, title: s.placed ? "Return to the shelf" : "Place on the ribbon" },
+          s.placed ? "↩" : "＋",
+        ),
+        s.placed
+          ? el("button", { type: "button", class: "icon", "data-edit": true, dataset: { piece: `${id}:along`, blocked: lease.kind === "held" ? "1" : "0" }, "aria-label": `Move the ${name.toLowerCase()} along the ribbon`, title: "Move along" }, "↻")
+          : null,
+      ),
+    ),
+  );
+  if (focused) $(`[data-piece^="${focused.split(":")[0]}:"]`)?.focus();
+  renderUndo();
+}
+$("[data-piece-list]").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-piece]");
+  if (!b || b.disabled) return;
+  const [id, what] = b.dataset.piece.split(":");
+  const s = state.draft.parts[id];
+  if (what === "return") return pieceEdit(id, { placed: 0, ride: 0 });
+  // onto the ribbon at its own place round the path, or an eighth further
+  // along: a point of the path, so the ribbon catches it
+  const u = what === "along" ? (s.along + 0.125) % 1 : SPHERES.indexOf(id) / SPHERES.length;
+  pieceEdit(id, dropOn(state.draft.parts.ribbon, ribbonPoint(state.draft.parts.ribbon, u)));
+});
+$$("[data-ribbon]").forEach((b) =>
+  b.addEventListener("click", () => {
+    const [key, step] = b.dataset.ribbon.split(":");
+    const p = RECIPES.orbit.parts.ribbon.params[key];
+    const v = Number((state.draft.parts.ribbon[key] + Number(step)).toFixed(2));
+    if (v < p.min || v > p.max) return toast(step > 0 ? "As far as it goes" : "As small as it goes");
+    pieceEdit("ribbon", { [key]: v });
+  }),
+);
+
+// caught or not changes as spheres ride; keep the buttons' words true
+setInterval(() => {
+  if (state?.draft.recipe === "orbit" && creating) renderPieces();
+}, 1000);
 
 const TRANSFORM = new Set(["lift", "turn", "scale"]);
 const openParts = new Set();
@@ -482,7 +672,8 @@ function updateParts() {
     }
     const author = d.partAuthors[partId];
     section.querySelector("[data-author]").replaceChildren(...(author && lease.kind !== "held" ? [dot(author, { note: "shaped it last" })] : []));
-    const values = shownValues(d.parts[partId], local.get(partId), now);
+    // any number a newer recipe added shows at its default
+    const values = shownValues({ ...defaultParts(d.recipe)[partId], ...d.parts[partId] }, local.get(partId), now);
     const blocked = lease.kind === "held" || sending.get(partId)?.refused;
     for (const input of $$("input", section)) {
       input.dataset.blocked = blocked ? "1" : "0";
@@ -527,6 +718,7 @@ function sendState(part) {
 function holdPart(part) {
   if (!editable()) return;
   const s = sendState(part);
+  if (!s.held && state.draft.recipe === "orbit" && part !== "ribbon") remember(part, Object.keys(state.draft.parts[part]));
   s.held = true;
   clearTimeout(s.release);
   const lease = leaseState(state.leases, part, serverNow());
@@ -616,7 +808,8 @@ function currentDraftParts() {
   if (!d.recipe) return null;
   const out = {};
   const now = Date.now();
-  for (const [part, values] of Object.entries(d.parts)) out[part] = shownValues(values, local.get(part), now);
+  const defaults = defaultParts(d.recipe);
+  for (const [part, values] of Object.entries(d.parts)) out[part] = shownValues({ ...defaults[part], ...values }, local.get(part), now);
   return out;
 }
 
@@ -1049,6 +1242,7 @@ async function startScene() {
         cameraMoved = m;
         renderHome();
       },
+      onPiece,
     });
     if (state) scene.update(state, selected, currentDraftParts());
   } catch (err) {

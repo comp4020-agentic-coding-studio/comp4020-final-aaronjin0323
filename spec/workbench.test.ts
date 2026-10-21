@@ -36,7 +36,7 @@ const state = (r:{ body: { state: StateEvent } }): StateEvent => r.body.state;
 // A visitor who lets go of every part they hold when the test is done, so
 // the next clear isn't refused.
 async function releaseAll(v: Visitor): Promise<void> {
-  for (const part of ["ribbon", "cube", "spheres", "stack", "arch", "halo", "petals", "stem", "motes"]) {
+  for (const part of ["ribbon", "cube", "spheres", "stack", "arch", "halo", "petals", "stem", "motes", "chrome", "teal", "gold", "dusk"]) {
     await post(v, "/draft/release", { part });
   }
 }
@@ -189,6 +189,32 @@ describe("the workbench", { concurrent: false }, () => {
     expect(r.status).toBe(200);
     expect(state(r).draft.recipe).toBeNull();
     expect(state(r).archivedDrafts[0]).toMatchObject({ id, reason: "cleared" });
+  });
+});
+
+// Orbit (ADR 15) runs on the same routes: a sphere placed by one visitor,
+// the ribbon bent by another, both credited, and the result publishable.
+describe("Orbit", { concurrent: false }, () => {
+  it("takes a placed sphere from one visitor and a ribbon bend from another, through the ordinary edits", async () => {
+    await fresh();
+    const a = visitor();
+    const b = visitor();
+    expect((await post(a, "/draft/start", { recipe: "orbit" })).status).toBe(200);
+    for (const part of ["chrome", "teal", "gold", "dusk"]) {
+      const r = await post(a, "/draft/edit", { part, values: { placed: 1, angle: 90, height: -0.2, distance: 1 } });
+      expect(r.status, part).toBe(200);
+      await post(a, "/draft/release", { part });
+    }
+    const bent = await post(b, "/draft/edit", { part: "ribbon", values: { turns: 3 } });
+    expect(bent.status).toBe(200);
+    // on the sculpture is 0 or 1; anything outside is refused, never clamped
+    expect((await post(a, "/draft/edit", { part: "chrome", values: { placed: 2 } })).status).toBe(400);
+    const s = await look();
+    expect(s.draft.parts?.chrome).toMatchObject({ placed: 1, angle: 90 });
+    expect(s.draft.parts?.ribbon.turns).toBe(3);
+    expect(s.draft.contributors.map((c) => c.tag).sort()).toEqual([state(bent).you.tag, (await stateOf(a)).you.tag].sort());
+    await releaseAll(a);
+    await releaseAll(b);
   });
 });
 

@@ -10,9 +10,10 @@ const onStep = (min: number, step: number, v: number): boolean => {
 };
 
 describe("the recipes", () => {
-  it("has three recipes of three parts each", () => {
-    expect(Object.keys(RECIPES)).toEqual(["loop", "arches", "bloom"]);
-    for (const r of Object.values(RECIPES)) expect(Object.keys(r.parts)).toHaveLength(3);
+  it("has three recipes of three parts each, and Orbit's five (ADR 15)", () => {
+    expect(Object.keys(RECIPES)).toEqual(["loop", "arches", "bloom", "orbit"]);
+    for (const id of ["loop", "arches", "bloom"]) expect(Object.keys(RECIPES[id].parts)).toHaveLength(3);
+    expect(Object.keys(RECIPES.orbit.parts)).toHaveLength(5);
   });
 
   it("puts every default in range and on its step", () => {

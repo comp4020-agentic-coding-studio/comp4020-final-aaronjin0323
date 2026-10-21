@@ -396,7 +396,7 @@ body[data-mode="explore"] .foot {
    one door into the editor */
 [data-view="bench"] .view-head {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 12px;
 }
@@ -703,6 +703,71 @@ input[type="range"] {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 14px;
+}
+
+/* Orbit (ADR 15): the pieces as rows, a glow when the ribbon has one */
+.pieces {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.piece-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.piece {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 12px;
+  background: #fff;
+  border: 2px solid var(--line);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.piece-ball {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: auto;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff 0 12%, var(--piece) 45%, color-mix(in srgb, var(--piece), #000 30%) 100%);
+}
+.piece:not(.is-placed) .piece-ball {
+  opacity: 0.55;
+}
+.piece.is-caught {
+  border-color: var(--piece);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--piece), transparent 60%), 0 0 14px color-mix(in srgb, var(--piece), transparent 40%);
+}
+.ribbon-keys {
+  display: flex;
+  gap: 8px;
+}
+.ribbon-keys button {
+  font-weight: 700;
+}
+.fine-tune {
+  margin-top: 10px;
+}
+.fine-tune > summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+.play,
+.undo {
+  min-height: 44px;
+}
+.scene[data-dragging] {
+  cursor: grabbing;
 }
 
 /* publish form */

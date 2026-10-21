@@ -9,6 +9,7 @@
 //   disposeSculpture(g);                        // when it's replaced
 import * as THREE from "three";
 import { PALETTE, RECIPES } from "./recipes.js";
+import { SPHERES, ribbonPoint, sphereAt } from "./orbit.js";
 
 const TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
@@ -301,7 +302,91 @@ function buildBloom(parts, animators) {
   return root;
 }
 
-const BUILDERS = { loop: buildLoop, arches: buildArches, bloom: buildBloom };
+// ---------- Orbit (ADR 15) ----------
+
+/** The ribbon's path as a Three.js curve, from orbit.js, so the tube and
+ * the spheres that ride it agree exactly. */
+class OrbitCurve extends THREE.Curve {
+  constructor(ribbon) {
+    super();
+    this.ribbon = ribbon;
+  }
+  getPoint(u, target = new THREE.Vector3()) {
+    return target.fromArray(ribbonPoint(this.ribbon, u));
+  }
+}
+
+export const ORBIT_CENTRE = 1.25;
+
+function buildOrbit(parts, animators) {
+  const root = new THREE.Group();
+  const r = parts.ribbon;
+  const ribbon = new THREE.Group();
+  ribbon.name = "ribbon";
+  ribbon.position.y = ORBIT_CENTRE;
+  const curve = new OrbitCurve(r);
+  const tube = mesh(ribbonGeometry(curve, r.twist), finish(r.colour, { side: THREE.DoubleSide, roughness: 0.3, metalness: 0.25 }));
+  tube.userData.part = "ribbon";
+  ribbon.add(tube);
+  root.add(ribbon);
+
+  // Each sphere: the ball, a halo that glows when the ribbon has it, a line
+  // to the nearest point of the path, and a lit stretch of ribbon it rides.
+  const glowMat = (c) => new THREE.MeshBasicMaterial({ color: hex(c), transparent: true, opacity: 0.35, depthWrite: false });
+  const riders = [];
+  for (const id of SPHERES) {
+    const s = parts[id];
+    if (!s.placed) continue;
+    const g = new THREE.Group();
+    g.name = id;
+    const ball = mesh(new THREE.SphereGeometry(s.size, 28, 18), finish(s.colour));
+    ball.userData.part = id;
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(s.size * 1.7, 20, 14), glowMat(s.colour));
+    g.add(ball, halo);
+    const link = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: hex(s.colour), transparent: true, opacity: 0.9 }));
+    const trail = new THREE.Mesh(new THREE.TubeGeometry(curve, 8, 0.05, 6, false), new THREE.MeshBasicMaterial({ color: hex(s.colour), transparent: true, opacity: 0.55, depthWrite: false }));
+    ribbon.add(g, link, trail);
+    riders.push({ id, s, g, halo, link, trail });
+  }
+  const sub = new THREE.Vector3();
+  animators.push((t) => {
+    for (const x of riders) {
+      const at = sphereAt(r, x.s, t);
+      x.g.position.fromArray(at.pos);
+      x.halo.visible = at.caught;
+      x.link.visible = at.caught;
+      x.trail.visible = at.caught;
+      x.g.userData.caught = at.caught;
+      if (at.caught) {
+        // the halo breathes, so the connection reads as alive
+        x.halo.scale.setScalar(1 + 0.15 * Math.sin(t * 3 + x.s.angle));
+        const back = (((at.u - 0.06) % 1) + 1) % 1;
+        sub.fromArray(ribbonPoint(r, back));
+        x.link.geometry.setFromPoints([sub, x.g.position]);
+        // the stretch it has just ridden, lit in its colour
+        x.trail.geometry.dispose();
+        x.trail.geometry = new THREE.TubeGeometry(new SubCurve(curve, back, at.u < back ? at.u + 1 : at.u), 10, 0.05, 6, false);
+      }
+    }
+  });
+  root.userData.orbit = { ribbon, riders };
+  return root;
+}
+
+/** A stretch of a closed curve, from u0 to u1 (u1 may run past 1). */
+class SubCurve extends THREE.Curve {
+  constructor(curve, u0, u1) {
+    super();
+    this.curve = curve;
+    this.u0 = u0;
+    this.u1 = u1;
+  }
+  getPoint(u, target = new THREE.Vector3()) {
+    return this.curve.getPoint((this.u0 + (this.u1 - this.u0) * u) % 1, target);
+  }
+}
+
+const BUILDERS = { loop: buildLoop, arches: buildArches, bloom: buildBloom, orbit: buildOrbit };
 
 /**
  * A sculpture as a Three.js group, from a recipe id and every part's numbers.

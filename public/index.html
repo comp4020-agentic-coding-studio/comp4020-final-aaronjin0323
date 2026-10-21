@@ -81,6 +81,7 @@
           <ul class="dots" data-bench-credits aria-label="Shaped by"></ul>
         </div>
         <button type="button" class="primary shape" data-shape hidden aria-label="Shape it: open the editor for the workbench sculpture">Shape it</button>
+        <button type="button" class="quiet play" data-play hidden data-edit aria-label="Play: start an Orbit on the workbench, where spheres ride a ribbon anyone can bend" title="Drop spheres on a ribbon; anyone can bend it">Play</button>
         <button type="button" class="quiet done" data-done hidden aria-label="Done shaping: back to exploring">Done</button>
       </div>
       <div data-bench-empty hidden>
@@ -89,9 +90,22 @@
       <div data-bench-full hidden>
         <p class="sr-only"><span data-bench-recipe></span><span data-bench-based></span></p>
         <div class="editor" data-editor hidden>
-        <div class="parts" data-parts></div>
+        <div class="pieces" data-pieces hidden>
+          <ul class="piece-list" data-piece-list aria-label="Pieces"></ul>
+          <div class="ribbon-keys" role="group" aria-label="Reshape the ribbon">
+            <button type="button" class="icon" data-ribbon="turns:1" data-edit aria-label="More loops in the ribbon" title="More loops">+∞</button>
+            <button type="button" class="icon" data-ribbon="turns:-1" data-edit aria-label="Fewer loops in the ribbon" title="Fewer loops">−∞</button>
+            <button type="button" class="icon" data-ribbon="radius:0.1" data-edit aria-label="Widen the ribbon" title="Wider">↔</button>
+            <button type="button" class="icon" data-ribbon="radius:-0.1" data-edit aria-label="Narrow the ribbon" title="Narrower">→←</button>
+          </div>
+        </div>
+        <details class="fine-tune" data-fine-tune>
+          <summary>Fine-tune</summary>
+          <div class="parts" data-parts></div>
+        </details>
         <div class="bench-actions">
           <button type="button" class="primary" data-publish-open data-edit>Exhibit</button>
+          <button type="button" class="quiet undo" data-undo data-edit hidden aria-label="Undo your last change" title="Undo your last change">Undo</button>
           <button type="button" class="icon" data-clear data-edit aria-label="Clear the bench (it's archived)" title="Clear the bench (it's archived)"><svg aria-hidden="true"><use href="#i-clear"/></svg></button>
         </div>
         <form class="publish" data-publish hidden aria-labelledby="publish-h">

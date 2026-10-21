@@ -1,4 +1,4 @@
-// The three sculpture recipes, and the bounds on every part of them. This is
+// The sculpture recipes, and the bounds on every part of them. This is
 // the one copy: the server imports it to refuse an edit outside the bounds,
 // and the page imports it (served at /recipes.js) to draw the sliders and the
 // sculpture. A sculpture is never a mesh, only a recipe id and numbers from
@@ -28,6 +28,23 @@ const transform = () => ({
   lift: num("Lift", -0.5, 1.5, 0.05, 0),
   turn: num("Turn", 0, 360, 5, 0),
   scale: num("Scale", 0.5, 1.5, 0.05, 1),
+});
+
+// Orbit's spheres (ADR 15): on the shelf until placed, then where they
+// were dropped, measured from the ribbon's centre. public/orbit.js decides
+// whether the ribbon catches one.
+const sphere = (name, tint, angle) => ({
+  name,
+  params: {
+    placed: num("On the sculpture", 0, 1, 1, 0),
+    angle: num("Around", 0, 355, 5, angle),
+    height: num("Height", -0.8, 0.8, 0.05, 0),
+    distance: num("Out", 0, 2, 0.05, 1),
+    ride: num("Rides the ribbon", 0, 1, 1, 0),
+    along: num("Along the ribbon", 0, 0.995, 0.005, 0),
+    size: num("Size", 0.1, 0.3, 0.01, 0.17),
+    colour: colour("Colour", tint),
+  },
 });
 
 /** @type {Record<string, {name: string, blurb: string, parts: Record<string, {name: string, params: Record<string, {label: string, kind: "number" | "colour", min: number, max: number, step: number, default: number}>}>}>} */
@@ -139,6 +156,26 @@ export const RECIPES = {
           drift: num("Drift", 0, 1, 0.05, 0.5),
         },
       },
+    },
+  },
+  orbit: {
+    name: "Orbit",
+    blurb: "Drop spheres on a ribbon; they ride it, however anyone bends it.",
+    parts: {
+      ribbon: {
+        name: "Ribbon",
+        params: {
+          turns: num("Loops", 1, 4, 1, 2),
+          radius: num("Reach", 0.6, 1.5, 0.05, 1),
+          twist: num("Twist", 0, 4, 0.5, 1),
+          tilt: num("Tilt", 0, 40, 1, 12),
+          colour: colour("Colour", 2),
+        },
+      },
+      chrome: sphere("Chrome sphere", 5, 0),
+      teal: sphere("Teal sphere", 3, 90),
+      gold: sphere("Gold sphere", 7, 180),
+      dusk: sphere("Dusk sphere", 6, 270),
     },
   },
 };
