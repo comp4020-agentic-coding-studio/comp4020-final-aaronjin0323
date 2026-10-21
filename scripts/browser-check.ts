@@ -659,7 +659,9 @@ async function opening(browser: Browser): Promise<void> {
 // drag does; sliders, history and drawers are out of sight.
 async function orbit(browser: Browser): Promise<void> {
   console.log("\n— Orbit: pieces that affect each other —");
-  const a = await visitor(browser);
+  // A moves as most visitors do, so spheres ride the real shared clock
+  // (reduced motion draws at t = 0, which once hid a sphere landing astray)
+  const a = await visitor(browser, { ...DESKTOP, reducedMotion: "no-preference" });
   const b = await visitor(browser);
   const probe = (p: Page) => p.evaluate(() => (document.querySelector("[data-scene]") as any).probe().orbit);
   // from something else on the bench, so Play is offered and asks first
@@ -699,6 +701,13 @@ async function orbit(browser: Browser): Promise<void> {
   const placed = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome?.caught === true, null, { timeout: 3000 }).then(() => true, () => false);
   const row = await a.locator('[data-piece-row="chrome"]').getAttribute("data-caught").catch(() => null);
   check(placed, "dropped on the ribbon, the sphere is placed and caught", `row says caught ${row}`);
+  // and it lands under the pointer that let it go (it rides on slowly, so
+  // read it at once; a sphere put back by the clock lands anywhere on the loop)
+  if (placed && to) {
+    const at = (await probe(a))?.spheres?.chrome?.at;
+    const off = at ? Math.hypot(at.x - to.x, at.y - to.y) : Infinity;
+    check(off < 40, "the sphere lands where it was dropped", `${Math.round(off)}px from the pointer`);
+  }
   // B, a different visitor, reshapes the ribbon; A's sphere moves on A's screen
   await b.click("[data-shape]").catch(() => null);
   await b.waitForSelector("[data-pieces]:not([hidden])", { timeout: 3000 }).catch(() => null);

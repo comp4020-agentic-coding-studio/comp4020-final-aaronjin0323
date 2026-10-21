@@ -77,6 +77,27 @@ describe("the catch rule", () => {
     }
   });
 
+  // the shared clock as the page reads it: seconds since 1970, not 0
+  const NOW = 1_792_000_000.25;
+
+  it("a sphere dropped on the ribbon appears exactly where it was dropped, at a real clock time", () => {
+    for (const u of [0.1, 0.37, 0.8]) {
+      const p = ribbonPoint(ribbon, u);
+      const s = { ...dropOn(ribbon, p, NOW), size: 0.18, colour: 5 };
+      const at = sphereAt(ribbon, s, NOW);
+      expect(at.caught).toBe(true);
+      expect(dist(at.pos, p), `u ${u}`).toBeLessThan(0.04);
+    }
+  });
+
+  it("a sphere dropped off the ribbon rests within a centimetre or so of the drop", () => {
+    for (const p of [[1.7, 0.63, 0.4], [-0.3, -0.71, 1.83], [0.05, 0.8, 0]]) {
+      const s = { ...dropOn(ribbon, p, NOW), size: 0.18, colour: 5 };
+      expect(s.ride).toBe(0);
+      expect(dist(sphereAt(ribbon, s, NOW).pos, p)).toBeLessThan(0.02);
+    }
+  });
+
   it("is the same on every screen: same numbers and time, same place", () => {
     const s = onRibbon(0.6);
     expect(sphereAt(ribbon, s, 3.7)).toEqual(sphereAt({ ...ribbon }, { ...s }, 3.7));

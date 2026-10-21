@@ -87,12 +87,15 @@ export function sphereAt(ribbon, s, t) {
 
 const snap = (v, step, lo, hi) => Math.min(hi, Math.max(lo, Number((Math.round(v / step) * step).toFixed(4))));
 
-/** Whether a sphere dropped at p (in the ribbon's frame) is caught, and
- * the numbers to save for it, snapped into the recipe's ranges. */
-export function dropOn(ribbon, p) {
+/** Whether a sphere dropped at p (in the ribbon's frame) at shared time t
+ * is caught, and the numbers to save for it, snapped into the recipe's
+ * ranges. `along` has the ride so far taken off, so at time t the sphere is
+ * drawn on the very point it was dropped on. */
+export function dropOn(ribbon, p, t = 0) {
   const near = nearestU(ribbon, p);
   const caught = near.d <= CATCH;
-  return { ...placeAt(p), ride: caught ? 1 : 0, along: caught ? snap(near.u, 0.005, 0, 0.995) : 0 };
+  const along = (((near.u - t * RIDE) % 1) + 1) % 1;
+  return { ...placeAt(p), ride: caught ? 1 : 0, along: caught ? snap(along, 0.001, 0, 0.999) : 0 };
 }
 
 /** The numbers that put a sphere at point p in the ribbon's frame. */
@@ -100,8 +103,8 @@ export function placeAt(p) {
   const angle = ((Math.atan2(p[2], p[0]) / DEG) % 360 + 360) % 360;
   return {
     placed: 1,
-    angle: snap(angle, 5, 0, 355),
-    height: snap(p[1], 0.05, -0.8, 0.8),
-    distance: snap(Math.hypot(p[0], p[2]), 0.05, 0, 2),
+    angle: snap(angle, 1, 0, 359),
+    height: snap(p[1], 0.01, -0.8, 0.8),
+    distance: snap(Math.hypot(p[0], p[2]), 0.01, 0, 2),
   };
 }

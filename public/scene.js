@@ -1005,7 +1005,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       d.local = snap.local;
     }
     const onBench = !!snap || Math.hypot(d.world.x, d.world.z) < 2.4;
-    piece.drop = onBench && orbitParts?.ribbon ? dropOn(orbitParts.ribbon, d.local) : null;
+    piece.local = onBench && orbitParts?.ribbon ? d.local : null;
+    piece.drop = piece.local ? dropOn(orbitParts.ribbon, piece.local, drawTime()) : null;
     ghostHalo.visible = !!piece.drop?.ride;
     piece.catches = ghostHalo.visible;
     canvas.dataset.catches = String(piece.catches);
@@ -1036,7 +1037,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     delete canvas.dataset.catches;
     if (p.id === "ribbon") onPiece({ kind: "release", id: "ribbon" });
     else if (p.moved < 6 && orbitParts[p.id].placed === 0) onPiece({ kind: "release", id: p.id, values: null });
-    else onPiece({ kind: "release", id: p.id, values: p.drop ?? { placed: 0, ride: 0 } });
+    // decided again at the moment of letting go, so it lands where it's seen
+    else onPiece({ kind: "release", id: p.id, values: p.local ? dropOn(orbitParts.ribbon, p.local, drawTime()) : { placed: 0, ride: 0 } });
     syncShelf(orbitParts, true);
     wake();
   }
@@ -1111,9 +1113,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   function wake() {
     if (!raf) raf = requestAnimationFrame(frame);
   }
+  // the time sculptures are drawn at: the shared clock, or 0 when still
+  const drawTime = () => (still ? 0 : time());
   function frame() {
     raf = 0;
-    const t = still ? 0 : time();
+    const t = drawTime();
     // a slow drift around the room when nobody's touching it; never in the
     // phone layout, where the scene sits over controls being scrolled
     if (!still && !phoneLayout.matches && performance.now() - interacting > 6000 && !drag) goal.yaw += 0.0007;

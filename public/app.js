@@ -93,6 +93,8 @@ let cameraMoved = false; // the visitor turned, dragged or zoomed the camera
 let creating = false;
 
 const serverNow = () => Date.now() + offset;
+// the time the scene draws sculptures at: the shared clock, or 0 when still
+const drawSeconds = () => (reducedMotion.matches ? 0 : sharedSeconds(Date.now(), offset));
 const editable = () => canEdit(conn);
 
 // Per-part sending state for the slider currently being worked.
@@ -517,7 +519,7 @@ function onPiece(ev) {
 // The pieces as buttons: the keyboard's way to do what a drag does.
 function renderPieces() {
   const d = state.draft;
-  const t = sharedSeconds(Date.now(), offset);
+  const t = drawSeconds();
   const list = $("[data-piece-list]");
   const rows = SPHERES.map((id) => {
     const s = shownValues(d.parts[id], local.get(id), Date.now());
@@ -558,9 +560,12 @@ $("[data-piece-list]").addEventListener("click", (e) => {
   const s = state.draft.parts[id];
   if (what === "return") return pieceEdit(id, { placed: 0, ride: 0 });
   // onto the ribbon at its own place round the path, or an eighth further
-  // along: a point of the path, so the ribbon catches it
-  const u = what === "along" ? (s.along + 0.125) % 1 : SPHERES.indexOf(id) / SPHERES.length;
-  pieceEdit(id, dropOn(state.draft.parts.ribbon, ribbonPoint(state.draft.parts.ribbon, u)));
+  // along from where it is now: a point of the path, so the ribbon catches it
+  const ribbon = state.draft.parts.ribbon;
+  const t = drawSeconds();
+  const now = sphereAt(ribbon, { ...defaultParts("orbit")[id], ...s }, t);
+  const u = what === "along" && now.caught ? (now.u + 0.125) % 1 : SPHERES.indexOf(id) / SPHERES.length;
+  pieceEdit(id, dropOn(ribbon, ribbonPoint(ribbon, u), t));
 });
 $$("[data-ribbon]").forEach((b) =>
   b.addEventListener("click", () => {
