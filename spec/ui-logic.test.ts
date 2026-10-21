@@ -33,7 +33,7 @@ describe("leaseState", () => {
   test("someone else's live lease names them", () => {
     const s = ui.leaseState([lease("ribbon", 10, false)], "ribbon", now);
     expect(s.kind).toBe("held");
-    expect(s.holder.name).toBe("Coral Heron");
+    expect(s.kind === "held" && s.holder.name).toBe("Coral Heron");
   });
   test("my own lease is mine", () => {
     expect(ui.leaseState([lease("ribbon", 10, true)], "ribbon", now).kind).toBe("mine");

@@ -256,13 +256,17 @@ async function publishing(browser: Browser): Promise<void> {
   // remix onto a full bench is only "Replace the workbench", confirmed
   check(await page.locator("[data-ex-remix]").isHidden(), "with a full bench, plain Remix isn't offered");
   check(await page.locator("[data-ex-replace]").isVisible(), "Replace the workbench is, separately labelled");
-  const archivedBefore = Number((await page.textContent("[data-archive-count]")) ?? "0");
+  // The state carries only the latest archived drafts, so after many runs
+  // the count stays at its cap; look for the newest entry changing instead.
+  const newest = async () => (await page.locator("[data-archive] .shelf-item").first().textContent().catch(() => "")) ?? "";
+  const archivedBefore = await newest();
   await page.click("[data-ex-replace]");
   const asked = (await page.textContent("[data-ask-text]")) ?? "";
   check(/Archived drafts/.test(asked), "and asks first, saying the bench is archived", asked);
   await page.click("[data-ask-yes]");
-  await page.waitForFunction((n) => Number(document.querySelector("[data-archive-count]")?.textContent) > n, archivedBefore, { timeout: 3000 }).catch(() => null);
-  check(Number(await page.textContent("[data-archive-count]")) > archivedBefore, "the old bench is in Archived drafts");
+  await page.waitForFunction((t) => (document.querySelector("[data-archive] .shelf-item")?.textContent ?? "") !== t, archivedBefore, { timeout: 3000 }).catch(() => null);
+  const archivedTop = await newest();
+  check(archivedTop !== archivedBefore && /replaced/.test(archivedTop), "the old bench is in Archived drafts", archivedTop.replace(/\s+/g, " ").slice(0, 60));
   await page.context().close();
 }
 

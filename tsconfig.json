@@ -18,8 +18,5 @@
     "verbatimModuleSyntax": true,
     "allowJs": true
   },
-  "include": ["*.ts", "src", "spec", "scripts"],
-  // Skyline's browser check, until the page's rewrite of it lands: it still
-  // imports the deleted scripts/seed-demo.ts. Drop this line with that merge.
-  "exclude": ["scripts/browser-check.ts"]
+  "include": ["*.ts", "src", "spec", "scripts"]
 }
