@@ -12,7 +12,10 @@
 //
 // It plays on the shared stage and leaves exhibits as fixture visitors, so
 // point it at a throwaway database, never production.
-import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
 
@@ -827,6 +830,28 @@ async function explore(browser: Browser): Promise<void> {
   }
 }
 
+// Safari's engine plays the same performance as Chrome's, bit for bit
+// (CLAUDE.md, "The rules use only arithmetic every engine rounds the same").
+// macOS ships JavaScriptCore, the engine inside Safari, as `jsc`: run
+// stage.js in it and in Node (V8, Chrome's engine) and compare a busy
+// performance's exact positions. Seen red against the Math.sin rules.
+const JSC = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc";
+async function engines(): Promise<void> {
+  console.log("\n— Safari's engine and Chrome's play the same performance —");
+  if (!existsSync(JSC)) return check(true, "no JavaScriptCore here (not macOS): skipped");
+  const body = `
+var G=[["throw","teal",0.5,[-0.62,0.95,0],[-0.9,0,0]],["throw","gold",1,[-0.6,0.3,-0.2],[2.2,0.2,0.1]],["tap","bell",2],["throw","dusk",3,[0,0.15,0],[0,1.8,0]],["pluck","ribbon",5,null,null,0.5],["throw","chrome",6.5,[1.2,0.3,0.6],[-2,0.3,-0.6]],["tap","bell",9]].map(function(a){var o={kind:a[0],object:a[1],at:a[2],by:"aaaaaa"};if(a[3]){o.from=a[3];o.v=a[4]}if(a[5]!=null)o.u=a[5];return o});
+var out=[];for(var t=0;t<12;t+=0.25){var s=simulate({set:"orbit",gestures:G},t);for(var i=0;i<SPHERES.length;i++)out.push(s.spheres[SPHERES[i]].pos.join(","))}
+for(var i=0;i<480;i++)out.push(ribbonPoint(i/480).join(","));
+(typeof print==="function"?print:console.log)(out.join(";"));`;
+  const file = join(tmpdir(), `stage-engines-${process.pid}.js`);
+  writeFileSync(file, readFileSync("public/stage.js", "utf8").replace(/^export /gm, "") + body);
+  const safari = execFileSync(JSC, [file], { encoding: "utf8" }).trim().split(";");
+  const chrome = execFileSync(process.execPath, [file], { encoding: "utf8" }).trim().split(";");
+  const at = chrome.findIndex((x, i) => x !== safari[i]);
+  check(chrome.length > 400 && at < 0, "every sphere position and the ribbon's path are identical, bit for bit", at < 0 ? `${chrome.length} values` : `first differs at value ${at}: ${chrome[at]} vs ${safari[at]}`);
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -846,6 +871,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   words,
   "phone-edit": phoneEdit,
   names,
+  engines,
 };
 
 // HEADED=1 runs a real, GPU-backed window parked off-screen: headless can
