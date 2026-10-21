@@ -1,2656 +1,1008 @@
-/* Skyline, styled after a GTA title screen: a framed sunset over a city
-   skyline, heavy outlined display type, flat colour with hard black shadows,
-   and a board that reads as a city map at night, where every claimed tile is
-   a lit tower.
-
-   Two typefaces. Passion One (SIL Open Font License, public/fonts/OFL.txt)
-   sets live text. The wordmark is Pricedown Black by Typodermic Fonts,
-   converted to outlines as one fixed image (public/art/logo.svg): its free
-   licence allows that, but not a web font, nor the font file in a public
-   repo.
-
-   Passion One comes in two weights here, and every rule that uses it names
-   one. Black (900) is for big type and buttons. Regular (400) is for small
-   outlined type: Black's 0, 6, 8 and 9 have holes a pixel wide at that
-   size, which an outline fills, and the claimed count read as a blob. */
-
-@font-face {
-  font-family: "Passion One";
-  src: url("/fonts/PassionOne-Black.ttf") format("truetype");
-  font-weight: 900;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Passion One";
-  src: url("/fonts/PassionOne-Regular.ttf") format("truetype");
-  font-weight: 400;
-  font-display: swap;
-}
+/* Impossible Museum. Colours are tokens here; the sculpture palette itself
+   is PALETTE in recipes.js. Live text is the system stack (CLAUDE.md, "The
+   look"). */
 
 :root {
-  color-scheme: dark;
-  --night: #120a1f;
-  --ink: #fff7ec;
-  --muted: #d9c7e8;
-  --accent: #ffb000; /* the wanted stars' gold */
-  --money: #8de08d; /* the cash counter's green */
-  --park: #2f8f46; /* a park's hedge and tree (docs/adr/0007) */
-  --park-lawn: #6fc46a; /* and its lawn */
-  /* The zone icons (docs/adr/0009), drawn with gradients only (never
-     clip-path on a 3D face). A market is a striped awning over a green shop
-     front with a door; a factory a dark block with a sawtooth roof and a red
-     chimney. Stripes against solid dark read apart in greyscale. */
-  --zone-market:
-    linear-gradient(var(--night), var(--night)) 50% 100% / 26% 34% no-repeat,
-    repeating-linear-gradient(90deg, var(--danger) 0 20%, var(--cream) 20% 40%) 0 0 / 100% 42% no-repeat,
-    var(--money);
-  --zone-factory:
-    linear-gradient(var(--danger), var(--danger)) 78% 0 / 18% 62% no-repeat,
-    linear-gradient(to top right, #b9b4cc 49%, transparent 51%) 0 62% / 34% 30% repeat-x,
-    linear-gradient(#b9b4cc, #b9b4cc) 0 100% / 100% 40% no-repeat,
-    #3a3450;
-  --district-line: rgb(255 90 170 / 0.7); /* the district grid, the board's neon */
-  --line: #000; /* every outline and hard shadow */
-  --cream: #fff7ec;
-  --panel: #1c0f2e;
-  --road: #5a5472;
-  --lot: #272137;
-  --lot-hover: #40385a;
-  --lot-edge: rgb(255 255 255 / 0.08); /* the kerb round an empty lot */
-  /* a roof whose lease ends within the hour: hatched, so it reads apart
-     from the others in greyscale too */
-  --hatch: repeating-linear-gradient(45deg, rgb(0 0 0 / 0.45) 0 2px, rgb(255 247 236 / 0.35) 2px 3px, transparent 3px 6px);
-  --danger: #ff5a4f; /* the wasted red: a drop, a lost connection */
-  --display: "Passion One", Impact, "Arial Black", sans-serif;
-  /* One type scale. Display type (Passion One) for labels, buttons and
-     mission text; the system face for anything read as a sentence. */
-  --fs-small: 0.875rem; /* hints, the key, supporting lines */
-  --fs-body: 1rem; /* status, inspector facts */
-  --fs-label: 1.1rem; /* uppercase display labels */
-  --fs-notice: 1.35rem; /* mission text */
-  --city-h: 84px; /* the skyline along the foot of the header */
-  --unit: clamp(5px, 1.1vw, 10px); /* how far one neighbour raises a tile */
-  --board: min(34rem, 62vw);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ivory: #f4ead8;
+  --ivory-hi: #fbf6ec;
+  --ivory-lo: #e8dcc6;
+  --peach: #f6b38e;
+  --coral: #ef6f5e;
+  --coral-ink: #b43d2d;
+  --teal: #3fa7a3;
+  --teal-ink: #1f6f78;
+  --chrome: #c9d1d6;
+  --dusk: #7a6aa8;
+  --night: #2c2a5c;
+  --ink: #2d2640;
+  --ink-soft: #5b5170;
+  --line: rgba(45, 38, 64, 0.14);
+  --card: rgba(251, 246, 236, 0.94);
+  --shadow: 0 10px 30px rgba(44, 42, 92, 0.22);
+  --radius: 14px;
+  --panel-w: 400px;
+  --top-h: 74px;
+  --nav-h: 68px;
+  --focus: 0 0 0 3px var(--ivory-hi), 0 0 0 5px var(--teal-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink);
+  line-height: 1.4;
+  -webkit-text-size-adjust: 100%;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-/* Any rule that sets `display` beats the browser's own [hidden] style, so
-   an element the script hides would stay on screen. This wins over all. */
 [hidden] {
   display: none !important;
 }
 
+html,
 body {
   margin: 0;
-  background: var(--night);
-  color: var(--ink);
-  line-height: 1.5;
-  padding-inline: 1rem;
+  min-height: 100%;
 }
 
-a {
-  color: var(--accent);
-  font-weight: 700;
+body {
+  background: linear-gradient(180deg, var(--night) 0%, var(--dusk) 45%, var(--peach) 100%) fixed;
+  overflow-x: hidden;
 }
 
-.top,
-main {
-  max-width: 72rem;
-  margin-inline: auto;
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.15;
 }
 
-/* Every focusable thing shows where focus is, in the HUD's gold. Rules
-   below only adjust the offset or colour for their own backgrounds. */
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
 :focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--focus);
 }
 
-/* For text that only a screen reader needs (the live announcer). */
-.sr-only {
+.skip {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
+  left: 12px;
+  top: -60px;
+  z-index: 50;
+  background: var(--ivory-hi);
+  padding: 8px 12px;
+  border-radius: 8px;
 }
-/* --- the header: a framed sunset, like a panel of cover art --- */
-
-/* The sky's colours are pinned to the skyline's height, measured up from the
-   bottom, and the text always sits just above the skyline. */
-.top {
-  position: relative;
-  isolation: isolate; /* keeps the skyline (z-index -1) inside the panel */
-  overflow: clip;
-  margin-top: 1rem;
-  padding: 1rem 1.5rem calc(var(--city-h) * 0.55);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-  background:
-    radial-gradient(ellipse 24rem calc(var(--city-h) * 1.7) at 72% 100%, rgb(255 214 120 / 0.9), transparent 70%),
-    linear-gradient(
-      to top,
-      #ffb35c 0,
-      #f06a4e calc(var(--city-h) * 0.45),
-      #8a2464 var(--city-h),
-      #4d1763 calc(var(--city-h) + 5rem),
-      #1f0d3d 100%
-    );
+.skip:focus {
+  top: 12px;
 }
 
-/* The skyline silhouette, drawn by scripts/draw-skyline.ts. A mask, so its
-   colour is set here. */
-.top::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: auto 0 0;
-  height: var(--city-h);
-  background: #170a28;
-  mask: url("/art/city.svg") left bottom / auto 100% repeat-x;
+/* ------------------------------------------------------------ stage */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
 }
 
-/* The heading's text stays in the page for screen readers, search and the
-   tab title; on screen it's drawn by the wordmark instead. */
-.top h1 {
-  margin: 0;
-  width: clamp(12rem, 24vw, 17rem);
-  aspect-ratio: 3197 / 986; /* logo.svg's viewBox */
-  background: url("/art/logo.svg") left center / contain no-repeat;
-  color: transparent;
-  font-size: 1px;
-  line-height: 1;
-  overflow: hidden;
-  rotate: -3deg;
-}
-
-@media (forced-colors: active) {
-  .top h1 {
-    width: auto;
-    aspect-ratio: auto;
-    background: none;
-    color: CanvasText;
-    font-size: 2.6rem;
-    rotate: none;
-  }
-}
-
-/* The one line of words: mission text over the sunset. */
-.lede {
-  margin: 0.6rem 0 0;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.35rem;
-  line-height: 1.15;
-  letter-spacing: 0.01em;
-  color: var(--ink);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-}
-
-/* About: a small round icon in the corner. */
-.about {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.6rem;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  color: var(--ink);
-  filter: drop-shadow(1px 1px 0 var(--line));
-}
-
-.ico {
+.scene {
   display: block;
-  flex: none;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+  --panel-cover: calc(var(--panel-w) + 24px);
+}
+.scene:active {
+  cursor: grabbing;
+}
+.scene:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--ivory-hi);
 }
 
-@media (min-width: 52rem) {
-  .top {
-    display: flex;
-    align-items: center;
-    gap: 2rem;
-  }
-
-  .top h1 {
-    margin-bottom: calc(var(--city-h) * -0.35);
-  }
-
-  .lede {
-    margin: 0;
-    font-size: 1.6rem;
-  }
-}
-
-/* --- layout: the board takes the page --- */
-
-/* One column: the name, then the board. Once you hold land the wallet sits
-   above the board; the inspector beside it on a wide screen, under it on a
-   phone. Absolutely placed children (the announcer, the bars) take no
-   cell. */
-.claim {
-  display: grid;
-  gap: 0.75rem;
-  margin-block: 1rem 2rem;
-}
-
-@media (min-width: 64rem) {
-  .claim {
-    grid-template-columns: minmax(16rem, 19rem) minmax(0, 1fr);
-    grid-template-rows: auto auto 1fr;
-    column-gap: 1.25rem;
-    align-items: start;
-  }
-
-  .controls,
-  .wallet,
-  .inspect {
-    grid-column: 1;
-  }
-
-  .play {
-    grid-column: 2;
-    grid-row: 1 / -1;
-  }
-}
-
-/* --- the name field: the one thing to fill in --- */
-
-.controls {
-  display: flex;
-}
-
-.controls input {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 52px;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.4rem;
-  letter-spacing: 0.02em;
-  padding: 0.4rem 0.8rem;
-  border: 3px solid var(--line);
-  border-radius: 0.5rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 4px 4px 0 var(--line);
-}
-
-.controls input::placeholder {
-  color: #5d5070;
-  opacity: 1;
-}
-
-/* A plot was picked before a name: the field pulses gold until one's typed. */
-.controls input[data-want] {
-  border-color: var(--accent);
-  box-shadow:
-    4px 4px 0 var(--line),
-    0 0 0 4px var(--accent);
-  animation: want 0.9s ease-out 3;
-}
-
-@keyframes want {
-  0% {
-    box-shadow:
-      4px 4px 0 var(--line),
-      0 0 0 0 rgb(255 176 0 / 0.95);
-  }
-  100% {
-    box-shadow:
-      4px 4px 0 var(--line),
-      0 0 0 14px rgb(255 176 0 / 0);
-  }
-}
-
-/* --- one short line at a time, floating near what it's about --- */
-
-.notices {
-  position: relative;
-  height: 0;
-  z-index: 6;
-}
-
-.notices:empty {
-  display: none;
-}
-
-.notice {
-  position: absolute;
+.status {
+  position: fixed;
   left: 50%;
-  top: 0.25rem;
-  translate: -50% 0;
-  width: max-content;
-  max-width: min(26rem, 100%);
+  top: calc(var(--top-h) + 8px);
+  transform: translateX(-50%);
+  z-index: 30;
   margin: 0;
-  padding: 0.35rem 0.75rem 0.3rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.5rem;
-  box-shadow:
-    4px 4px 0 var(--line),
-    inset 0 0 0 2px var(--accent);
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: var(--fs-notice);
-  line-height: 1.15;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--ivory-hi);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  max-width: calc(100vw - 32px);
   text-align: center;
-  letter-spacing: 0.01em;
-  color: var(--accent);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
+}
+
+/* ------------------------------------------------------------ header */
+
+.top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: calc(var(--panel-w) + 24px);
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
   pointer-events: none;
-  animation: notice-in 240ms ease-out;
-  transition: opacity 400ms;
+}
+.top > * {
+  pointer-events: auto;
 }
 
-/* Placed over a plot by app.js (left/top in the .play box): it sits above
-   the plot with a small pointer down to it. */
-.notice[data-at] {
-  translate: -50% calc(-100% - 3.5rem);
+.brand {
+  background: rgba(44, 42, 92, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: var(--radius);
+  padding: 10px 16px 12px;
+  box-shadow: var(--shadow);
+}
+.brand h1 {
+  font-size: 1.55rem;
+  letter-spacing: 0.01em;
+  color: var(--ivory-hi);
+  text-shadow: 0 1px 12px rgba(44, 42, 92, 0.55);
+}
+.lede {
+  margin: 4px 0 0;
+  font-size: 1.02rem;
+  color: var(--ivory-hi);
+  text-shadow: 0 1px 10px rgba(44, 42, 92, 0.7);
+  max-width: 36ch;
 }
 
-.notice[data-at]::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 100%;
-  width: 0.9rem;
-  height: 0.6rem;
-  translate: -50% 0;
-  background: var(--line);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-}
-
-.notice[data-gone] {
-  opacity: 0;
-}
-
-@keyframes notice-in {
-  from {
-    opacity: 0;
-    scale: 0.9;
-  }
-}
-
-/* --- the board's HUD: the goal line, connection and the tucked panels --- */
-
-.play {
-  position: relative;
+.people {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  min-width: 0;
+  align-items: flex-end;
+  gap: 6px;
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  box-shadow: var(--shadow);
+  max-width: 420px;
 }
-
-/* Above the stage: the tilted board's box reaches up over the HUD (its
-   negative margin), and would take the icons' clicks. */
-.hud {
-  position: relative;
-  z-index: 7;
+.you,
+.here {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.you-label,
+.here-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.here-list {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.4rem 0.75rem;
-  min-height: 44px;
-  padding-inline: 0.25rem;
-}
-
-.hud p {
+  gap: 4px 10px;
+  list-style: none;
   margin: 0;
+  padding: 0;
+}
+.rename {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.rename label {
+  font-size: 0.85rem;
+}
+.rename input {
+  width: 14ch;
 }
 
-/* Connection: a dot by shape as well as colour (filled live, dashed ring
-   while trying, hollow square when down); its words show only when it
-   isn't live. */
-.conn {
+/* ------------------------------------------------------------ chips */
+
+.chip {
+  --who: var(--dusk);
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  color: var(--muted);
-  font-size: var(--fs-small);
+  gap: 5px;
+  font-weight: 600;
+  max-width: 100%;
+  min-width: 0;
 }
-
-.conn::before {
-  content: "";
-  box-sizing: border-box;
-  width: 0.7rem;
-  height: 0.7rem;
-  border: 2px dashed var(--muted);
-  border-radius: 50%;
-}
-
-.conn[data-conn="live"] .conn-text {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.conn[data-conn="live"]::before {
-  border: 0;
-  background: var(--money);
-  box-shadow: 0 0 6px var(--money);
-}
-
-.conn[data-conn="reconnecting"]::before {
-  border-color: var(--accent);
-  animation: spin 1.6s linear infinite;
-}
-
-.conn[data-conn="offline"]::before {
-  border: 2px solid var(--danger);
-  border-radius: 1px;
-  animation: none;
-}
-
-.conn[data-conn="offline"] {
-  color: var(--ink);
-}
-
-@keyframes spin {
-  to {
-    rotate: 1turn;
-  }
-}
-
-/* The tucked-away panels: a row of small round icon buttons, each opening
-   a little card under it. */
-.tools {
-  display: flex;
-  gap: 0.4rem;
-  position: relative;
-}
-
-.tool > summary {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border: 3px solid var(--line);
-  border-radius: 50%;
-  background: var(--panel);
-  color: var(--muted);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-  list-style: none;
-}
-
-.tool > summary::-webkit-details-marker {
-  display: none;
-}
-
-@media (hover: hover) {
-  .tool > summary:hover {
-    color: var(--ink);
-    background: var(--lot-hover);
-  }
-}
-
-.tool[open] > summary {
-  background: var(--accent);
-  color: var(--night);
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
-}
-
-.tool-body {
-  position: absolute;
-  z-index: 8;
-  right: 0;
-  top: calc(100% + 0.5rem);
-  width: min(20rem, calc(100vw - 2rem));
-  padding: 0.7rem 0.9rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: 1.35;
-}
-
-.legend {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.legend li {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* Each swatch is a roof seen from above, drawn the way the board draws
-   that state, so the key and the map can't drift apart in meaning. */
-.swatch {
+.chip .dot,
+.lease .dot {
   flex: none;
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 2px;
-  background: var(--lot);
-  box-shadow: inset 0 0 0 1px var(--lot-edge);
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--who);
+  box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 3px var(--who);
 }
-
-.swatch[data-swatch="held"] {
-  background: hsl(200 78% 60%);
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
+.lease .dot {
+  background: var(--holder);
+  box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 3px var(--holder);
 }
-
-.swatch[data-swatch="mine"] {
-  background: hsl(320 78% 62%);
-  box-shadow:
-    inset 0 0 0 2px var(--line),
-    inset 0 0 0 4px var(--accent),
-    0 0 6px 1px rgb(255 176 0 / 0.7);
-}
-
-.swatch[data-swatch="park"] {
-  background: var(--park-lawn);
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6), inset 0 0 0 4px var(--park);
-}
-
-.swatch[data-swatch="market"],
-.swatch[data-swatch="factory"] {
-  border: 2px solid var(--line);
-  border-radius: 3px;
-}
-
-.swatch[data-swatch="market"] {
-  background: var(--zone-market);
-}
-
-.swatch[data-swatch="factory"] {
-  background: var(--zone-factory);
-}
-
-.swatch[data-swatch="soon"] {
-  background: var(--hatch), hsl(200 78% 60%);
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.6);
-  outline: 2px dashed var(--cream);
-  outline-offset: -2px;
-}
-
-.count {
-  margin: 0 0 0.4rem;
-}
-
-/* The claimed count is a cash counter. */
-[data-claimed] {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.4rem;
-  line-height: 1;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-  margin-right: 0.15em;
-}
-
-.city-log {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.15rem;
-}
-
-.city-log:empty::before {
-  content: "Nothing yet.";
-}
-
-.city-log li {
+.chip-name {
   overflow-wrap: anywhere;
 }
-
-.city-log li:first-child {
-  color: var(--ink);
+.chip-extra {
+  font-weight: 400;
+  color: var(--ink-soft);
 }
-
-/* camera buttons inside their panel */
-.camera {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0.4rem;
-}
-
-.camera button {
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 0.95rem;
-  line-height: 1;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  min-height: 44px;
-  padding: 0.4rem 0.6rem 0.35rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-  transition: background-color 120ms;
-}
-
-.camera button:last-child {
-  grid-column: 1 / -1;
-}
-
-@media (hover: hover) {
-  .camera button:hover {
-    background: var(--accent);
-  }
-}
-
-.camera button:active {
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
-}
-
-.keys-hint {
-  margin: 0;
-}
-
-/* The goal line, shown once some building has 5+ neighbours: a crown and
-   the room's count, and the building closest to the next landmark. */
-.landmarks {
-  order: 2;
-  flex: 1 1 100%;
-  min-width: 0;
+.chips {
   display: flex;
-  align-items: center;
-  white-space: pre;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: 1.3;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.chips.small {
+  font-size: 0.85rem;
 }
 
-.landmarks > * {
+/* ------------------------------------------------------------ plinth nav */
+
+.plinths {
+  position: fixed;
+  left: 16px;
+  right: calc(var(--panel-w) + 40px);
+  bottom: 16px;
+  z-index: 10;
+}
+.plinth-list {
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.plinth-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 112px;
+  max-width: 170px;
+  min-height: 48px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  text-align: left;
+}
+.plinth-btn:hover {
+  background: var(--ivory-hi);
+}
+.plinth-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--coral-ink);
+}
+.plinth-btn.is-bench .plinth-label {
+  color: var(--teal-ink);
+}
+.plinth-sub {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.plinth-btn.is-empty .plinth-sub {
+  color: var(--ink-soft);
+  font-weight: 400;
+  font-style: italic;
+}
+.plinth-btn[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--ivory-hi);
+}
+.plinth-btn[aria-pressed="true"] .plinth-label {
+  color: var(--peach);
+}
+.plinth-btn[aria-pressed="true"].is-empty .plinth-sub {
+  color: var(--ivory-lo);
+}
+
+/* ------------------------------------------------------------ panel */
+
+.panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: var(--panel-w);
+  z-index: 20;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--card);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  outline: none;
+}
+.panel > * {
   flex: none;
 }
 
-.crown-icon {
-  width: 1.3rem;
-  height: 1rem;
-  margin-right: 0.3rem;
-  background: var(--accent);
-  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
+.view-head {
+  margin-bottom: 8px;
+}
+.eyebrow {
+  margin: 0 0 2px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--coral-ink);
+}
+.view h2 {
+  font-size: 1.4rem;
+  outline: none;
+}
+.view h3 {
+  font-size: 1rem;
+  margin-top: 14px;
+}
+.hint {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  margin: 6px 0;
+}
+.invite {
+  font-size: 1.02rem;
+  margin: 4px 0 12px;
+}
+.bench-meta,
+.ex-meta {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+.bench-meta [data-bench-based] {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+.ex-meta {
+  font-weight: 400;
 }
 
-.landmarks > .goal-next {
-  flex: 0 1 auto;
-  min-width: 0;
+.row {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* buttons */
+button {
+  cursor: pointer;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--ivory-hi);
+  padding: 9px 14px;
+  min-height: 44px;
+  font-weight: 600;
+}
+button:hover:not(:disabled) {
+  border-color: var(--ink-soft);
+}
+button.primary {
+  background: var(--coral-ink);
+  border-color: var(--coral-ink);
+  color: #fff;
+}
+button.primary:hover:not(:disabled) {
+  background: #9c3122;
+}
+button.warn {
+  background: var(--ivory-hi);
+  border: 2px solid var(--coral-ink);
+  color: var(--coral-ink);
+}
+button.quiet {
+  background: transparent;
+}
+button.small {
+  min-height: 36px;
+  padding: 5px 10px;
+  font-size: 0.88rem;
+}
+button.link {
+  background: none;
+  border: none;
+  min-height: 0;
+  padding: 2px 4px;
+  color: var(--teal-ink);
+  text-decoration: underline;
+}
+button:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input[type="text"],
+input:not([type]),
+select {
+  border: 1px solid var(--ink-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  min-height: 40px;
+}
+
+/* starters on an empty bench */
+.starters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.starter {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.starter-name {
+  color: var(--teal-ink);
+}
+.starter-blurb {
+  font-weight: 400;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------ parts */
+
+.parts {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.part {
+  --holder: transparent;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 4px 12px 8px;
+  transition: box-shadow 160ms ease;
+}
+.part[data-lease="mine"],
+.part[data-lease="held"] {
+  box-shadow: 0 0 0 3px var(--holder);
+  border-color: transparent;
+}
+.part-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 !important;
+}
+.part-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 8px 0;
+  font-size: 1.02rem;
+  text-align: left;
+}
+.chev {
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--ink-soft);
+  border-bottom: 2px solid var(--ink-soft);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 160ms ease;
+}
+.part-toggle[aria-expanded="false"] .chev {
+  transform: rotate(-45deg);
+}
+.lease {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+.part[data-lease="held"] .lease {
+  color: var(--ink);
+}
+.part[data-lease="mine"] .lease {
   color: var(--ink);
   font-weight: 600;
 }
-
-.goal-next > * {
-  flex: none;
+.author {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin: 0 0 6px;
+}
+.placement-h {
+  margin: 10px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
 }
 
-.goal-next > [data-goal-lead]:has(+ :empty) {
-  flex: 0 1 auto;
+.param {
+  display: grid;
+  grid-template-columns: 6.5em 1fr 3.4em;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+}
+.param-label {
+  font-size: 0.9rem;
+}
+.param-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+input[type="range"] {
+  width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin: 0;
+  height: 32px;
+  accent-color: var(--coral-ink);
+  cursor: pointer;
 }
-
-.goal-next > .goal-who {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.param-colour {
+  grid-template-columns: 6.5em 1fr;
 }
-
-.goal-next > :empty {
-  display: none;
-}
-
-.goal-sep {
-  padding-inline: 0.15rem;
-}
-
-[data-landmarks] {
-  display: inline-block;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.4rem;
-  line-height: 1;
-  color: var(--accent);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-  margin-right: 0.15em;
-}
-
-[data-landmarks][data-bump] {
-  transform-origin: right bottom;
-  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
-}
-
-@keyframes bump {
-  30% {
-    scale: 1.35;
-  }
-}
-
-/* a touch-only screen has no keyboard to describe */
-@media (hover: none) and (pointer: coarse) {
-  .tool[data-tool="board-keys"] {
-    display: none;
-  }
-}
-
-/* --- the wallet: coins, income, the lease, and only the actions you can
-   take now --- */
-
-.wallet {
+.swatches {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.9rem;
-  padding: 0.6rem 0.8rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
+  gap: 6px;
+}
+.swatch {
+  position: relative;
+  width: 30px;
+  height: 30px;
+}
+.swatch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.swatch-face {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--swatch);
+  border: 1px solid rgba(45, 38, 64, 0.3);
+  pointer-events: none;
+}
+.swatch input:checked + .swatch-face {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ink);
+}
+.swatch input:focus-visible + .swatch-face {
+  box-shadow: var(--focus);
+}
+.swatch input:disabled + .swatch-face {
+  opacity: 0.45;
 }
 
-.wallet p {
+.credits-block h3 {
+  font-size: 0.95rem;
+}
+.bench-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* publish form */
+.publish {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 2px solid var(--coral);
+  display: grid;
+  gap: 8px;
+}
+.publish h3 {
   margin: 0;
 }
-
-.purse,
-.income {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
+.publish label[for="publish-title"] {
+  font-weight: 600;
 }
-
-/* the wallet is the HUD's cash counter */
-[data-hud-coins],
-[data-hud-rate] {
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.9rem;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
+.targets {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
 }
-
-[data-hud-rate] {
-  font-size: 1.3rem;
-  color: var(--ink);
+.targets legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 4px;
 }
-
-[data-hud-coins][data-bump] {
-  display: inline-block;
-  transform-origin: left bottom;
-  animation: bump 900ms cubic-bezier(0.3, 1.6, 0.6, 1);
-}
-
-/* a gold coin with a black rim */
-.coin {
-  display: inline-block;
-  flex: none;
-  width: 0.9em;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
-  box-shadow: 0 0 0 2px var(--line);
-}
-
-.coin-big {
-  width: 1.5rem;
-}
-
-/* The lease: a ring that drains as the lease runs down, full when new. */
-.lease-ring {
-  --lease: 1;
-  flex: none;
-  width: 1.9rem;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background:
-    radial-gradient(closest-side, var(--panel) 58%, transparent 60%),
-    conic-gradient(var(--money) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.14) 0);
-  box-shadow: 0 0 0 2px var(--line);
-}
-
-.lease-ring[data-lease="soon"] {
-  background:
-    radial-gradient(closest-side, var(--panel) 58%, transparent 60%),
-    conic-gradient(var(--accent) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.14) 0);
-  outline: 2px dashed var(--cream);
-  outline-offset: 2px;
-}
-
-.acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  flex-basis: 100%;
-}
-
-.acts:not(:has(> :not([hidden]))) {
-  display: none;
-}
-
-/* Chunky game-menu buttons: a word and a number. */
-.act {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-height: 48px;
-  padding: 0.35rem 0.75rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  cursor: pointer;
-  font: inherit;
-  transition: background-color 120ms;
-}
-
-.act-name {
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1.05rem;
-  line-height: 1;
-  letter-spacing: 0.03em;
+.target-head {
+  margin: 8px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--ink-soft);
 }
-
-.act-cost {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.05rem;
-  line-height: 1;
-}
-
-.act-cost:empty {
-  display: none;
-}
-
-/* the renewals: a lease running low, so they share the ring's gold */
-.act-renew {
-  background: var(--accent);
-}
-
-/* an arrow pointing up, before the next building's name */
-.act-up {
-  width: 0.8rem;
-  height: 0.9rem;
-  background: currentColor;
-  clip-path: polygon(50% 0, 100% 55%, 68% 55%, 68% 100%, 32% 100%, 32% 55%, 0 55%);
-}
-
-/* Collect is the action you'll take most: money green, and it grows in */
-.act-collect {
-  flex: 1 1 auto;
-  background: var(--money);
-  animation: pop-in 320ms cubic-bezier(0.3, 1.6, 0.6, 1);
-}
-
-.act-collect .act-name {
-  font-size: 1.2rem;
-}
-
-.act-upgrade {
-  animation: pop-in 320ms cubic-bezier(0.3, 1.6, 0.6, 1);
-}
-
-@keyframes pop-in {
-  from {
-    scale: 0.6;
-    opacity: 0;
-  }
-}
-
-@media (hover: hover) {
-  .act:hover {
-    background: var(--accent);
-  }
-}
-
-.act:active {
-  translate: 2px 2px;
-  box-shadow: 1px 1px 0 var(--line);
-}
-
-.act:focus-visible {
-  outline-color: var(--ink);
-}
-
-/* --- the tile inspector, filled by app.js --- */
-
-.inspect {
-  padding: 0.7rem 0.9rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-}
-
-.inspect h2 {
-  margin: 0 0 0.4rem;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: var(--fs-label);
-  line-height: 1.1;
-  letter-spacing: 0.03em;
-  color: var(--ink);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-}
-
-/* Term beside value, on one line each: the values are short now. */
-.inspect dl {
+.target {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.2rem 0.75rem;
+  column-gap: 8px;
+  align-items: start;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.target:hover {
+  background: var(--ivory-hi);
+}
+.target input {
+  grid-row: span 2;
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--coral-ink);
+}
+.target-sub {
+  grid-column: 2;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+.target.is-replace .target-sub {
+  color: var(--coral-ink);
+}
+.plan {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ivory-hi);
+}
+.plan[data-kind="replace-slot"] {
+  background: #fde7e2;
+  color: var(--coral-ink);
+  font-weight: 600;
+}
+.field-error {
   margin: 0;
-  font-size: var(--fs-body);
+  color: var(--coral-ink);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.field-error:empty {
+  display: none;
 }
 
-.inspect dt {
-  color: var(--muted);
-  font-size: var(--fs-small);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  align-self: baseline;
-}
+/* ------------------------------------------------------------ exhibit + history */
 
-.inspect dd {
-  margin: 0;
-  font-weight: 700;
-  line-height: 1.35;
+.ex-actions {
+  margin: 12px 0 4px;
+}
+.ex-display {
+  margin-top: 10px;
+}
+.ex-display select {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+.history {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.version {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.version.is-latest {
+  border-color: var(--teal);
+  box-shadow: inset 4px 0 0 var(--teal);
+}
+.version-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.version-n {
+  font-weight: 800;
+  color: var(--coral-ink);
+}
+.version-title {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
-
-.inspect-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-top: 0.6rem;
-}
-
-.move-button,
-.help-button,
-.park-button {
-  min-height: 44px;
-  padding: 0.4rem 0.8rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--accent);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1rem;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-}
-
-.help-button {
-  background: var(--money);
-}
-
-.park-button {
-  background: var(--park);
-}
-
-.move-button:focus-visible,
-.help-button:focus-visible,
-.park-button:focus-visible {
-  outline-color: var(--ink);
-}
-
-/* --- the 3D board: a city map at night --- */
-
-/* A soft neon glow on the ground under the board. */
-.stage {
-  perspective: 1400px;
-  display: grid;
-  place-items: center;
-  /* the tilt makes the board look shorter than the box it lays out in */
-  margin-block: -3.5rem -2.5rem;
-  background: radial-gradient(closest-side, rgb(214 64 160 / 0.22), transparent);
-  touch-action: pan-y; /* a sideways drag turns the board; vertical still scrolls */
-  cursor: grab;
-}
-
-.stage:active {
-  cursor: grabbing;
-}
-
-/* The board is the street grid: the gaps between tiles are the roads. */
-.board {
-  --gap: 3px;
-  --pad: 6px;
-  position: relative;
-  width: var(--board);
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: var(--gap);
-  padding: var(--pad);
-  background: var(--road);
-  border: 3px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 0 36px rgb(255 90 170 / 0.35);
-  transform-style: preserve-3d;
-  /* A free tile lies in the board's own plane, and in 3D the browser can't
-     reliably tell which of two coplanar elements was clicked: at the default
-     angle about a third of free tiles lost the click to the board. The board
-     never needs a click, so it takes none; tiles opt back in. */
-  pointer-events: none;
-  /* the camera: app.js turns these, the defaults are the no-JS view */
-  --tilt: 52deg;
-  --spin: 35deg;
-  transform: rotateX(var(--tilt)) rotateZ(var(--spin));
-  transition: transform 300ms ease-out;
-}
-
-/* The districts (docs/adr/0010): a thin neon line down the road between
-   every fourth row and column, drawn in the board's own plane under the
-   tiles. The line sits on the gap's centre: the padding, four or eight
-   tiles, and three and a half (or seven and a half) gaps in. Gradients only,
-   no extra boxes and no clip-path. */
-.board::before {
-  --tile: calc((100% - 2 * var(--pad) - 11 * var(--gap)) / 12);
-  --x1: calc(var(--pad) + 4 * var(--tile) + 3.5 * var(--gap));
-  --x2: calc(var(--pad) + 8 * var(--tile) + 7.5 * var(--gap));
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: 3px;
-  background:
-    linear-gradient(90deg, transparent calc(var(--x1) - 1px), var(--district-line) calc(var(--x1) - 1px) calc(var(--x1) + 1px), transparent calc(var(--x1) + 1px)),
-    linear-gradient(90deg, transparent calc(var(--x2) - 1px), var(--district-line) calc(var(--x2) - 1px) calc(var(--x2) + 1px), transparent calc(var(--x2) + 1px)),
-    linear-gradient(180deg, transparent calc(var(--x1) - 1px), var(--district-line) calc(var(--x1) - 1px) calc(var(--x1) + 1px), transparent calc(var(--x1) + 1px)),
-    linear-gradient(180deg, transparent calc(var(--x2) - 1px), var(--district-line) calc(var(--x2) - 1px) calc(var(--x2) + 1px), transparent calc(var(--x2) + 1px));
-}
-
-.board.is-instant {
-  transition: none;
-}
-
-/* A tile's whole look is a handful of custom properties: how high it
-   stands (--lift is an extra nudge for hover and selection), and its
-   roof's colour. The states below only change those, plus an outline or a
-   pattern, so every state still reads in greyscale: free is a flat dark
-   lot, taken is a lit tower, yours carries the gold ring and marker,
-   faded is hatched grey with its lights out. */
-.tile {
-  --h: 0;
-  --lift: 0px;
-  --hue: 30;
-  --s: 60%; /* side faces */
-  --top-s: 78%;
-  --top-l: 60%;
-  position: relative;
-  aspect-ratio: 1;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 2px;
-  background: var(--lot);
-  box-shadow: inset 0 0 0 1px var(--lot-edge);
+.badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--teal-ink);
   color: #fff;
-  cursor: pointer;
-  pointer-events: auto;
-  -webkit-tap-highlight-color: transparent; /* the selection outline says it */
-  transform-style: preserve-3d;
-  transform: translateZ(calc(var(--h) * var(--unit) + var(--lift)));
-  /* a slight overshoot, so a block rising reads as rising */
-  transition:
-    transform 320ms cubic-bezier(0.3, 1.4, 0.6, 1),
-    background-color 150ms,
-    box-shadow 150ms;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.version-meta {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+.version .row {
+  margin-top: 8px;
 }
 
-/* Four side faces, each as tall as the tile is raised, so a flat tile has
-   none. The button's pseudo-elements are south and east; .sides carries
-   north and west, so the block stays solid however the camera turns.
+/* ------------------------------------------------------------ drawers */
 
-   Each face is a tower wall with a row of lit windows per floor: the floors
-   repeat every --unit, so a tower of height 3 has exactly three rows. Two
-   layers make the grid: bands of wall and window, one per floor, and over
-   them solid wall columns between the windows. */
-.tile::before,
-.tile::after,
-.sides::before,
-.sides::after {
-  content: "";
-  position: absolute;
-  box-sizing: border-box;
-  pointer-events: none;
-  --win: #ffd76a;
-  --floors: repeating-linear-gradient(
-    var(--up),
-    var(--wall) 0 calc(var(--unit) * 0.3),
-    var(--win) calc(var(--unit) * 0.3) calc(var(--unit) * 0.75),
-    var(--wall) calc(var(--unit) * 0.75) var(--unit)
-  );
-  --columns: linear-gradient(
-    var(--across),
-    var(--wall) 0 14%,
-    transparent 14% 43%,
-    var(--wall) 43% 57%,
-    transparent 57% 86%,
-    var(--wall) 86%
-  );
-  background: var(--columns), var(--floors);
-}
-
-/* The south and north faces stand on their bottom edge: floors stack down
-   the face, windows run across it. East and west faces are turned on their
-   side before they're stood up, so for them it's the other way round. */
-.tile::before,
-.sides::before {
-  --up: 180deg;
-  --across: 90deg;
-}
-
-.tile::after,
-.sides::after {
-  --up: 90deg;
-  --across: 180deg;
-}
-
-.tile::before {
-  --wall: hsl(var(--hue) var(--s) 34%);
-  left: 0;
-  top: 100%;
-  width: 100%;
-  height: calc(var(--h) * var(--unit));
-  transform-origin: top;
-  transform: rotateX(-90deg);
-}
-
-.tile::after {
-  --wall: hsl(var(--hue) var(--s) 24%);
-  left: 100%;
-  top: 0;
-  width: calc(var(--h) * var(--unit));
-  height: 100%;
-  transform-origin: left;
-  transform: rotateY(90deg);
-}
-
-.sides {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  pointer-events: none;
-}
-
-.sides::before {
-  --wall: hsl(var(--hue) var(--s) 40%);
-  left: 0;
-  bottom: 100%;
-  width: 100%;
-  height: calc(var(--h) * var(--unit));
-  transform-origin: bottom;
-  transform: rotateX(90deg);
-}
-
-.sides::after {
-  --wall: hsl(var(--hue) var(--s) 28%);
-  right: 100%;
-  top: 0;
-  width: calc(var(--h) * var(--unit));
-  height: 100%;
-  transform-origin: right;
-  transform: rotateY(-90deg);
-}
-
-/* The walls grow with the block rather than snapping to the new height. */
-.tile::before,
-.sides::before {
-  transition: height 320ms cubic-bezier(0.3, 1.4, 0.6, 1);
-}
-
-.tile::after,
-.sides::after {
-  transition: width 320ms cubic-bezier(0.3, 1.4, 0.6, 1);
-}
-
-/* --- tile states --- */
-
-/* Free: a dark empty lot with a dashed kerb, so the grid of open places
-   reads at a glance, in greyscale too. Hover lifts it a touch and lights
-   the kerb. */
-.tile[data-state="free"] {
-  outline: 1px dashed rgb(255 255 255 / 0.28);
-  outline-offset: -4px;
-}
-
-@media (hover: hover) {
-  .tile[data-state="free"]:hover {
-    --lift: 3px;
-    background: var(--lot-hover);
-    box-shadow: inset 0 0 0 2px var(--cream);
-  }
-}
-
-/* A park (docs/adr/0007): a low green lawn, a little above the lots, with
-   a darker hedge round it and a round tree in the middle, so it reads as
-   "not a building" in greyscale too (a ring and a dot, no windows). It has
-   no floors, so its walls are bare hedge. Your own park has a gold edge. */
-.tile[data-state="park"] {
-  --lift: 4px;
-  --wall: var(--park);
-  background:
-    radial-gradient(circle at 50% 50%, var(--park) 0 22%, rgb(0 0 0 / 0.55) 22% 27%, transparent 27%),
-    var(--park-lawn);
-  box-shadow:
-    inset 0 0 0 1.5px rgb(0 0 0 / 0.6),
-    inset 0 0 0 4px var(--park);
-}
-
-.tile[data-state="park"][data-yours] {
-  box-shadow:
-    inset 0 0 0 1.5px rgb(0 0 0 / 0.6),
-    inset 0 0 0 4px var(--accent);
-}
-
-/* Held and yours: a roof. A taller building's roof is a little lighter,
-   as if nearer the light, which helps heights read from straight above. */
-.tile[data-state="held"],
-.tile[data-state="mine"] {
-  background: hsl(var(--hue) var(--top-s) calc(var(--top-l) + var(--h) * 1.5%));
-  box-shadow: inset 0 0 0 1.5px rgb(0 0 0 / 0.55);
-}
-
-/* Yours wears the player's marker: a gold ring on the roof, a glow, and a
-   gold pointer hanging over it (the beacon, below). */
-.tile[data-state="mine"] {
-  box-shadow:
-    inset 0 0 0 2px var(--line),
-    inset 0 0 0 4px var(--accent),
-    0 0 14px 2px rgb(255 176 0 / 0.75);
-}
-
-/* --- buildings: five types, told apart by shape, not only floors ---
-
-   A building's level picks its type (data-level, docs/adr/0005); its height
-   is level plus neighbours, one row of windows per floor. Each type has its
-   own roofline, drawn in .roof and .gable (four planes standing on the roof,
-   all pointer-events: none, so a tall roof never takes a click), and its
-   own window pattern on the walls, so the five read apart in greyscale and
-   from any side:
-
-     1 Small House      a pyramid roof, one window a floor
-     2 Townhouse        a pitched gable roof, two windows a floor
-     3 Apartment        a flat roof with a parapet and a water tank, a grid
-     4 Office Building  a flat roof with plant, glass ribbons round each floor
-     5 Skyscraper       a crown and a spire, full-height glass strips */
-
-.roof,
-.gable {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  transform-style: preserve-3d;
-}
-
-.roof::before,
-.roof::after,
-.gable::before,
-.gable::after {
-  position: absolute;
-  box-sizing: border-box;
-  pointer-events: none;
-}
-
-/* the roof pieces' shades, from the holder's hue: lit, side, shade, dark */
-.tile[data-level] {
-  --r1: hsl(var(--hue) 40% 62%);
-  --r2: hsl(var(--hue) 42% 46%);
-  --r3: hsl(var(--hue) 45% 34%);
-  --r4: hsl(var(--hue) 50% 24%);
-}
-
-/* 1. Small House: a hip roof rising to a point, from four triangles each
-   hinged on one edge of the roof and tilted 40° up to meet at the centre
-   (65.27% = 50% / cos 40°). */
-.tile[data-level="1"] .roof::before,
-.tile[data-level="1"] .roof::after,
-.tile[data-level="1"] .gable::before,
-.tile[data-level="1"] .gable::after {
-  content: "";
-}
-
-.tile[data-level="1"] .roof::before {
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 65.27%;
-  transform-origin: top;
-  transform: rotateX(40deg);
-  --paint: var(--r1);
-  background:
-    linear-gradient(to top right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
-    linear-gradient(to top left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
-}
-
-.tile[data-level="1"] .roof::after {
-  left: 0;
-  bottom: 0;
-  width: 100%;
-  height: 65.27%;
-  transform-origin: bottom;
-  transform: rotateX(-40deg);
-  --paint: var(--r3);
-  background:
-    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
-    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
-}
-
-.tile[data-level="1"] .gable::before {
-  left: 0;
-  top: 0;
-  width: 65.27%;
-  height: 100%;
-  transform-origin: left;
-  transform: rotateY(-40deg);
-  --paint: var(--r2);
-  background:
-    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) top / 100% 50% no-repeat,
-    linear-gradient(to top left, transparent 50%, var(--paint) 50%) bottom / 100% 50% no-repeat;
-}
-
-.tile[data-level="1"] .gable::after {
-  right: 0;
-  top: 0;
-  width: 65.27%;
-  height: 100%;
-  transform-origin: right;
-  transform: rotateY(40deg);
-  --paint: var(--r4);
-  background:
-    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) top / 100% 50% no-repeat,
-    linear-gradient(to top right, transparent 50%, var(--paint) 50%) bottom / 100% 50% no-repeat;
-}
-
-/* 2. Townhouse: a pitched roof, two slopes tilted 35° from the side edges
-   to a ridge across the middle (61.04% = 50% / cos 35°), closed by a
-   triangular gable at each end (35% high = 50% × tan 35°). The slopes are
-   striped like roof tiles. */
-.tile[data-level="2"] .roof::before,
-.tile[data-level="2"] .roof::after,
-.tile[data-level="2"] .gable::before,
-.tile[data-level="2"] .gable::after {
-  content: "";
-}
-
-.tile[data-level="2"] .roof::before,
-.tile[data-level="2"] .roof::after {
-  top: 0;
-  width: 61.04%;
-  height: 100%;
-  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.28) 0 1px, transparent 1px 4px), var(--r2);
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.5);
-}
-
-.tile[data-level="2"] .roof::before {
-  left: 0;
-  transform-origin: left;
-  transform: rotateY(-35deg);
-}
-
-.tile[data-level="2"] .roof::after {
-  right: 0;
-  transform-origin: right;
-  transform: rotateY(35deg);
-  background-color: var(--r4);
-}
-
-.tile[data-level="2"] .gable::before,
-.tile[data-level="2"] .gable::after {
-  left: 0;
-  width: 100%;
-  height: 35%;
-  background: var(--r1);
-}
-
-.tile[data-level="2"] .gable::before {
-  bottom: 100%;
-  transform-origin: bottom;
-  transform: rotateX(-90deg);
-  --paint: var(--r1);
-  background:
-    linear-gradient(to bottom right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
-    linear-gradient(to bottom left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
-}
-
-.tile[data-level="2"] .gable::after {
-  top: 100%;
-  transform-origin: top;
-  transform: rotateX(90deg);
-  --paint: var(--r3);
-  background:
-    linear-gradient(to top right, transparent 50%, var(--paint) 50%) left / 50% 100% no-repeat,
-    linear-gradient(to top left, transparent 50%, var(--paint) 50%) right / 50% 100% no-repeat;
-}
-
-/* 3. Apartment: a flat roof behind a thick parapet, with a water tank on
-   it: two crossed panels standing on the roof, so it reads from any side. */
-.tile[data-level="3"] {
-  box-shadow:
-    inset 0 0 0 1.5px rgb(0 0 0 / 0.55),
-    inset 0 0 0 4px var(--r3);
-}
-
-.tile[data-level="3"] .roof::before,
-.tile[data-level="3"] .roof::after {
-  content: "";
-  left: 25%;
-  bottom: 50%;
-  width: 40%;
-  height: 38%;
-  transform-origin: 50% 100%;
-  background: linear-gradient(to bottom, #2b2b2b 0 22%, hsl(0 0% 58%) 22% 30%, var(--r4) 30%);
-  box-shadow: inset 0 0 0 1.5px var(--line);
-}
-
-.tile[data-level="3"] .roof::before {
-  transform: rotateX(-90deg);
-}
-
-.tile[data-level="3"] .roof::after {
-  transform: rotateZ(90deg) rotateX(-90deg);
-}
-
-/* 4. Office Building: a flat roof carrying a block of plant, a grid of
-   vents, lifted a little off the roof. */
-.tile[data-level="4"] .roof::before {
-  content: "";
-  inset: 22%;
-  transform: translateZ(2px);
-  background:
-    repeating-linear-gradient(90deg, rgb(0 0 0 / 0.55) 0 1px, transparent 1px 4px),
-    repeating-linear-gradient(0deg, rgb(0 0 0 / 0.55) 0 1px, transparent 1px 4px),
-    hsl(0 0% 72%);
-  box-shadow: 0 0 0 1px var(--line);
-}
-
-/* 5. Skyscraper: a lighter crown set back from the edge, and a spire of
-   two crossed panels standing well above the roof. */
-.tile[data-level="5"] .roof::before,
-.tile[data-level="5"] .roof::after {
-  content: "";
-  left: 45%;
-  bottom: 50%;
-  width: 10%;
-  height: calc(var(--unit) * 3 + 8px);
-  transform-origin: 50% 100%;
-  background: linear-gradient(to top, hsl(0 0% 80%), hsl(0 0% 98%));
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-
-.tile[data-level="5"] .roof::before {
-  transform: rotateX(-90deg);
-}
-
-.tile[data-level="5"] .roof::after {
-  transform: rotateZ(90deg) rotateX(-90deg);
-}
-
-.tile[data-level="5"] .gable::before {
-  content: "";
-  inset: 18%;
-  transform: translateZ(1px);
-  background: var(--r1);
-  box-shadow:
-    0 0 0 1.5px var(--line),
-    inset 0 0 0 2px rgb(255 255 255 / 0.5);
-}
-
-/* The walls' windows, per type. --columns is the solid wall between
-   windows across a face; --floors the bands of wall and window up it, one
-   band per floor. Office and Skyscraper glass is pale blue, the rest warm
-   lamplight. */
-.tile[data-level="1"]::before,
-.tile[data-level="1"]::after,
-.tile[data-level="1"] .sides::before,
-.tile[data-level="1"] .sides::after {
-  --columns: linear-gradient(var(--across), var(--wall) 0 36%, transparent 36% 64%, var(--wall) 64%);
-}
-
-.tile[data-level="2"]::before,
-.tile[data-level="2"]::after,
-.tile[data-level="2"] .sides::before,
-.tile[data-level="2"] .sides::after {
-  --columns: linear-gradient(
-    var(--across),
-    var(--wall) 0 18%,
-    transparent 18% 40%,
-    var(--wall) 40% 60%,
-    transparent 60% 82%,
-    var(--wall) 82%
-  );
-}
-
-.tile[data-level="4"]::before,
-.tile[data-level="4"]::after,
-.tile[data-level="4"] .sides::before,
-.tile[data-level="4"] .sides::after {
-  --win: #a8e4ff;
-  --columns: repeating-linear-gradient(var(--across), var(--wall) 0 4%, transparent 4% 20%);
-  --floors: repeating-linear-gradient(
-    var(--up),
-    var(--wall) 0 calc(var(--unit) * 0.2),
-    var(--win) calc(var(--unit) * 0.2) calc(var(--unit) * 0.85),
-    var(--wall) calc(var(--unit) * 0.85) var(--unit)
-  );
-}
-
-.tile[data-level="5"]::before,
-.tile[data-level="5"]::after,
-.tile[data-level="5"] .sides::before,
-.tile[data-level="5"] .sides::after {
-  --win: #c9ecff;
-  --columns: repeating-linear-gradient(var(--across), var(--wall) 0 9%, transparent 9% 25%);
-  --floors: repeating-linear-gradient(
-    var(--up),
-    var(--win) 0 calc(var(--unit) * 0.9),
-    var(--wall) calc(var(--unit) * 0.9) var(--unit)
-  );
-}
-
-/* A building going up, or up a level: its roof settles into place from
-   above while the walls grow (their own transition). Played once by
-   app.js; under reduced motion the building is just there. */
-.tile[data-built] .roof {
-  animation: build 650ms cubic-bezier(0.3, 1.3, 0.6, 1);
-}
-
-@keyframes build {
-  from {
-    opacity: 0;
-    transform: translateZ(calc(var(--unit) * 3));
-  }
-}
-
-/* A lease ending within the hour: the roof hatched, a dashed cream ring,
-   and a small hourglass over it, so it reads without the colour. */
-.tile[data-lease="soon"] {
-  background-image: var(--hatch);
-  outline: 2px dashed var(--cream);
-  outline-offset: -1px;
-}
-
-.tile[data-lease="soon"]:not([data-preview]) .beacon::before {
-  content: "";
-  width: 34%;
-  aspect-ratio: 0.7;
-  background: var(--cream);
-  clip-path: polygon(0 0, 100% 0, 58% 50%, 100% 100%, 0 100%, 42% 50%);
-  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line));
-  translate: 0 0 calc(var(--unit) * 2 + 10px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-}
-
-/* Keyboard focus: the gold ring, standing off the roof. */
-.tile:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-  z-index: 1;
-}
-
-/* Selected (a phone's first tap), or wanted (picked before a name was
-   typed): a double white ring and a small lift, so
-   it differs from focus (single gold) and from a preview ghost (dashed) by
-   shape, not only colour. */
-.tile[data-selected],
-.tile[data-wanted] {
-  --lift: 4px;
-  outline: 5px double var(--cream);
-  outline-offset: 2px;
-  z-index: 1;
-}
-
-/* Pending: a claim on its way to the server. Diagonal stripes run across
-   the roof until the answer comes back; nothing waits on them. */
-.tile[data-pending],
-.tile[aria-busy="true"] {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgb(255 247 236 / 0.55) 0 4px,
-    transparent 4px 9px
-  );
-  background-size: 200% 200%;
-  animation: pending 700ms linear infinite;
-  cursor: progress;
-}
-
-@keyframes pending {
-  to {
-    background-position: 25.5px 0;
-  }
-}
-
-/* Someone else just claimed it: a white ring that spreads and fades. */
-.tile[data-fresh] {
-  animation: fresh 1.4s ease-out;
-}
-
-@keyframes fresh {
-  from {
-    outline: 3px solid var(--cream);
-    outline-offset: 0;
-  }
-  to {
-    outline: 3px solid transparent;
-    outline-offset: 10px;
-  }
-}
-
-/* --- the beacon: whatever floats over a roof --- */
-
-/* It sits flat on the roof by default and shows nothing. Each use moves it
-   with translateZ and gives it content; pointer-events stay off so it can
-   never take a click from the tile under it or the one behind. */
-.beacon {
-  position: absolute;
-  inset: 0;
+.drawers {
   display: grid;
-  place-items: center;
-  pointer-events: none;
-  transform-style: preserve-3d;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
-
-/* Yours: a gold marker pointing down at your roof, turned to face the
-   camera like the +1 floats, bobbing gently. */
-.tile[data-state="mine"]:not([data-preview]) .beacon::after {
-  content: "";
-  width: 70%;
-  aspect-ratio: 1 / 0.8;
-  background: var(--accent);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-  filter: drop-shadow(0 0 1px var(--line)) drop-shadow(0 0 1px var(--line));
-  translate: 0 0 calc(var(--unit) * 4 + 16px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt))) translateY(-50%);
-  animation: bob 2s ease-in-out infinite;
-}
-
-@keyframes bob {
-  50% {
-    translate: 0 0 calc(var(--unit) * 4 + 22px);
-  }
-}
-
-/* Preview: what building on this plot would do. The target shows a dashed
-   ghost roof at the height it would stand, with that number on it; each
-   neighbour whose income it would raise shows a green ghost a floor above
-   its roof, marked +20%, and each it would lower (a move) a red one a floor
-   below, marked −20%.
-   --gz is how many floors above this tile's own roof the ghost floats. */
-.tile[data-preview] .beacon {
-  --gz: 0;
-  border: 2px dashed var(--cream);
-  border-radius: 2px;
-  background: rgb(255 247 236 / 0.16);
-  transform: translateZ(calc(var(--gz) * var(--unit) + 1px));
-  font-family: var(--display);
-  font-weight: 400;
-  line-height: 1;
-  color: var(--ink);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  font-size: clamp(0.75rem, 1.4vw, 1rem);
-}
-
-/* The target's ghost floats at the height it would stand: typed attr()
-   reads data-preview-height as a number. Where that isn't supported the
-   ghost stays on the roof; the income label shows either way. */
-@supports (x: attr(x type(*))) {
-  .tile[data-preview="target"] {
-    --ph: attr(data-preview-height type(<integer>), 0);
-  }
-
-  .tile[data-preview="target"] .beacon {
-    --gz: calc(var(--ph) - var(--h));
-  }
-}
-
-/* Over the ghost, facing the camera: what building there would earn. */
-.tile[data-preview="target"] .beacon[data-gain]::after {
-  content: attr(data-gain);
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  padding: 0.15em 0.4em 0.1em;
-  border-radius: 0.3em;
-  background: rgb(18 10 31 / 0.85);
-  color: var(--money);
-  font-size: clamp(0.85rem, 1.6vw, 1.15rem);
-  white-space: nowrap;
-  -webkit-text-stroke: 2px var(--line);
-  translate: -50% -50% calc(var(--unit) * 2 + 26px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-  animation: gain-in 260ms cubic-bezier(0.3, 1.5, 0.6, 1);
-}
-
-@keyframes gain-in {
-  from {
-    opacity: 0;
-    scale: 0.6;
-  }
-}
-
-/* the ghost carries the label, so the initials make way */
-.tile[data-preview="target"] .initials {
-  visibility: hidden;
-}
-
-/* a neighbour's mark sits in the ghost's corner, clear of its initials */
-.tile[data-preview="lift"] .beacon,
-.tile[data-preview="drop"] .beacon {
-  place-items: start end;
-  padding: 1px 2px;
-  font-size: clamp(0.65rem, 1.1vw, 0.85rem);
-}
-
-.tile[data-preview="lift"] .beacon {
-  --gz: 1;
-  border-color: var(--money);
-  background: rgb(141 224 141 / 0.2);
-}
-
-.tile[data-preview="lift"] .beacon::after {
-  content: "+20%";
-  color: var(--money);
-}
-
-.tile[data-preview="drop"] .beacon {
-  --gz: -1;
-  border-style: dotted;
-  border-color: var(--danger);
-  background: rgb(255 90 79 / 0.2);
-}
-
-.tile[data-preview="drop"] .beacon::after {
-  content: "\2212 20%";
-  color: var(--danger);
-}
-
-/* each neighbour's own change, zones included (docs/adr/0009): +10% beside
-   a factory, +35% beside a market */
-.tile[data-preview="lift"] .beacon[data-pct]::after,
-.tile[data-preview="drop"] .beacon[data-pct]::after {
-  content: attr(data-pct);
-}
-
-/* --- the goal on the board --- */
-
-/* A tile whose claim would bring a tower closer to a landmark glows: a gold
-   kerb and a soft halo, breathing slowly. On a free lot a small gold diamond
-   (a waypoint) sits in the middle too, so it reads by shape in greyscale.
-   After the state rules, so it wins over a faded roof's own outline. */
-.tile[data-helps]:not([data-pending]) {
-  box-shadow:
-    inset 0 0 0 2px var(--accent),
-    0 0 10px 1px rgb(255 176 0 / 0.55);
-  animation: helps 2.4s ease-in-out infinite;
-}
-
-@keyframes helps {
-  50% {
-    box-shadow:
-      inset 0 0 0 2px var(--accent),
-      0 0 4px 0 rgb(255 176 0 / 0.25);
-  }
-}
-
-.tile[data-state="free"][data-helps]:not([data-preview]) .beacon::before {
-  content: "";
-  width: 34%;
-  aspect-ratio: 1;
-  border: 2px solid var(--accent);
-  background: rgb(255 176 0 / 0.25);
-  rotate: 45deg;
-}
-
-/* The neighbour who helped you, while you can help them back for the bonus
-   (docs/adr/0008): a green halo, the money colour, breathing slowly. A
-   double outline (green inside black) so it reads in greyscale too, and
-   apart from the gold goal glow. Only ever one tile, only on your page. */
-.tile[data-return]:not([data-pending]) {
-  box-shadow:
-    inset 0 0 0 2px var(--money),
-    inset 0 0 0 4px var(--line),
-    0 0 12px 2px rgb(141 224 141 / 0.6);
-  animation: return-glow 2.4s ease-in-out infinite;
-}
-
-@keyframes return-glow {
-  50% {
-    box-shadow:
-      inset 0 0 0 2px var(--money),
-      inset 0 0 0 4px var(--line),
-      0 0 4px 0 rgb(141 224 141 / 0.25);
-  }
-}
-
-/* Over its roof, the bonus: "+30" in cash green, facing the camera like
-   the +N/min over a ghost. Not while a preview is using the beacon. */
-.tile:not([data-preview]) .beacon[data-back]::after {
-  content: attr(data-back);
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  padding: 0.15em 0.4em 0.1em;
-  border: 2px solid var(--line);
-  border-radius: 0.3em;
-  background: var(--money);
-  color: var(--night);
-  font-family: var(--display);
-  font-size: clamp(0.8rem, 1.4vw, 1rem);
-  white-space: nowrap;
-  translate: -50% -50% calc(var(--unit) * 2 + 20px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-}
-
-/* and its Help button (inspector or phone bar): the same green halo as the
-   tile, so the button and the building it helps read as one pair. */
-.help-button.help-back,
-.confirm-help.help-back {
-  background: var(--money);
-  color: var(--night);
-  box-shadow:
-    3px 3px 0 var(--line),
-    0 0 0 3px var(--line),
-    0 0 12px 4px rgb(141 224 141 / 0.6);
-}
-
-/* A landmark: a gold crown standing on the roof, turned to face the camera
-   like the +1 floats. Black outline and a solid shape, so it reads in
-   greyscale and at 1x. It sits below the player's own marker, which floats
-   higher, so a crowned tile of your own shows both. */
-.crown {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 115%;
-  aspect-ratio: 1.25;
-  pointer-events: none;
-  translate: -50% -100% 2px;
-  transform-origin: 50% 100%;
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-  filter: drop-shadow(1px 0 0 var(--line)) drop-shadow(-1px 0 0 var(--line)) drop-shadow(0 1px 0 var(--line))
-    drop-shadow(0 -1px 0 var(--line)) drop-shadow(1px 1px 0 var(--line));
-}
-
-.crown::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, #ffe27a, var(--accent) 60%, #d98a00);
-  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
-}
-
-/* Lower tiers (docs/adr/0006): the same crown in bronze or silver, smaller,
-   so a gold one still stands out. Each keeps the black outline and a
-   different lightness, so the tiers read apart in greyscale too. */
-.tile[data-tier="silver"] .crown {
-  width: 95%;
-}
-
-.tile[data-tier="silver"] .crown::before {
-  background: linear-gradient(to bottom, #ffffff, #c9d1da 60%, #7f8b97);
-}
-
-.tile[data-tier="bronze"] .crown {
-  width: 80%;
-}
-
-.tile[data-tier="bronze"] .crown::before {
-  background: linear-gradient(to bottom, #f0b27a, #b8692e 60%, #6e3a14);
-}
-
-/* A building's zone (docs/adr/0009): a small sign standing on the roof's
-   peak, facing the camera like the crown, so it reads as that building's
-   from any angle. Beside a crown it steps aside to the roof's edge. Civic
-   draws nothing: it's the baseline. Hidden while a preview uses the roof. */
-.zone-mark {
-  display: none;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 52%;
-  aspect-ratio: 1;
-  box-sizing: border-box;
-  border: 2px solid var(--line);
-  border-radius: 3px;
-  box-shadow: 1px 1px 0 var(--line);
-  pointer-events: none;
-  translate: -50% -100% calc(var(--unit) * 1.2 + 8px);
-  transform-origin: 50% 100%;
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-}
-
-.tile[data-landmark] .zone-mark {
-  left: 92%;
-}
-
-.tile[data-zone="market"]:not([data-preview]) .zone-mark,
-.tile[data-zone="factory"]:not([data-preview]) .zone-mark {
-  display: block;
-}
-
-.tile[data-zone="market"] .zone-mark {
-  background: var(--zone-market);
-}
-
-.tile[data-zone="factory"] .zone-mark {
-  background: var(--zone-factory);
-}
-
-/* A district's mayor (docs/adr/0010): a gold star standing on the roof's
-   near-left corner, facing the camera like the crown and the zone sign, which
-   stand at the centre and the right edge, so a crowned, zoned mayor shows
-   all three. A glyph with a hard black outline: no clip-path on a 3D face.
-   Hidden while a preview uses the roof. */
-.mayor-mark {
-  display: none;
-  position: absolute;
-  left: 8%;
-  top: 92%;
-  pointer-events: none;
-  font-family: var(--display);
-  font-size: calc(var(--unit) * 1.5 + 4px);
-  line-height: 1;
-  color: var(--accent);
-  -webkit-text-stroke: 1.5px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 1px 1px 0 var(--line);
-  translate: -50% -85% 2px;
-  transform-origin: 50% 100%;
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-}
-
-.mayor-mark::before {
-  content: "\2605";
-}
-
-.tile[data-mayor]:not([data-preview]) .mayor-mark {
-  display: block;
-}
-
-.swatch[data-swatch="mayor"] {
-  display: grid;
-  place-items: center;
-  background: none;
-  box-shadow: none;
-  color: var(--accent);
-  -webkit-text-stroke: 1px var(--line);
-  paint-order: stroke fill;
-  font-size: 1.15rem;
-  line-height: 1;
-}
-
-.swatch[data-swatch="mayor"]::before {
-  content: "\2605";
-}
-
-/* the rezone buttons in your own building's inspector */
-.zone-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  width: 100%;
-}
-
-.zone-button {
-  min-height: 44px;
-  padding: 0.4rem 0.8rem;
-  border: 3px solid var(--line);
-  border-radius: 0.45rem;
-  background: var(--cream);
-  color: var(--night);
-  box-shadow: 3px 3px 0 var(--line);
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1rem;
+.drawer summary {
   cursor: pointer;
-}
-
-.zone-button:focus-visible {
-  outline-color: var(--ink);
-}
-
-/* A landmark's roof keeps a gold edge, so the cell reads as one even
-   when the crown is behind a taller tower. */
-.tile[data-landmark]:not(:focus-visible, [data-selected], [data-raised]) {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
-/* The moment a landmark is raised: gold rays bursting out behind the crown,
-   and a ring on the tower. Under reduced motion the rays just stand there
-   until they go. */
-.burst {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 360%;
-  aspect-ratio: 1;
-  pointer-events: none;
-  translate: -50% -60% 1px;
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-  background: repeating-conic-gradient(rgb(255 215 106 / 0.95) 0 10deg, transparent 10deg 30deg);
-  mask: radial-gradient(closest-side, transparent 22%, #000 24%, #000 70%, transparent 100%);
-  animation: burst 2.6s ease-out forwards;
-}
-
-@keyframes burst {
-  from {
-    opacity: 0;
-    scale: 0.2;
-  }
-  15% {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-    scale: 1.2;
-    rotate: 40deg;
-  }
-}
-
-.tile[data-raised] {
-  z-index: 2;
-  outline: 4px solid var(--cream);
-  outline-offset: 3px;
-}
-
-/* Names on the roofs are map labels: white, outlined in black, legible on
-   any colour of roof. */
-.initials {
-  display: block;
-  font-size: clamp(0.65rem, 1.25vw, 0.85rem);
-  font-weight: 800;
-  line-height: 1;
-  -webkit-text-stroke: 2.5px var(--line);
-  paint-order: stroke fill;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-/* The "+1" / "−1" app.js floats off a tile whose height changed, removed
-   when it's done. It sits inside the tile, so it starts on the block's roof;
-   `translate` lifts it off the roof, and `transform` undoes the board's turn
-   and tilt (inherited from .board) so it faces the viewer at any angle. */
-.rise {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: clamp(1rem, 2.2vw, 1.45rem);
-  line-height: 1;
-  white-space: nowrap;
-  -webkit-text-stroke: 4px var(--line);
-  paint-order: stroke fill;
-  pointer-events: none;
-  translate: -50% -50% 2px;
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-  animation: rise 1.3s ease-out forwards;
-}
-
-/* green like cash going up, red coming down */
-.rise[data-delta="up"] {
-  color: var(--money);
-}
-
-.rise[data-delta="down"] {
-  color: var(--danger);
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-  }
-  15%,
-  70% {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-    translate: -50% -50% calc(var(--unit) * 8);
-  }
-}
-
-/* --- the board teaching: what's open, what you'd earn, what you earn --- */
-
-/* No land yet: every free plot breathes a soft gold, the one invitation on
-   the first screen. Under reduced motion it holds a steady glow. */
-.board[data-invite] .tile[data-state="free"] {
-  outline-color: rgb(255 176 0 / 0.6);
-}
-
-.board[data-invite] .tile[data-state="free"]:not([data-helps]) {
-  animation: invite 2.8s ease-in-out infinite;
-}
-
-@keyframes invite {
-  50% {
-    background-color: #4a3c5c;
-    box-shadow:
-      inset 0 0 0 2px rgb(255 176 0 / 0.7),
-      0 0 10px rgb(255 176 0 / 0.45);
-  }
-}
-
-/* Your lease, as a ring round the foot of your building that drains as it
-   runs down: green when there's time, gold and dashed in the last hour. */
-.ring {
-  display: none;
-}
-
-.tile[data-state="mine"] .ring {
-  --lease: 1;
-  display: block;
-  position: absolute;
-  inset: -5px;
-  padding: 3px;
-  border-radius: 4px;
-  pointer-events: none;
-  background: conic-gradient(var(--money) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.18) 0);
-  mask:
-    linear-gradient(#000 0 0) content-box exclude,
-    linear-gradient(#000 0 0);
-  transform: translateZ(calc(-1 * var(--h) * var(--unit) + 1px));
-}
-
-.tile[data-state="mine"][data-lease="soon"] .ring {
-  background: conic-gradient(var(--accent) calc(var(--lease) * 1turn), rgb(255 255 255 / 0.18) 0);
-}
-
-/* Income waiting over your own building: "+12", in cash green, facing the
-   camera above the marker. */
-.owed {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: clamp(1rem, 2vw, 1.35rem);
-  line-height: 1;
-  white-space: nowrap;
-  color: var(--money);
-  -webkit-text-stroke: 4px var(--line);
-  paint-order: stroke fill;
-  pointer-events: none;
-  translate: -50% -50% calc(var(--unit) * 4 + 64px);
-  transform: rotateZ(calc(-1 * var(--spin))) rotateX(calc(-1 * var(--tilt)));
-}
-
-/* A building going up: a short burst of coins off its roof. */
-.coin-burst {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  transform-style: preserve-3d;
-}
-
-.coin-bit {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 40%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
-  box-shadow: 0 0 0 1.5px var(--line);
-  translate: -50% -50% 6px;
-  transform: rotateZ(var(--a)) translateY(0);
-  animation: coin-bit 900ms cubic-bezier(0.2, 0.8, 0.4, 1) forwards;
-}
-
-@keyframes coin-bit {
-  to {
-    transform: rotateZ(var(--a)) translateY(-260%);
-    translate: -50% -50% calc(var(--unit) * 6 + 20px);
-    opacity: 0;
-  }
-}
-
-/* Coins flying from your building to your wallet on a collect: placed by
-   app.js and moved by the Web Animations API, skipped under reduced
-   motion (the wallet still bumps). */
-.flying-coin {
-  position: fixed;
-  z-index: 20;
-  width: 1.1rem;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ffe27a, var(--accent) 60%, #b87400);
-  box-shadow: 0 0 0 2px var(--line);
-  pointer-events: none;
-  translate: -50% -50%;
-}
-
-/* --- touch screens: the bar that confirms a tapped plot --- */
-
-.confirm {
-  position: fixed;
-  inset-inline: 0;
-  bottom: 0;
-  z-index: 10;
+  font-weight: 700;
+  padding: 8px 0;
+  min-height: 40px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
-  background: var(--panel);
-  border-top: 3px solid var(--line);
-  box-shadow:
-    0 -3px 0 var(--accent),
-    0 -8px 24px rgb(0 0 0 / 0.5);
+  gap: 8px;
+}
+.count {
+  font-size: 0.8rem;
+  background: var(--ivory-lo);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.shelf {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.shelf-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.shelf-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.shelf-meta {
+  grid-column: 1;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+.shelf-item > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.shelf-item > .chips {
+  grid-column: 1;
+  margin: 0;
 }
 
-.confirm-text:empty {
+.listing {
+  margin: 8px 0;
+  padding-left: 1.2em;
+}
+
+.toast {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--ivory-hi);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+.toast[data-tone="ok"] {
+  background: var(--teal-ink);
+}
+
+.foot {
+  margin-top: auto;
+  font-size: 0.85rem;
+  padding-top: 4px;
+}
+.foot a {
+  color: var(--teal-ink);
+}
+
+/* the confirm dialog */
+.ask {
+  border: none;
+  border-radius: 16px;
+  padding: 20px;
+  max-width: min(440px, calc(100vw - 32px));
+  box-shadow: var(--shadow);
+  background: var(--ivory-hi);
+  color: var(--ink);
+}
+.ask::backdrop {
+  background: rgba(44, 42, 92, 0.45);
+}
+.ask p {
+  margin: 0 0 14px;
+  font-size: 1.02rem;
+}
+
+/* disconnected: every control is disabled in script; this just says so */
+body[data-conn="reconnecting"] .panel,
+body[data-conn="connecting"] .panel {
+  filter: saturate(0.6);
+}
+
+/* ------------------------------------------------------------ without WebGL */
+
+body.no-gl {
+  background: linear-gradient(180deg, var(--night) 0%, var(--dusk) 30%, var(--peach) 100%) fixed;
+}
+body.no-gl .scene {
   display: none;
 }
 
-.confirm-text {
-  flex-basis: 100%;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 1.3rem;
-  line-height: 1.1;
-  color: var(--money);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-}
+/* ------------------------------------------------------------ phone */
 
-.confirm button {
-  font-family: var(--display);
-  font-weight: 900;
-  font-size: 1.2rem;
-  line-height: 1;
-  letter-spacing: 0.02em;
-  min-height: 48px;
-  min-width: 48px;
-  padding: 0.6rem 1rem;
-  border: 3px solid var(--line);
-  border-radius: 0.5rem;
-  box-shadow: 3px 3px 0 var(--line);
-  color: var(--night);
-  cursor: pointer;
-}
-
-.confirm-claim {
-  flex: 1;
-  background: var(--accent);
-}
-
-.confirm-move {
-  background: var(--accent);
-}
-
-.confirm-help {
-  flex: 1;
-  background: var(--money);
-}
-
-.confirm-park {
-  flex: 1;
-  background: var(--park);
-}
-
-.confirm-cancel {
-  margin-left: auto;
-  background: var(--cream);
-}
-
-.confirm button:focus-visible {
-  outline-color: var(--ink);
-}
-
-@media (min-width: 64rem) {
-  .confirm {
-    inset-inline: auto;
-    right: max(1rem, calc((100% - 72rem) / 2 + 1rem));
-    width: min(36rem, calc(100% - 26rem));
-    bottom: 1rem;
-    border: 3px solid var(--line);
-    border-radius: 0.6rem;
-    box-shadow:
-      5px 5px 0 var(--line),
-      inset 0 0 0 2px var(--accent);
-  }
-}
-
-body:has(.confirm:not([hidden])) main {
-  padding-bottom: 8rem;
-}
-
-/* --- the room-wide message: a landmark raised --- */
-
-.toasts {
-  position: fixed;
-  z-index: 11;
-  top: 0.75rem;
-  left: 50%;
-  translate: -50% 0;
-  width: min(34rem, calc(100% - 2rem));
-  display: grid;
-  gap: 0.5rem;
-  pointer-events: none;
-}
-
-.cheer {
-  pointer-events: auto;
-  margin: 0;
-  padding: 0.6rem 0.9rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow:
-    5px 5px 0 var(--line),
-    inset 0 0 0 2px var(--accent);
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: var(--fs-notice);
-  line-height: 1.15;
-  color: var(--accent);
-  -webkit-text-stroke: 2px var(--line);
-  paint-order: stroke fill;
-  text-shadow: 2px 2px 0 var(--line);
-  animation: toast-in 280ms cubic-bezier(0.3, 1.4, 0.6, 1);
-}
-
-.cheer::before {
-  content: "";
-  display: inline-block;
-  width: 1.3em;
-  height: 1em;
-  margin-right: 0.35em;
-  vertical-align: -0.1em;
-  background: var(--accent);
-  clip-path: polygon(0 28%, 25% 55%, 50% 0, 75% 55%, 100% 28%, 90% 100%, 10% 100%);
-}
-
-/* Bronze and silver (docs/adr/0006) are the lighter message: body-size
-   cream text, and the crown in the tier's colour. Only gold shouts. */
-.cheer[data-tier="bronze"],
-.cheer[data-tier="silver"] {
-  font-size: var(--fs-body);
-  color: var(--ink);
-  -webkit-text-stroke: 0;
-  text-shadow: none;
-  box-shadow: 4px 4px 0 var(--line);
-}
-
-.cheer[data-tier="silver"]::before {
-  background: #c9d1da;
-}
-
-.cheer[data-tier="bronze"]::before {
-  background: #c97a3a;
-}
-
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    translate: 0 -0.6rem;
-  }
-}
-
-/* --- phones --- */
-
-/* A gentler tilt than desktop, with enough twist that blocks show a side
-   face. The twist swings the corners outwards, so the board is narrower
-   than the screen: 80% keeps them in at 360px. */
-@media (max-width: 40rem) {
+@media (max-width: 860px) {
   :root {
-    --board: 80%;
-    --unit: 4px;
-    --city-h: 52px;
-    --fs-notice: 1.15rem;
+    --panel-w: 100%;
+    --stage-h: 46svh;
   }
-
-  .top {
-    margin-top: 0.75rem;
-    padding: 0.8rem 1rem calc(var(--city-h) + 0.3rem);
-  }
-
-  .top h1 {
-    width: 10rem;
-  }
-
-  .lede {
-    margin-top: 0.4rem;
-    font-size: 1.15rem;
-  }
-
-  .claim {
-    margin-top: 0.75rem;
-    gap: 0.6rem;
-  }
-
-  .play {
-    order: 1;
-  }
-
-  .inspect {
-    order: 2;
-  }
-
-  /* holding land, the wallet is a bar pinned to the bottom, under the thumb */
-  .wallet {
-    position: fixed;
-    z-index: 9;
-    inset-inline: 0;
-    bottom: 0;
-    border-radius: 0;
-    border-width: 3px 0 0;
-    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.45);
-    padding: 0.5rem 0.75rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
-    gap: 0.4rem 0.7rem;
-  }
-
-  [data-hud-coins] {
-    font-size: 1.6rem;
-  }
-
-  .acts {
-    flex-basis: auto;
-    flex: 1 1 100%;
-  }
-
-  .act {
-    flex: 1 1 auto;
-    padding-inline: 0.5rem;
-  }
-
-  body:has(.wallet:not([hidden])) main {
-    padding-bottom: 9rem;
-  }
-
-  /* the confirm bar takes the bottom when it's open, over the wallet */
-  body:has(.confirm:not([hidden])) .wallet {
-    display: none;
-  }
-
   .stage {
-    margin-block: -0.5rem 0.5rem;
+    position: relative;
+    height: var(--stage-h);
   }
-
-  .board {
-    --tilt: 36deg;
-    --spin: 20deg;
-    --gap: 2px;
-    --pad: 4px;
+  .scene {
+    --panel-cover: 0px;
   }
-
-  .crown-icon {
-    width: 1rem;
-    height: 0.8rem;
-    margin-right: 0.2rem;
+  .top {
+    position: static;
+    padding: 12px 16px 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    background: var(--night);
   }
-
-  /* the crown says "landmarks"; the words are still read out */
-  [data-goal-noun],
-  .goal-raised,
-  .goal-unit {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .brand {
+    background: none;
+    box-shadow: none;
+    padding: 0;
+    backdrop-filter: none;
+  }
+  .brand h1 {
+    font-size: 1.3rem;
+  }
+  .lede {
+    font-size: 0.98rem;
+  }
+  .people {
+    max-width: none;
+    align-items: stretch;
+    padding: 6px 10px;
+    gap: 4px;
+  }
+  .you,
+  .here {
+    justify-content: flex-start;
+  }
+  .here-list {
+    gap: 2px 10px;
+  }
+  .plinths {
+    position: sticky;
+    top: 0;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: 15;
+    padding: 8px 0 8px 12px;
+    background: linear-gradient(180deg, rgba(122, 106, 168, 0.95), rgba(122, 106, 168, 0.85));
+    backdrop-filter: blur(6px);
+  }
+  .plinth-list {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-right: 12px;
+  }
+  .plinth-list li {
+    flex: none;
+  }
+  .plinth-btn {
+    min-width: 0;
+    width: 120px;
+    box-shadow: none;
+  }
+  .panel {
+    position: static;
+    width: auto;
+    margin: 0;
+    border-radius: 0;
+    overflow: visible;
+    padding: 16px 16px 12px;
+  }
+  .status {
+    top: 8px;
+    position: fixed;
+  }
+  .param {
+    grid-template-columns: 5.6em 1fr 3.2em;
+  }
+  .param-colour {
+    grid-template-columns: 1fr;
   }
 }
 
-/* --- reduced motion: nothing moves that doesn't have to --- */
-
-/* Changes still happen, instantly: a block jumps to its new height, a
-   claim's stripes stand still, the fresh ring just shows and goes, and every
-   moving cue becomes a static highlight. */
 @media (prefers-reduced-motion: reduce) {
-  .board,
-  .tile,
-  .tile::before,
-  .tile::after,
-  .sides::before,
-  .sides::after,
-  .camera button,
-  .act,
-  .notice {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
   }
-
-  .rise,
-  .notice,
-  .tile[data-helps]:not([data-pending]),
-  .tile[data-return]:not([data-pending]),
-  [data-landmarks][data-bump],
-  .cheer,
-  .tile[data-built] .roof,
-  [data-hud-coins][data-bump],
-  .tile[data-pending],
-  .tile[aria-busy="true"],
-  .tile[data-state="mine"]:not([data-preview]) .beacon::after,
-  .conn::before,
-  .conn[data-conn="reconnecting"]::before,
-  .tile[data-preview="target"] .beacon[data-gain]::after,
-  .act-collect,
-  .act-upgrade,
-  .coin-bit {
-    animation: none;
-  }
-
-  /* the free plots hold a steady gold edge instead of breathing */
-  .board[data-invite] .tile[data-state="free"]:not([data-helps]) {
-    animation: none;
-    box-shadow: inset 0 0 0 1px rgb(255 176 0 / 0.55);
-  }
-
-  /* the name field: a steady gold ring instead of a pulse */
-  .controls input[data-want] {
-    animation: none;
-    box-shadow:
-      4px 4px 0 var(--line),
-      0 0 0 5px var(--accent);
-  }
-
-  .tile[data-fresh] {
-    animation: none;
-    outline: 3px solid var(--cream);
-    outline-offset: 2px;
-  }
-
-  .burst {
-    animation: none;
-    opacity: 0.9;
-  }
-
-  [data-landmarks][data-bump],
-  [data-hud-coins][data-bump] {
-    color: var(--cream);
-  }
-}
-
-/* --- /readme/: a briefing on a HUD panel --- */
-
-.prose {
-  max-width: 44rem;
-  margin-block: 1.5rem 4rem;
-  padding: 1.25rem 1.5rem 2rem;
-  background: var(--panel);
-  border: 3px solid var(--line);
-  border-radius: 0.6rem;
-  box-shadow: 5px 5px 0 var(--line);
-}
-
-.prose h1,
-.prose h2,
-.prose h3 {
-  font-family: var(--display);
-  font-weight: 900;
-  line-height: 1.1;
-  letter-spacing: 0.01em;
-  -webkit-text-stroke: 4px var(--line);
-  paint-order: stroke fill;
-}
-
-.prose h1 {
-  font-size: clamp(2rem, 6vw, 2.8rem);
-}
-
-.prose h2 {
-  font-size: 1.7rem;
-  color: var(--accent);
-}
-
-.prose img {
-  max-width: 100%;
-  height: auto;
-}
-
-.prose pre {
-  overflow-x: auto;
-}
-
-.prose code {
-  background: rgb(255 255 255 / 0.1);
-  border-radius: 0.25rem;
-  padding: 0.05em 0.3em;
 }
