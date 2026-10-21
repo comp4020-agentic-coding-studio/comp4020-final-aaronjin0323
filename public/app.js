@@ -837,10 +837,19 @@ function renderDrawers() {
       : [el("li", { class: "hint" }, "Empty. Exhibits land here when they're replaced or taken off display.")]),
   );
   const archive = $("[data-archive]");
-  $("[data-archive-count]").textContent = String(state.archivedDrafts.length);
+  $("[data-archive-count]").textContent = String(state.archivedTotal);
+  // Older pages fetched with "Show older" stay only while the newest ones
+  // they followed are unchanged; otherwise they'd sit out of order.
+  const newestIds = state.archivedDrafts.map((a) => a.id).join();
+  if (newestIds !== olderFor) {
+    older = [];
+    olderMore = state.archivedTotal > state.archivedDrafts.length;
+    olderFor = newestIds;
+  }
+  const all = [...state.archivedDrafts, ...older];
   archive.replaceChildren(
-    ...(state.archivedDrafts.length
-      ? state.archivedDrafts.map((a) =>
+    ...(all.length
+      ? all.map((a) =>
           el(
             "li",
             { class: "shelf-item" },
@@ -851,8 +860,27 @@ function renderDrawers() {
           ),
         )
       : [el("li", { class: "hint" }, "Nothing archived yet.")]),
+    ...(olderMore && all.length
+      ? [el("li", { class: "shelf-more" }, el("button", { type: "button", class: "small", "data-archive-older": true, onclick: showOlder }, `Show older (${state.archivedTotal - all.length} more)`))]
+      : []),
   );
   applyEnabled();
+}
+
+let older = [];
+let olderMore = false;
+let olderFor = "";
+
+// Reading only: it works while disconnected too, like the history.
+async function showOlder() {
+  const last = [...state.archivedDrafts, ...older].at(-1);
+  const res = await fetch(`/archive?before=${last.id}`).catch(() => null);
+  if (!res?.ok) return toast("Couldn't load older drafts. Try again in a moment.");
+  const page = await res.json();
+  older = [...older, ...page.drafts];
+  olderMore = page.more;
+  renderDrawers();
+  $("[data-archive] .shelf-item:nth-last-child(" + (olderMore ? page.drafts.length + 1 : page.drafts.length) + ") button")?.focus();
 }
 
 async function restoreArchived(a) {

@@ -270,6 +270,32 @@ async function publishing(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
+async function archive(browser: Browser): Promise<void> {
+  console.log("\n— every archived draft stays reachable —");
+  const page = await visitor(browser);
+  // archive enough drafts that the state's newest 12 can't hold them all
+  for (let i = 0; i < 14; i++) {
+    await post(page, "/draft/clear");
+    await post(page, "/draft/start", { recipe: "bloom" });
+  }
+  await post(page, "/draft/clear");
+  await page.waitForFunction(() => Number(document.querySelector("[data-archive-count]")?.textContent) >= 15, null, { timeout: 5000 });
+  const total = Number(await page.textContent("[data-archive-count]"));
+  await page.click("[data-archive-box] > summary");
+  const shown = () => page.locator("[data-archive] .shelf-item").count();
+  const before = await shown();
+  check(before > 0 && before < total, "the drawer starts with the newest few", `${before} of ${total}`);
+  let clicks = 0;
+  while ((await page.locator("[data-archive-older]").count()) > 0 && clicks < 50) {
+    const n = await shown();
+    await page.click("[data-archive-older]");
+    await page.waitForFunction((m) => document.querySelectorAll("[data-archive] .shelf-item").length > m, n, { timeout: 3000 });
+    clicks++;
+  }
+  check((await shown()) === total, "Show older reaches every one", `${await shown()} of ${total} after ${clicks} click(s)`);
+  await page.context().close();
+}
+
 async function disconnect(browser: Browser): Promise<void> {
   console.log("\n— disconnected: look, don't edit —");
   const page = await visitor(browser);
@@ -403,6 +429,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   realtime,
   dragging,
   publishing,
+  archive,
   disconnect,
   keyboard,
   viewports,
