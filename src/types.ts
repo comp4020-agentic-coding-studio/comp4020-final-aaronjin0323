@@ -95,6 +95,22 @@ export type StateEvent = {
 /** GET /exhibits/:id */
 export type ExhibitHistory = { exhibit: ExhibitView; versions: VersionView[] };
 
+/** What every POST answers with on success: the museum as you now see it
+ * (the same shape as a `state` event, `seq` included, so the page keeps
+ * whichever of this and the stream's event is newer), plus any fields the
+ * route adds (e.g. publish's `exhibitId`, `versionId`, `n`). */
+export type ActionOk = { ok: true; state: StateEvent } & Record<string, unknown>;
+
+/** Every refusal. `lease-held` also names the holder and when the lease
+ * ends; `slot-taken` also carries what's in the slot, so the page can ask. */
+export type Refusal = {
+  error: ErrorCode;
+  message: string;
+  holder?: VisitorView;
+  expiresAt?: string;
+  exhibit?: ExhibitView;
+};
+
 /** Every refusal is { error, message } with one of these codes. */
 export type ErrorCode =
   | "bad-request"
