@@ -24,7 +24,14 @@ async function fresh(): Promise<void> {
   throw new Error("can't empty the workbench");
 }
 
-const state = (r: { body: { state: StateEvent } }): StateEvent => r.body.state;
+// The museum as an onlooker sees it. Never read state through a stream as a
+// visitor who holds or is about to take a lease: closing that stream is
+// their last one closing, which releases their leases (the rule), and the
+// server may see the close after their next edit.
+const onlooker = visitor();
+const look = (): Promise<StateEvent> => stateOf(onlooker);
+
+const state = (r:{ body: { state: StateEvent } }): StateEvent => r.body.state;
 
 // A visitor who lets go of every part they hold when the test is done, so
 // the next clear isn't refused.
@@ -75,7 +82,7 @@ describe("the workbench", { concurrent: false }, () => {
     const r = await post(a, "/draft/edit", { part: "ribbon", values: { turns: 4, twist: 3 }, revision: 1 });
     expect(r.status).toBe(200);
     expect(r.body.values).toEqual({ turns: 4, twist: 3 });
-    const s = await stateOf(visitor());
+    const s = await look();
     expect(s.draft.parts!.ribbon).toMatchObject({ turns: 4, twist: 3 });
     expect(s.draft.partAuthors.ribbon.name).toBe("Edit Author");
     expect(s.draft.contributors).toEqual([expect.objectContaining({ name: "Edit Author", edits: 1 })]);
@@ -96,7 +103,7 @@ describe("the workbench", { concurrent: false }, () => {
       expect((await post(a, "/draft/edit", { part, values: { lift: 0 } })).status, String(part)).toBe(400);
       expect((await post(a, "/draft/lease", { part })).status, String(part)).toBe(400);
     }
-    expect((await stateOf(a)).draft.parts!.ribbon.turns).toBe(2);
+    expect((await look()).draft.parts!.ribbon.turns).toBe(2);
     await releaseAll(a);
   });
 
@@ -116,7 +123,7 @@ describe("the workbench", { concurrent: false }, () => {
     expect(Date.parse(r.body.expiresAt)).toBeGreaterThan(Date.now());
     expect((await post(b, "/draft/lease", { part: "halo" })).body.error).toBe("lease-held");
     // nothing changed
-    expect((await stateOf(b)).draft.parts!.halo.tilt).toBe(defaultParts("arches").halo.tilt);
+    expect((await look()).draft.parts!.halo.tilt).toBe(defaultParts("arches").halo.tilt);
 
     // a different part is free at the same time
     expect((await post(b, "/draft/edit", { part: "arch", values: { count: 4 } })).status).toBe(200);
@@ -149,12 +156,12 @@ describe("the workbench", { concurrent: false }, () => {
     await post(a, "/draft/start", { recipe: "loop" });
     await post(a, "/draft/edit", { part: "cube", values: { size: 1.3 } });
     await releaseAll(a);
-    const old = (await stateOf(a)).draft;
+    const old = (await look()).draft;
     const totem = (await get(null, "/exhibits/2")).body.versions.at(-1);
 
     const refused = await post(a, "/draft/remix", { versionId: totem.id });
     expect([refused.status, refused.body.error]).toEqual([409, "draft-not-empty"]);
-    expect((await stateOf(a)).draft.id).toBe(old.id);
+    expect((await look()).draft.id).toBe(old.id);
 
     const r = await post(a, "/draft/remix", { versionId: totem.id, replace: true });
     expect(r.status).toBe(200);
@@ -177,7 +184,7 @@ describe("the workbench", { concurrent: false }, () => {
     await fresh();
     const a = visitor();
     await post(a, "/draft/start", { recipe: "bloom" });
-    const id = (await stateOf(a)).draft.id;
+    const id = (await look()).draft.id;
     const r = await post(a, "/draft/clear");
     expect(r.status).toBe(200);
     expect(state(r).draft.recipe).toBeNull();
@@ -189,7 +196,7 @@ describe("publishing", { concurrent: false }, () => {
   // A free slot, emptying one if all six are full (into the storeroom: nothing
   // is lost).
   async function freeSlot(): Promise<number> {
-    const s = await stateOf(visitor());
+    const s = await look();
     const empty = s.slots.find((x) => !x.exhibit);
     if (empty) return empty.slot;
     const last = s.slots[5].exhibit!;
@@ -246,12 +253,12 @@ describe("publishing", { concurrent: false }, () => {
     await fresh();
     const a = visitor();
     await post(a, "/draft/start", { recipe: "bloom" });
-    const before = (await stateOf(a)).slots[0].exhibit!;
+    const before = (await look()).slots[0].exhibit!;
 
     const r = await post(a, "/publish", { title: "Usurper", slot: 1 });
     expect(r.status).toBe(409);
     expect(r.body).toMatchObject({ error: "slot-taken", exhibit: { id: before.id, slot: 1 } });
-    expect((await stateOf(a)).slots[0].exhibit!.id).toBe(before.id);
+    expect((await look()).slots[0].exhibit!.id).toBe(before.id);
 
     const ok = await post(a, "/publish", { title: "Usurper", slot: 1, replace: true });
     expect(ok.status).toBe(200);
@@ -370,7 +377,7 @@ describe("live", { concurrent: false }, () => {
       const sa = await open(a);
       const you = (await sa.first()).you;
       await arrived;
-      expect((await stateOf(b)).present.map((p) => p.tag)).toContain(you.tag);
+      expect((await look()).present.map((p) => p.tag)).toContain(you.tag);
       const leased = sb.next((s) => s.leases.some((l) => l.part === "stem"));
       await post(a, "/draft/lease", { part: "stem" });
       await leased;
@@ -380,7 +387,7 @@ describe("live", { concurrent: false }, () => {
       await sa2.first();
       sa2.close();
       await sleep(300);
-      expect((await stateOf(b)).leases.map((l) => l.part)).toEqual(["stem"]);
+      expect((await look()).leases.map((l) => l.part)).toEqual(["stem"]);
 
       const gone = sb.next((s) => !s.present.some((p) => p.tag === you.tag) && s.leases.length === 0, 1000);
       sa.close();
