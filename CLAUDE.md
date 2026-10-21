@@ -12,21 +12,25 @@ What the agent needs to carry from any of it is your call.
 
 ## Goal
 
-**Impossible Museum** is a small, shared 3D gallery where visitors assemble
-impossible sculptures together, exhibit them, and make variations of one
-another's work. It's built for a handful of people visiting together for five
-to ten minutes, including someone opening the URL with no introduction. It
+**Impossible Museum** is a small, shared 3D gallery where visitors play
+impossible objects together on one stage, improvising short absurd
+performances, and leave them on plinths for the next visitors to find and
+join. It's built for a handful of people visiting together for five to ten
+minutes, including someone opening the URL with no introduction. It
 replaces Skyline ([ADR 11](docs/adr/0011-rebuild-after-skyline.md)); the
-museum's own decisions are [ADR 12](docs/adr/0012-impossible-museum.md).
+museum is [ADR 12](docs/adr/0012-impossible-museum.md), and what visitors
+do in it is [ADR 16](docs/adr/0016-loop-stage.md).
 
-**The loop:** explore, then select a sculpture, change it together, exhibit
-it, discover its history, and return later.
+**The loop:** wander and watch what others left, join in on one, take it
+somewhere unexpected together, leave it, come back.
 
-**Good, here:** a visitor quickly understands how to contribute, can see
-someone else's contribution, and feels free to experiment because their work
-is credited and recoverable. Every change answers in the moment you make it.
-These are starting decisions: change them when evidence warrants it, with the
-reason recorded here and in an ADR.
+**Good, here:** the fun is between people: reading each other's gestures,
+playing along, cutting in, being surprised. No puzzle and no right answer;
+the same performance carries different stories. Touching an object feels
+like touching a real one and it answers with movement at once. Nothing
+needs reading first. Work is credited and recoverable, so playing never
+costs anyone their creation. These are starting decisions: change them
+when evidence warrants it, with the reason recorded here and in an ADR.
 
 ## Decisions
 
@@ -49,72 +53,77 @@ Settled; change them here first, then in the code.
 
 ### The museum
 
-- **One gallery: six plinths and one workbench.** Six exhibition slots,
-  numbered 1--6, and a single shared draft on the workbench. No rooms, no
-  free-roaming avatars.
-- **Four recipes, bounded parts.** A sculpture is a recipe id plus numbers
-  for each of its parts (three each, or Orbit's five, ADR 15). The recipes and every parameter's range and
-  step live in `public/recipes.js`, the one copy, imported by both the
-  server (to refuse) and the page (to draw sliders and the sculpture). An
-  out-of-range or unknown value is a `400`, never clamped. Nobody draws a
-  mesh.
-- **Three starters are seeded once** (a numbered migration, so a redeploy
-  never re-seeds): the Loop & Lantern (ribbon, glass cube, spheres) in slot
-  1, the Arch Totem in slot 2, the Glass Bloom in slot 3. Each is exhibit
-  version 1, published by the museum (`publishedBy: null`).
+- **One gallery: six plinths round one stage.** Six exhibition slots,
+  numbered 1--6, each playing a saved performance on a loop, and the stage
+  at the centre holding the live one. No rooms, no free-roaming avatars.
+- **A performance is a set and a loop of gestures** (ADR 16). The set
+  names the objects (`orbit`: four spheres, a ribbon, a bell); the loop is
+  up to 40 gestures, each at a moment (0 to 12 s) of a 12 s loop. The sets,
+  the gesture shapes and every bound live in `public/stage.js`, the one
+  copy, imported by the server (to refuse) and the page (to play). An
+  out-of-range or unknown value is a `400`, never clamped.
+- **What happens on the stage is a rule, not a record.** The objects' every
+  position at every moment comes from the set, the gestures and the shared
+  clock alone, by a fixed 60 Hz step from the start of the loop with no
+  randomness (`simulate` in `public/stage.js`). Every screen computes the
+  same performance; no frame writes to the server. Held by
+  `spec/stage.test.ts`.
+- **The objects set each other off.** A thrown sphere floats upward,
+  bounces off the ceiling and other spheres; passing close to the ribbon
+  it's caught and rides it. Plucking the ribbon sends a pulse round it that
+  flings riders off. Tapping the bell, or a sphere hitting it, rings it,
+  and spheres near it hop away. The tuning numbers live in one place in
+  `public/stage.js`.
+- **Three starter performances are seeded once** (a numbered migration),
+  on plinths 1--3, published by the museum. Exhibits made with the old
+  sculpture recipes moved to the storeroom in the same migration, every
+  version kept.
 
-### The workbench (the shared draft)
+### The stage (the shared loop)
 
-- **Anyone present can edit the draft.** Every accepted edit is written to
-  the database before it's broadcast. Publishing is not the only persistence
-  boundary.
-- **Transforms and parameters of a part need that part's lease.** A lease is
-  per part, held by one visitor, 15 s long, renewed by every accepted edit
-  and by `POST /draft/lease` while the slider is held. Different parts are
-  editable at the same time; one part can't be silently fought over: an edit
-  to a part someone else holds is a `409 lease-held` that names the holder.
-  The server enforces leases; the page only mirrors them.
-- **Leases end on the clock or on disconnect.** An expired lease is free on
-  every read, whether or not a sweep has run. When a visitor's last stream
-  closes, their leases are released and broadcast at once.
-- **Edits are throttled on the page, not dropped on the server.** Dragging a
-  slider redraws locally on every frame; the page sends the latest value at
-  most every 100 ms, and always the final value on release. Other viewers see
-  an accepted edit within about a second under the test conditions (two
-  local streams). No promise is made about arbitrary network failure.
-- **Starting a draft:** when the workbench is empty, anyone may start one
-  from a recipe's defaults or **remix** an exhibit version into it. Remix
-  into a non-empty draft is refused (`409 draft-not-empty`) unless the
-  request says `replace: true`, which the page offers only as a separately
-  labelled action ("Replace the workbench"). Replacing **archives the
-  current draft first**, in the same transaction. **Clearing** the workbench
-  archives too. An archived draft can be brought back as a remix source.
-  **Every archived draft stays reachable.** The `state` event carries only the
-  newest 12 (so it stays small for a busy day) plus `archivedTotal`; the page
-  pages back through the rest with `GET /archive?before=<id>`. A cap that
-  hid older drafts would make "recoverable" untrue without anyone seeing it.
-- **Credit follows the work.** The draft records, per part, who last shaped
-  it, and counts each contributor's accepted edits. A remix records the
-  version it came from.
+- **Anyone present can play.** Every accepted gesture is written to the
+  database before it's broadcast. The stage is never empty: "Start over"
+  archives the loop and leaves a silent one.
+- **A gesture is the only write.** `POST /stage/gesture` adds one gesture
+  at the loop moment the page says it happened; the loop keeps the newest
+  40 and drops the oldest. Other viewers see it within about a second.
+- **Grabbing takes it.** Picking up a sphere claims it for 10 s
+  (`POST /stage/grab`), shown to everyone as the holder's colour ring.
+  Anyone may grab a sphere someone else holds: the claim moves to them and
+  the answer names who lost it, so both screens can show the tug. A throw
+  needs the claim and ends it; a throw of a sphere someone has since
+  grabbed is `409 taken`, naming the taker. Plucks and taps need no claim.
+  Claims end on the clock or on disconnect, like the old leases, and are
+  never fought over in silence.
+- **Undo is yours alone.** `POST /stage/undo` removes your own newest
+  gesture still in the loop, never anyone else's.
+- **Replacing the loop archives it.** "Join in" on a plinth brings that
+  performance to the stage; if the stage has gestures, the request has to
+  say `replace: true`, which the page asks for first, and the old loop is
+  archived in the same transaction. Every archived loop stays reachable
+  (the newest 12 in the state, the rest by `GET /archive?before=`), and
+  any can be brought back.
+- **Credit follows the gestures.** A loop's credits are everyone with a
+  gesture in it, counted per gesture; a performance joined from a plinth
+  records the version it came from.
 
 ### Exhibits and versions
 
-- **Anyone may publish the draft as an exhibit version.** Publishing takes a
-  title (1--40 characters) and either a new slot or an existing exhibit to
-  add a version to. The draft stays on the workbench after publishing.
-- **Versions are immutable.** No route updates or deletes a version row, and
-  a database trigger refuses `UPDATE` and `DELETE` on `versions`. Every
+- **Anyone may leave the live loop as an exhibit version.** "Leave it"
+  takes a title (1--40 characters, a playful one suggested) and either a
+  new slot or an existing exhibit to add a version to. The loop stays on
+  the stage after.
+- **Versions are immutable.** No route updates or deletes a version row,
+  and a database trigger refuses `UPDATE` and `DELETE` on `versions`. Every
   version keeps its contributors (names and colours as they were) and its
   publisher.
-- **Restore makes a new version.** Restoring version 2 of an exhibit
-  publishes version N+1 with version 2's recipe and numbers and
-  `restoredFrom` set. History only grows.
-- **Six slots, never silent eviction.** Publishing a new exhibit into a slot
-  someone's exhibit already holds is a `409 slot-taken` unless the request
-  says `replace: true`; the page shows what's there and asks. Replacing moves
-  the old exhibit to the **storeroom**, with all its versions, and it can be
-  put back on a free slot later. Taking an exhibit off display does the same.
-  Nothing published is ever deleted.
+- **Restore makes a new version.** Restoring version 2 publishes version
+  N+1 with version 2's performance and `restoredFrom` set.
+- **Six slots, never silent eviction.** Leaving a new exhibit on a slot
+  someone's exhibit holds is a `409 slot-taken` unless the request says
+  `replace: true`; the page shows what's there and asks. The old exhibit
+  goes to the **storeroom** with all its versions. Nothing published is
+  ever deleted.
 
 ### Live, and leaving
 
@@ -124,144 +133,83 @@ Settled; change them here first, then in the code.
   from closing an idle stream. On `SIGTERM` every stream ends and the
   database closes.
 - **Presence is open streams.** A visitor is present while at least one of
-  their streams is open; the event lists who's here and which parts each is
-  editing. Presence is never stored.
-- **Disconnected means view-only.** When the stream drops, the page keeps
-  showing the museum, disables every control, and says so ("Reconnecting...
-  you can look, but not edit until we're back"). It re-enables editing only
-  after the first `state` event of the new connection has replaced its
-  copy.
-- **Animation is never a write.** Motion is derived from saved parameters
-  and a shared time base (`serverTime` in each event, against the page's
-  clock), so two screens show the same sculpture at the same phase. No
-  animation frame touches the server.
+  their streams is open; the event lists who's here and what each holds.
+  Presence is never stored.
+- **Disconnected means watch-only.** When the stream drops, the page keeps
+  playing the museum, disables every control, and says so. It re-enables
+  play only after the first `state` event of the new connection.
+- **The shared clock.** Each event carries `serverTime`; the page keeps an
+  offset against its own clock, and the loop's moment is the shared time
+  modulo 12 s, so two screens show the same moment of the same performance.
 
 ### Show, don't tell (ADR 13)
 
-The first build spoke in paragraphs: 160 words on the first desktop screen.
-A visitor reads the room, not the page, so the sculpture and the controls
-carry the meaning and the words are labels. Read
-`docs/adr/0013-show-dont-tell.md`.
+A visitor reads the room, not the page. The objects carry the meaning and
+words are labels. Read `docs/adr/0013-show-dont-tell.md`.
 
 - **A word budget, held by a check.** The first screen shows at most 40
-  visible words on desktop and 30 on the phone, on the bench view and on a
+  visible words on desktop and 30 on the phone, on the stage view and on a
   plinth (`scripts/browser-check.ts`, `words`). Names, titles and numbers
   count. Explanations live in accessible names, `title` tooltips and
-  `/readme/`, not on the screen.
-- **The room is the menu.** Plinths and the bench are picked in the 3D room;
-  the plinth row is a strip of small coloured thumbnails (each sculpture's
-  main colour) with the title only as an accessible name and on hover/focus.
+  `/readme/`.
+- **The room is the menu.** Plinths and the stage are picked in the 3D
+  room; the plinth row is a strip of small thumbnails with the title only as
+  an accessible name and on hover/focus.
 - **Icons and colour over sentences.** Every action button is an icon with
-  an accessible name and a tooltip; only the doors into making something
-  keep a word: Exhibit, "Shape it", Play, Undo, Remix, Swap in, Gallery
-  and Done (ADR 14, 15). Recipes are picked by a swatch of the
-  sculpture, not a blurb. Who you are is your coloured dot; who's here is a
-  row of dots. A part someone else is shaping wears their colour ring and
-  their name only.
-- **History is a strip of versions, not a list of sentences.** Each version
-  is a small chip (v1, v2...) in its publisher's colour; picking one shows
-  its credits and Restore/Remix as icons.
-- **The storeroom and archive are icon drawers**, closed by default, with a
-  count badge and no description.
-- **Feedback is motion, then a word.** An accepted change pulses the part
-  in the editor's colour; a toast is at most four words.
+  an accessible name and a tooltip; only the doors keep a word: Leave it,
+  Join in, Undo, Gallery. Who you are is your coloured dot; who's here is a
+  row of dots; what someone holds wears their colour ring.
+- **No parameter panels.** Nothing on the stage is set with a slider or a
+  number field. Objects are changed by touching them.
+- **History is a strip of versions**, chips in each publisher's colour.
+  The storeroom and archive are icon drawers, closed by default.
+- **Feedback is motion and sound, then a word.** Every catch, ring, pluck
+  and collision shows on the object and plays a short sound; a toast is at
+  most four words.
 - **Nothing is lost for screen readers or keyboards.** Every hidden word
-  still exists as an accessible name, and every action keeps a real button.
+  still exists as an accessible name, and every gesture keeps a real button.
 
-### Orbit: pieces that affect each other (ADR 15)
+### Explore and play are one motion (ADR 14, 16)
 
-A reversible prototype. Read `docs/adr/0015-orbit-play.md`.
-
-- **The catch is a rule in `public/orbit.js`, applied at the drop.** A
-  sphere dropped within `CATCH` of the ribbon's path is saved as riding it
-  (`ride`, and the point it holds, `along`). A caught sphere is drawn at
-  that point of the ribbon as the ribbon's saved numbers make it now. So
-  anyone's ribbon edit moves every caught sphere on every screen with no
-  write from the sphere's owner, and a bend never knocks one off. Held by
-  `spec/orbit.test.ts`.
-- **A sphere appears where it was dropped.** The ride runs on the shared
-  clock (seconds since 1970), so `dropOn` takes that time and saves `along`
-  with the ride so far taken off; a caught sphere then starts at the point
-  it was dropped on, and a resting one sits within a centimetre of the drop
-  (fine steps: 1° around, 0.01 out and up). Test it at a real clock time,
-  never only at t = 0, which hid this once.
-- **Cause and effect are visible.** A caught sphere glows and is joined to
-  the ribbon by a line, and so does a sphere being dragged the moment it
-  would catch.
-- **Direct manipulation, through the same edits.** Dragging a sphere or the
-  ribbon takes that part's lease and sends ordinary throttled edits. No new
-  route.
-- **Undo is yours alone.** It replays your own last edit's previous numbers
-  as a new edit, credited and broadcast. It never undoes someone else.
-- **On an Orbit draft the editor is pieces, Undo and Exhibit.** Sliders sit
-  in a closed "Fine-tune" disclosure, and the storeroom and archive drawers
-  are hidden.
-- **Every drag has a button** in tab order (Place/Return, Move along, More
-  or Fewer loops, Wider or Narrower).
-- **Reached by choice:** Orbit is the first starter, and "Play" on the bench
-  card starts one, asking first and archiving whatever is there. No
-  migration touches the live bench.
-- Held by the browser check (`orbit`): a drag places a sphere and it shows
-  as caught; a second visitor's ribbon change moves that sphere on the
-  first visitor's screen within a second; Undo puts the last edit back; the
-  keyboard path does the same as the drag; sliders, history and drawers
-  are out of sight.
-
-### Explore, then create (ADR 14)
-
-Read `docs/adr/0014-explore-then-create.md`.
-
-- **Everyone starts in explore mode.** The panel is a compact selection
-  card for what's selected (the bench or a plinth): swatch, title, credits,
-  one or two actions, no sliders. Selecting anything, including the bench,
-  shows its card in explore mode.
-- **The editor opens only on an explicit creative action:** "Shape it" on
-  the bench card, a starter, Remix, Swap in, or bringing an archived draft
-  back. Focus moves to the editor's heading.
-- **Leaving is as plain:** "Done" at the top of the editor, the Gallery
-  button, or `Escape` return to explore, focus back on what opened it.
-- **Nothing is lost to the keyboard.** In explore the editor's controls are
-  `hidden`, not just covered, so they're out of the tab order; in create
-  every slider and swatch is a real `<input>` in tab order, as before.
-- Held by the browser check (`explore`), at both sizes: first load shows
-  the card and no visible editing control, and the card fits in a compact
-  height; "Shape it" (by keyboard) reveals every editing control with focus
-  on the editor heading; Done, Gallery and `Escape` each return to the
-  card with focus on "Shape it"; choosing a plinth never shows the editor.
+- **Everyone starts watching the stage.** The panel is a compact card for
+  what's selected: the stage (its credits, Undo, Leave it) or a plinth (its
+  title, credits, versions, Join in). No editor to open: touching an object
+  on the stage is playing.
+- **The gesture buttons sit on the stage card**, one per object (throw
+  each sphere, pluck, ring), in tab order, each an ordinary gesture.
+- **Escape and the Gallery button** return to the stage view, focus on
+  the card's heading.
 
 ### Phone and keyboard
 
-- **Every action works from the keyboard and at 390x844.** Plinths and
-  workbench parts are real buttons in tab order, sliders are `<input
-  type="range">`, and the 3D canvas is decoration over a DOM that holds every
-  control. Arrow keys orbit the camera when the canvas has focus.
-- **On a phone the sculpture never scrolls away from its controls.** At
-  390x844 the page is a fixed `100svh` shell that doesn't scroll: a slim top
-  bar, then the live 3D scene (pinned, about 38% of the height), then the
-  plinth row, then the panel, which scrolls on its own. When the workbench
-  is selected the phone camera frames the bench sculpture itself, not the
-  room, so a slider's effect is visible as it moves. Held by the browser
-  check (`phone-edit`): for every editing control on the bench, scrolled to
-  and focused in turn, the sculpture's canvas stays fully on screen and the
-  control is on screen with it; the sculpture's own box is inside the
-  uncovered scene, unblocked (under 3% of rays to it hit something else)
-  and at least a fifth of its area; and the page itself never scrolls.
+- **Every action works from the keyboard and at 390x844.** Plinths, the
+  stage and every gesture are real buttons in tab order, and the 3D canvas
+  is decoration over a DOM that holds every control. Arrow keys orbit the
+  camera when the canvas has focus.
+- **On a phone the stage never scrolls away from its controls.** At 390x844
+  the page is a fixed `100svh` shell that doesn't scroll: a slim top bar,
+  then the live 3D scene (pinned), then the plinth row, then the panel,
+  which scrolls on its own. The phone camera frames the stage itself. Held
+  by the browser check (`phone-edit`): for every control on the stage card,
+  scrolled to and focused in turn, the canvas stays on screen with it, and
+  the stage's own box is inside the uncovered scene and unblocked; and the
+  page itself never scrolls.
 - **Scrolling the controls never turns the scene.** In the phone layout the
   camera moves only when the visitor drags it, uses its keys, or picks
-  something; the idle drift that circles the room on desktop is off, so a
-  sculpture being edited holds its angle however long the panel is
-  scrolled. Held by `phone-edit`: the camera's yaw (`data-yaw` on the
-  canvas) is the same before and after scrolling the panel end to end for
-  longer than the drift's 6 s wait.
-- **Without WebGL** the page still lists exhibits, history and the draft's
-  numbers, and every control still works.
+  something.
+- **Touch is the gesture.** A finger drag on a sphere throws it; a flick
+  across the ribbon plucks it; a tap on the bell rings it. A drag that
+  starts on nothing turns the camera.
+- **Without WebGL** the page still lists exhibits and their history, and
+  every gesture button still works.
+
 
 ### The look
 
 - **A warm, immersive gallery floating above sunset clouds.** Warm ivory
   stone, peach light, restrained teal glass, chrome and coral accents, a
   few sculptural plants and warm exhibit lighting. Playful and calm. The
-  palette is `PALETTE` in `public/recipes.js`. Held by the browser check
+  palette is `PALETTE` in `public/stage.js`. Held by the browser check
   (`look`), on the opening view at both sizes:
   - **The sky is a soft peach-to-lavender sunset**, never saturated
     orange or dark purple: of the sky pixels above the horizon, the 90th
@@ -281,15 +229,15 @@ Read `docs/adr/0014-explore-then-create.md`.
     on the floor under every plinth, the bench and each pillar, so stone
     reads matte, chrome reflects and glass shows through.
 - **The opening view stands inside the pavilion, at visitor height.** The
-  first thing a visitor sees, and the view the workbench returns to, is
+  first thing a visitor sees, and the view the Gallery button returns to, is
   taken from within the ring of arches (camera inside the arch radius) at
   about eye height (camera 1.3 to 2.0 above the floor), looking almost
-  level at the workbench sculpture. That sculpture is large in the middle
+  level at the stage. The stage is large in the middle
   of the visible scene; two plinths and the arches with the sky behind
   them frame it. On first load the camera eases in a short way to that
   pose instead of swooping from outside the room. Held by the browser
   check (`opening`), at both sizes: the camera is inside the pavilion and
-  at eye height, and the bench sculpture's on-screen box is at least a
+  at eye height, and the stage's on-screen box is at least a
   quarter of the uncovered scene's area and centred in it.
 - **A plinth close-up is composed, not just aimed.** Choosing a plinth
   moves the camera to a pose picked by scoring candidates round the
@@ -308,7 +256,7 @@ Read `docs/adr/0014-explore-then-create.md`.
 - **Back to the gallery is one obvious button.** Whenever the view isn't
   the opening view (a plinth is chosen, or the camera was dragged, zoomed
   or turned), a "Gallery" button sits in the scene's top-left corner. It
-  selects the workbench and returns the camera to the opening pose;
+  selects the stage and returns the camera to the opening pose;
   `Escape` does the same when focus isn't in a field. Held by `focus`: the
   button shows on a plinth and after a drag, and pressing it restores the
   opening pose.
@@ -335,21 +283,21 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
 | `GET /` | | the museum page, server-rendered with the current exhibits so it reads without JS | |
 | `GET /events` | | SSE `state` events | |
 | `GET /exhibits/:id` | | `ExhibitHistory`: every version, newest first | `404` |
-| `GET /archive?before=<id>` | | `{ drafts: ArchivedDraftView[], more: boolean }`: the next 12 archived drafts older than `id` (newest first; no `before` starts at the newest) | `400` |
+| `GET /archive?before=<id>` | | `{ drafts: ArchivedDraftView[], more: boolean }`: the next 12 archived loops older than `id` | `400` |
 | `POST /me` | `{ name }` | rename yourself | `400` |
-| `POST /draft/start` | `{ recipe }` | start a draft from defaults | `409 draft-not-empty`, `400` |
-| `POST /draft/remix` | `{ versionId, replace? }` | copy a version into the draft; with `replace`, archive the old draft first | `409 draft-not-empty`, `404`, `400` |
-| `POST /draft/restore-archived` | `{ archivedId, replace? }` | bring an archived draft back to the bench | as remix |
-| `POST /draft/lease` | `{ part }` | take or renew a part's lease | `409 lease-held`, `409 draft-empty`, `400` |
-| `POST /draft/release` | `{ part }` | let go of your lease | `400` |
-| `POST /draft/edit` | `{ part, values, revision? }` | set some of a part's numbers; needs the lease (taken implicitly if free) | `409 lease-held`, `409 draft-empty`, `400` |
-| `POST /draft/clear` | | archive the draft, empty the bench | `409 draft-empty`, `409 lease-held` if anyone else holds a lease |
-| `POST /publish` | `{ title, slot?, exhibitId?, replace? }` | publish the draft as a new exhibit in `slot`, or as the next version of `exhibitId` | `409 draft-empty`, `409 slot-taken`, `404`, `400` |
+| `POST /stage/grab` | `{ object }` | claim a sphere (taking it from whoever held it) | `400` |
+| `POST /stage/gesture` | `{ gesture }` | add one gesture to the loop (a throw needs your claim and ends it) | `409 taken`, `400` |
+| `POST /stage/drop` | `{ object }` | let go of a sphere without throwing | `400` |
+| `POST /stage/undo` | | remove your own newest gesture from the loop | `409 nothing-to-undo` |
+| `POST /stage/clear` | | archive the loop, start a silent one | `409 stage-empty` |
+| `POST /stage/join` | `{ versionId, replace? }` | bring a version's performance to the stage; with `replace`, archive the loop first | `409 stage-busy`, `404`, `400` |
+| `POST /stage/restore-archived` | `{ archivedId, replace? }` | bring an archived loop back | as join |
+| `POST /publish` | `{ title, slot?, exhibitId?, replace? }` | leave the loop as a new exhibit in `slot`, or the next version of `exhibitId` | `409 stage-empty`, `409 slot-taken`, `404`, `400` |
 | `POST /exhibits/:id/restore` | `{ versionId }` | publish that version again as the newest | `404`, `400` |
 | `POST /exhibits/:id/display` | `{ slot, replace? }` | put a storeroom exhibit on a slot | `409 slot-taken`, `404`, `400` |
 | `POST /exhibits/:id/store` | | take it off display, into the storeroom | `409 slot-empty`, `404` |
 | `GET /readme/` | | README.md rendered with `marked` | |
-| `GET /recipes.js`, `/app.js`, `/style.css`, ... | | static files from `public/`, ES modules `no-cache` | |
+| `GET /stage.js`, `/app.js`, `/style.css`, ... | | static files from `public/`, ES modules `no-cache` | |
 
 ## Build sketch
 
@@ -359,35 +307,37 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
   `src/types.ts`.
 - **Storage: SQLite through `node:sqlite`**, one file on `/data`. The store
   is `openStore(path)` with every time-dependent function taking `now`, so
-  tests open `:memory:` with an injected clock.
-- **A fresh database file.** Skyline's tables are left alone in the old file;
-  the museum opens `museum.db` beside it (`DB_PATH` defaults to
-  `/data/museum.db` in the image, `./.data/museum.db` locally). Migrations
-  are numbered and tracked with `PRAGMA user_version`; a committed migration
-  is never edited.
-- **Tables:** `visitors`, `drafts` (one live row; archived rows keep theirs
-  with `archived_at`), `draft_credits`, `leases` (part, holder, expires_at),
-  `exhibits` (slot nullable, unique when set), `versions` (immutable, with a
-  trigger), `version_credits`.
+  tests open `:memory:` with an injected clock. Migrations are numbered and
+  tracked with `PRAGMA user_version`; a committed migration is never
+  edited.
+- **Tables:** `visitors`, `drafts` (the live loop is the one row with
+  `archived_at` null; `recipe` is `stage`, `parts` is the performance JSON),
+  `draft_credits`, `leases` (now sphere claims: part = sphere id),
+  `exhibits`, `versions` (immutable, with a trigger), `version_credits`.
 - **Page: Three.js 0.186.1** from a pinned CDN URL (import map), plain ES
-  modules in `public/`, no build step. `public/recipes.js` builds nothing 3D;
-  `public/sculpture.js` turns a recipe and numbers into a Three.js group, and
-  `public/app.js` holds the scene, the UI and the stream.
+  modules in `public/`, no build step. `public/stage.js` is the rules and
+  builds nothing 3D; `public/stageview.js` draws a performance;
+  `public/scene.js` is the room and the touch; `public/app.js` holds the
+  UI and the stream. Sound is Web Audio, synthesized, no files.
 - **Logs:** one line per event on stdout, `event key=value`, a person as
   their tag, every typed string JSON-quoted.
 
 ## Out of scope
 
 Free-roaming characters, chat, accounts and passwords, uploaded assets,
-runtime AI models, physics, VR, an infinite world, arbitrary mesh editing,
-multiple rooms, leaderboards, economies, rate limiting.
+runtime AI models, a physics library, VR, an infinite world, sliders or
+parameter panels, multiple rooms, leaderboards, economies, puzzles or
+goals, rate limiting.
 
 ## Open decisions
 
 - **What "good" means, argued with sources**: the README, 400--600 words,
   saying which claims are tested and which are judged.
-- **The lease length** (15 s) and the page's send interval (100 ms) are
-  first guesses; measure them with two browsers before the showcase.
+- **The loop length** (12 s), the gesture cap (40) and the claim (10 s) are
+  first guesses; watch two or three people play before the showcase.
+- **More sets** (glass that tints what passes behind it, a door that swaps
+  objects) once the first is fun.
+
 
 ## How to work in here
 
@@ -441,19 +391,21 @@ multiple rooms, leaderboards, economies, rate limiting.
 - **Real-time is a test, not a claim.** A spec test opens two `/events`
   streams as different visitors, edits from one, and fails unless the other
   receives the change within 1000 ms. It runs in CI against the built image.
-- **Leases, versions and migrations are unit tests over
+- **Claims, versions and migrations are unit tests over
   `openStore(":memory:")`** with an injected clock.
+- **The stage's rules are unit tests** (`spec/stage.test.ts`): bounds,
+  determinism, and every way objects set each other off, each seen to fail
+  with its rule broken. Test at a real clock time, never only at t = 0.
 - **Every access and ownership rule above has an HTTP test**, each seen to
-  fail with the rule broken: two cookies are two visitors; a lease held by
-  one refuses the other; versions never change; restore adds a version;
+  fail with the rule broken: two cookies are two visitors; a grab takes a
+  sphere and the throw that lost it is refused; undo removes only your own; versions never change; restore adds a version;
   replace archives; a full slot is never silently replaced; bad input is a
   `400`; a cross-site POST is a `403`.
-- **The shared module is held by a test.** `spec/recipes.test.ts` checks
-  every default is in range and on its step, and that `checkEdit` refuses
-  unknown keys (including `constructor`), non-numbers and out-of-range
-  values.
+- **The shared module is held by a test.** `spec/stage.test.ts` checks
+  that `checkGesture` and `checkPerformance` refuse unknown keys (including
+  `constructor`), non-numbers and out-of-range values.
 - **Spec files run in parallel against one app, and there is one shared
-  draft.** Tests that need the workbench run in one file, in sequence, and
+  stage.** Tests that need the stage run in one file, in sequence, and
   never assume it starts empty: they clear it first. Vitest 5 dropped
   `describe.sequential`; tests in one file already run in order, so the
   file's `describe`s pin `{ concurrent: false }` to keep it that way.
