@@ -196,10 +196,12 @@ function buildArches(parts, animators) {
   root.add(stack.outer);
 
   const ar = parts.arch;
-  const arch = partShell("arch", ar, top * 0.55);
+  // Wider than the stack and seated low, so each arch straddles the totem
+  // and reads from across the room rather than hiding inside the blocks.
+  const arch = partShell("arch", ar, top * 0.15);
   const arches = [];
   for (let i = 0; i < ar.count; i++) {
-    const g = new THREE.TorusGeometry(ar.span / 2, 0.07, 18, 64, Math.PI);
+    const g = new THREE.TorusGeometry(0.45 + ar.span * 0.5, 0.1, 20, 72, Math.PI);
     const m = mesh(g, finish(ar.colour, { roughness: 0.35 }));
     const holder = new THREE.Group();
     holder.rotation.y = (i / ar.count) * Math.PI;

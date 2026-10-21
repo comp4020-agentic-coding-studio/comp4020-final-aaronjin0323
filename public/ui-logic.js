@@ -184,3 +184,20 @@ export function refusalText(status, body) {
   if (status === 0) return "Couldn't reach the museum.";
   return `That didn't work (${status}).`;
 }
+
+/** The usual plinth close-up distance, for a sculpture of ordinary height. */
+export const CLOSE_UP = 5.4;
+
+/**
+ * Where a plinth close-up looks and how far back it stands, so a sculpture
+ * from `lo` to `hi` (world heights) fits with a margin. A sculpture's sliders
+ * can lift a part well above the plinth, so a fixed framing cut tall ones
+ * off. On a portrait screen the narrower horizontal view decides instead.
+ * @returns {{ focusY: number, dist: number }}
+ */
+export function frameHeight(lo, hi, fovDeg, aspect, margin = 1.25) {
+  const half = (Math.max(hi - lo, 0.5) * margin) / 2;
+  const tanV = Math.tan((fovDeg * Math.PI) / 360);
+  const tan = Math.min(tanV, tanV * aspect);
+  return { focusY: (lo + hi) / 2, dist: Math.max(CLOSE_UP, half / tan) };
+}

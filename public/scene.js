@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VISITOR_COLOURS } from "./recipes.js";
+import { frameHeight } from "./ui-logic.js";
 import { animate, buildSculpture, disposeSculpture } from "./sculpture.js";
 
 const TAU = Math.PI * 2;
@@ -353,16 +354,29 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   // camera takes the short way round
   const nearestYaw = (a) => goal.yaw + ((((a - goal.yaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
 
+  // The selected exhibit's vertical extent, from what's actually on the
+  // plinth; an empty plinth frames as an ordinary one.
+  const box = new THREE.Box3();
+  function fitSlot(slot) {
+    const holder = plinths.get(slot)?.holder;
+    box.makeEmpty();
+    if (holder && holder.children.length) box.setFromObject(holder);
+    const lo = box.isEmpty() ? PLINTH_H : Math.min(box.min.y, PLINTH_H);
+    const hi = box.isEmpty() ? PLINTH_H + 1.5 : box.max.y;
+    return frameHeight(lo, hi, camera.fov, camera.aspect);
+  }
+
   function aimAt(selected) {
     if (selected.kind === "slot") {
       const a = slotAngle(selected.slot);
       const p = slotPos(selected.slot);
-      goal.focus.set(p.x, PLINTH_H + 0.75, p.z);
       // from the centre side, a little round, with the arches and the sky
-      // behind the exhibit
+      // behind the exhibit, standing back far enough for all of it
+      const f = fitSlot(selected.slot);
+      goal.focus.set(p.x, f.focusY, p.z);
       goal.yaw = nearestYaw(a + Math.PI + 0.35);
       goal.pitch = 0.24;
-      goal.dist = 5.4;
+      goal.dist = f.dist;
     } else if (selected.kind === "bench") {
       // the whole floating floor, with sky and clouds round it, the bench
       // in the middle
@@ -480,6 +494,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   }
 
   let last = null;
+  let aimed = false;
+  let aimedShape = null;
   let override = null;
   let selected = { kind: "bench" };
   function sync() {
@@ -550,11 +566,15 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       last = state;
       selected = sel;
       override = state.draft.recipe ? draftParts : null;
-      if (changed || !last.__aimed) {
-        aimAt(sel);
-        last.__aimed = true;
-      }
       sync();
+      // after sync, so the framing measures the sculpture now on the plinth;
+      // re-aimed when the selected exhibit itself changes shape
+      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : null;
+      if (changed || !aimed || shape !== aimedShape) {
+        aimAt(sel);
+        aimed = true;
+        aimedShape = shape;
+      }
     },
     /** Draw the bench from local numbers while a slider moves. */
     setDraftOverride(parts) {

@@ -119,3 +119,23 @@ describe("benchAction and the input rules", () => {
     expect(ui.sharedSeconds(Date.parse(serverTime) - 5000 + 1000, a)).toBeCloseTo(ui.sharedSeconds(Date.parse(serverTime) + 3000 + 1000, b));
   });
 });
+
+describe("framing a plinth close-up", () => {
+  const fov = 42;
+  // the sculpture's vertical extent must sit inside the view, with a margin
+  const fits = (lo: number, hi: number, aspect: number) => {
+    const f = ui.frameHeight(lo, hi, fov, aspect);
+    const half = Math.tan(((fov / 2) * Math.PI) / 180) * f.dist;
+    return f.focusY - half < lo && f.focusY + half > hi;
+  };
+  test("a short sculpture keeps the usual close-up", () => {
+    expect(ui.frameHeight(1.2, 2.6, fov, 1.6).dist).toBe(5.4);
+  });
+  test("a tall one (a lifted halo) backs the camera off until it all fits", () => {
+    expect(fits(1.2, 6.5, 1.6)).toBe(true);
+    expect(ui.frameHeight(1.2, 6.5, fov, 1.6).dist).toBeGreaterThan(5.4);
+  });
+  test("on a portrait screen the width decides too", () => {
+    expect(fits(1.2, 3.5, 0.5)).toBe(true);
+  });
+});
