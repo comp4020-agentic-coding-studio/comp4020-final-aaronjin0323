@@ -142,3 +142,38 @@ describe("framing a plinth close-up", () => {
     expect(fits(1.2, 3.5, 0.5)).toBe(true);
   });
 });
+
+describe("clearFrame: where a fitted picture may go", () => {
+  const canvas = { x: 0, y: 0, w: 1440, h: 900 };
+  test("the desktop's side panel, header pills and plinth row are cut away", () => {
+    const covers = [
+      { x: 1028, y: 12, w: 400, h: 876 }, // the panel
+      { x: 20, y: 16, w: 267, h: 77 }, // the title
+      { x: 800, y: 16, w: 196, h: 48 }, // who's here
+      { x: 250, y: 836, w: 515, h: 48 }, // the plinth row
+    ];
+    expect(ui.clearFrame(canvas, covers)).toEqual({ x: 0, y: 93, w: 1028, h: 743 });
+  });
+  test("on a phone nothing lies over the scene, so all of it is clear", () => {
+    const stage = { x: 0, y: 60, w: 390, h: 321 };
+    const covers = [
+      { x: 0, y: 0, w: 390, h: 60 },
+      { x: 0, y: 381, w: 390, h: 56 },
+      { x: 0, y: 437, w: 390, h: 407 },
+    ];
+    expect(ui.clearFrame(stage, covers)).toEqual({ x: 0, y: 0, w: 390, h: 321 });
+  });
+});
+
+describe("viewOffsetFor: centring the camera on the clear part", () => {
+  test("a clear frame that is the whole canvas needs no offset", () => {
+    expect(ui.viewOffsetFor(800, 600, { x: 0, y: 0, w: 800, h: 600 })).toEqual({ fullW: 800, fullH: 600, offX: 0, offY: 0 });
+  });
+  test("the clear frame's centre lands on the virtual frame's centre", () => {
+    const o = ui.viewOffsetFor(1440, 900, { x: 0, y: 93, w: 1028, h: 743 });
+    expect(o.fullW / 2 - o.offX).toBeCloseTo(514);
+    expect(o.fullH / 2 - o.offY).toBeCloseTo(93 + 743 / 2);
+    expect(o.offX).toBeGreaterThanOrEqual(0);
+    expect(o.offY).toBeGreaterThanOrEqual(0);
+  });
+});

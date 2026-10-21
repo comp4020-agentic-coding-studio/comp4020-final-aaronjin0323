@@ -201,3 +201,40 @@ export function frameHeight(lo, hi, fovDeg, aspect, margin = 1.25, nearest = CLO
   const tan = Math.min(tanV, tanV * aspect);
   return { focusY: (lo + hi) / 2, dist: Math.max(nearest, half / tan) };
 }
+
+/**
+ * The part of the scene a fitted picture may use: the canvas minus whatever
+ * lies over it (the side panel, the header pills, the plinth row). Each
+ * cover that overlaps trims the side of the clear rectangle that costs the
+ * least area. Rects are `{ x, y, w, h }` in the same coordinates; the
+ * answer is relative to the canvas.
+ */
+export function clearFrame(canvas, covers) {
+  let l = canvas.x, t = canvas.y, r = canvas.x + canvas.w, b = canvas.y + canvas.h;
+  for (const c of covers) {
+    const cl = c.x, ct = c.y, cr = c.x + c.w, cb = c.y + c.h;
+    if (cr <= l || cl >= r || cb <= t || ct >= b) continue;
+    const width = r - l, height = b - t;
+    const options = [
+      { cost: (cb - t) * width, apply: () => (t = cb) },
+      { cost: (b - ct) * width, apply: () => (b = ct) },
+      { cost: (cr - l) * height, apply: () => (l = cr) },
+      { cost: (r - cl) * height, apply: () => (r = cl) },
+    ];
+    options.sort((x, y) => x.cost - y.cost)[0].apply();
+  }
+  return { x: l - canvas.x, y: t - canvas.y, w: Math.max(0, r - l), h: Math.max(0, b - t) };
+}
+
+/**
+ * A camera view offset that puts the clear rectangle's centre at the centre
+ * of the picture: the canvas becomes a window onto a larger virtual frame.
+ * Feed it to `PerspectiveCamera.setViewOffset(fullW, fullH, offX, offY, w, h)`.
+ */
+export function viewOffsetFor(w, h, clear) {
+  const cx = clear.x + clear.w / 2;
+  const cy = clear.y + clear.h / 2;
+  const fullW = 2 * Math.max(cx, w - cx);
+  const fullH = 2 * Math.max(cy, h - cy);
+  return { fullW, fullH, offX: fullW / 2 - cx, offY: fullH / 2 - cy };
+}
