@@ -1,33 +1,7 @@
-// The page's decisions, as small pure functions: when to send a slider's
-// value, what a part's lease looks like from here, which publish flow a
-// choice means, and whether the page may edit. No DOM and no fetch, so
+// The page's decisions, as small pure functions: the clock, the
+// connection, which publish flow a choice means, and the words the page
+// uses for a gesture or a performance. No DOM and no fetch, so
 // spec/ui-logic.test.ts can hold them without a browser or a server.
-
-/** The page sends a dragged slider's latest value at most this often (ms),
- * and always on release (CLAUDE.md, "The workbench"). */
-export const SEND_INTERVAL = 100;
-/** Renew a held lease this often while the slider is held (ms). The lease
- * itself is 15 s; renewing at a third of that leaves room for a slow reply. */
-export const RENEW_INTERVAL = 5000;
-/** Let go of a part this long after the last touch (ms). */
-export const RELEASE_IDLE = 1500;
-/** After an edit is sent, keep showing the local value over the server's for
- * this long (ms), so an older broadcast doesn't make the slider jump back. */
-export const LOCAL_HOLD = 800;
-
-/**
- * Whether to send a throttled edit now, or how long to wait. `lastSent` is
- * when the last edit for this part went out (or null), `final` is true on
- * release, which always sends at once.
- * @param {{ lastSent: number | null, now: number, final?: boolean, interval?: number }} o
- * @returns {{ send: true } | { send: false, wait: number }}
- */
-export function throttle({ lastSent, now, final = false, interval = SEND_INTERVAL }) {
-  if (final || lastSent === null) return { send: true };
-  const since = now - lastSent;
-  if (since >= interval) return { send: true };
-  return { send: false, wait: interval - since };
-}
 
 /**
  * The page's clock offset from the server's, from the `serverTime` of an
@@ -43,36 +17,6 @@ export function clockOffset(serverTime, receivedAt) {
 /** Shared animation time in seconds: the same on every screen. */
 export function sharedSeconds(localNow, offset) {
   return (localNow + offset) / 1000;
-}
-
-/**
- * What a part's lease looks like from this page. An expired lease is free,
- * whether or not the server has swept it (CLAUDE.md, "Leases end on the
- * clock"). `serverNow` is the server's clock as the page estimates it.
- * @param {Array<{part: string, holder: {tag: string, name: string, colour: number}, expiresAt: string, mine: boolean}>} leases
- * @param {string} part
- * @param {number} serverNow ms
- * @returns {{ kind: "free" } | { kind: "mine", expiresAt: number } | { kind: "held", holder: {tag: string, name: string, colour: number}, expiresAt: number }}
- */
-export function leaseState(leases, part, serverNow) {
-  const lease = leases.find((l) => l.part === part);
-  if (!lease) return { kind: "free" };
-  const expiresAt = Date.parse(lease.expiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt <= serverNow) return { kind: "free" };
-  if (lease.mine) return { kind: "mine", expiresAt };
-  return { kind: "held", holder: lease.holder, expiresAt };
-}
-
-/**
- * The numbers to show for a part: the server's, with any value this page is
- * still sending laid over them.
- * @param {Record<string, number>} server
- * @param {{ values: Record<string, number>, until: number } | undefined} local
- * @param {number} now local ms
- */
-export function shownValues(server, local, now) {
-  if (!local || local.until < now) return { ...server };
-  return { ...server, ...local.values };
 }
 
 /**
@@ -161,14 +105,34 @@ export function nameProblem(name) {
   return null;
 }
 
+const PAST = { throw: "thrown", pluck: "plucked", tap: "rung" };
+
+/** A gesture in at most four words, for a toast: "Undid: teal thrown". */
+export function gestureLine(g, verb) {
+  return `${verb}: ${g.object} ${PAST[g.kind] ?? "played"}`;
+}
+
+const NOUN = { bell: "Bell", ribbon: "Ribbon", chrome: "Chrome", teal: "Teal", gold: "Gold", dusk: "Dusk" };
+const MOOD = ["Panic", "Waltz", "Rodeo", "Quarrel", "Lullaby", "Fanfare", "Tantrum", "Picnic", "Shuffle", "Duet"];
+const CROWD = ["", "", " for Two", " for Three", " for Four", " for a Crowd"];
+
 /**
- * Bringing something onto the bench: a plain remix when the bench is empty,
- * otherwise only the separately labelled "Replace the workbench", which
- * archives what's there first and is confirmed.
- * @param {{ recipe: string | null }} draft
+ * A playful title suggested for a performance, from what was played most
+ * and how many played it: "Bell Panic for Three". The same loop always
+ * suggests the same title, and it's always a valid one. The visitor can
+ * change it.
+ * @param {{ set?: string, gestures: Array<{ object: string, by: string, at: number }> }} p
  */
-export function benchAction(draft) {
-  return draft.recipe === null ? { kind: "remix", replace: false } : { kind: "replace", replace: true };
+export function playfulTitle(p) {
+  const count = new Map();
+  for (const g of p.gestures) count.set(g.object, (count.get(g.object) ?? 0) + 1);
+  const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "bell";
+  const players = new Set(p.gestures.map((g) => g.by)).size;
+  // a small stable hash of the loop picks the mood
+  let h = 7;
+  for (const g of p.gestures) h = (h * 31 + Math.round(g.at * 1000) + g.object.length) % 9973;
+  const name = `${NOUN[top] ?? "Sphere"} ${MOOD[h % MOOD.length]}${CROWD[Math.min(players, CROWD.length - 1)]}`;
+  return name.slice(0, 40);
 }
 
 /** The empty slots, in order. */

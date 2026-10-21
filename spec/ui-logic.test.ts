@@ -1,57 +1,13 @@
 // The page's decisions, held without a browser or the running app: the
-// throttle, what a lease looks like, the connection, and which publish flow
-// a choice means. public/ui-logic.js is plain JS the page imports as is.
+// connection, which publish flow a choice means, the words for a gesture and
+// the title a performance suggests. public/ui-logic.js is plain JS the page
+// imports as is.
 import { describe, expect, test } from "vitest";
 // @ts-ignore -- plain JS module shared with the page
 import * as ui from "../public/ui-logic.js";
 
 const who = (name: string, colour = 0) => ({ tag: name.slice(0, 6).padEnd(6, "0"), name, colour });
 const exhibit = (id: number, title: string, versionCount = 1, slot: number | null = null) => ({ id, slot, latest: { title, n: versionCount }, versionCount });
-
-describe("throttle", () => {
-  test("the first edit and a release always send", () => {
-    expect(ui.throttle({ lastSent: null, now: 0 })).toEqual({ send: true });
-    expect(ui.throttle({ lastSent: 1000, now: 1001, final: true })).toEqual({ send: true });
-  });
-  test("within 100 ms of the last send it waits out the rest", () => {
-    expect(ui.throttle({ lastSent: 1000, now: 1030 })).toEqual({ send: false, wait: 70 });
-    expect(ui.throttle({ lastSent: 1000, now: 1099 })).toEqual({ send: false, wait: 1 });
-  });
-  test("at 100 ms or later it sends", () => {
-    expect(ui.throttle({ lastSent: 1000, now: 1100 })).toEqual({ send: true });
-    expect(ui.SEND_INTERVAL).toBe(100);
-  });
-});
-
-describe("leaseState", () => {
-  const now = Date.parse("2026-10-21T10:00:00Z");
-  const lease = (part: string, secs: number, mine: boolean, holder = who("Coral Heron", 2)) => ({ part, holder, expiresAt: new Date(now + secs * 1000).toISOString(), mine });
-  test("no lease is free", () => {
-    expect(ui.leaseState([], "ribbon", now)).toEqual({ kind: "free" });
-    expect(ui.leaseState([lease("cube", 10, false)], "ribbon", now)).toEqual({ kind: "free" });
-  });
-  test("someone else's live lease names them", () => {
-    const s = ui.leaseState([lease("ribbon", 10, false)], "ribbon", now);
-    expect(s.kind).toBe("held");
-    expect(s.kind === "held" && s.holder.name).toBe("Coral Heron");
-  });
-  test("my own lease is mine", () => {
-    expect(ui.leaseState([lease("ribbon", 10, true)], "ribbon", now).kind).toBe("mine");
-  });
-  test("an expired lease is free even if the server hasn't swept it", () => {
-    expect(ui.leaseState([lease("ribbon", 0, false)], "ribbon", now)).toEqual({ kind: "free" });
-    expect(ui.leaseState([lease("ribbon", -5, true)], "ribbon", now)).toEqual({ kind: "free" });
-  });
-});
-
-describe("shownValues", () => {
-  test("local values cover the server's only while they're fresh", () => {
-    const server = { turns: 2, twist: 1 };
-    expect(ui.shownValues(server, { values: { turns: 4 }, until: 200 }, 100)).toEqual({ turns: 4, twist: 1 });
-    expect(ui.shownValues(server, { values: { turns: 4 }, until: 200 }, 300)).toEqual(server);
-    expect(ui.shownValues(server, undefined, 0)).toEqual(server);
-  });
-});
 
 describe("connection", () => {
   test("editing waits for the first state, and a drop takes it away", () => {
@@ -100,11 +56,29 @@ describe("publishPlan", () => {
   });
 });
 
-describe("benchAction and the input rules", () => {
-  test("remix onto an empty bench, Replace onto a full one", () => {
-    expect(ui.benchAction({ recipe: null })).toEqual({ kind: "remix", replace: false });
-    expect(ui.benchAction({ recipe: "loop" })).toEqual({ kind: "replace", replace: true });
+describe("words for a performance", () => {
+  const g = (kind: string, object: string, by = "aaaaaa") => ({ kind, object, at: 1, by });
+  test("a gesture in at most four words", () => {
+    expect(ui.gestureLine(g("throw", "teal"), "Undid")).toBe("Undid: teal thrown");
+    expect(ui.gestureLine(g("pluck", "ribbon"), "Undid")).toBe("Undid: ribbon plucked");
+    expect(ui.gestureLine(g("tap", "bell"), "Undid")).toBe("Undid: bell rung");
+    for (const x of [g("throw", "chrome"), g("pluck", "ribbon"), g("tap", "bell")]) expect(ui.gestureLine(x, "Undid").split(/\s+/).length).toBeLessThanOrEqual(4);
   });
+  test("a suggested title: playful, from what was played, the same for the same loop, and a valid title", () => {
+    const bells = { set: "orbit", gestures: [g("tap", "bell"), g("tap", "bell"), g("throw", "gold")] };
+    const t = ui.playfulTitle(bells);
+    expect(t).toBe(ui.playfulTitle(JSON.parse(JSON.stringify(bells))));
+    expect(ui.titleProblem(t)).toBeNull();
+    expect(t).toMatch(/Bell/);
+    expect(ui.playfulTitle({ set: "orbit", gestures: [g("pluck", "ribbon"), g("pluck", "ribbon", "bbbbbb")] })).toMatch(/Ribbon/);
+    expect(ui.playfulTitle({ set: "orbit", gestures: [g("throw", "teal"), g("throw", "dusk")] })).toMatch(/Teal|Dusk|Sphere/);
+    // several players: the title says so
+    const two = ui.playfulTitle({ set: "orbit", gestures: [g("tap", "bell"), g("tap", "bell", "bbbbbb"), g("tap", "bell", "cccccc")] });
+    expect(two).toMatch(/Trio|Three|for Three/);
+  });
+});
+
+describe("the input rules", () => {
   test("titles are 1-40 and names 1-24 characters after trimming", () => {
     expect(ui.titleProblem("  ")).not.toBeNull();
     expect(ui.titleProblem("x".repeat(40))).toBeNull();

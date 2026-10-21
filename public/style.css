@@ -1,5 +1,5 @@
 /* Impossible Museum. Colours are tokens here; the sculpture palette itself
-   is PALETTE in recipes.js. Live text is the system stack (CLAUDE.md, "The
+   is PALETTE in stage.js. Live text is the system stack (CLAUDE.md, "The
    look"). */
 
 :root {
@@ -254,18 +254,13 @@ select {
   max-width: 100%;
   min-width: 0;
 }
-.chip .dot,
-.lease .dot {
+.chip .dot {
   flex: none;
   width: 11px;
   height: 11px;
   border-radius: 50%;
   background: var(--who);
   box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 3px var(--who);
-}
-.lease .dot {
-  background: var(--holder);
-  box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 3px var(--holder);
 }
 .chip-name {
   overflow-wrap: anywhere;
@@ -392,11 +387,10 @@ body[data-mode="explore"] .foot {
 .view-head {
   margin-bottom: 8px;
 }
-/* the bench's selection card (ADR 14): swatch, title and credits, and the
-   one door into the editor */
+/* the stage card (ADR 16): swatch, title, who's playing, and sound */
 [data-view="bench"] .view-head {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 12px;
 }
@@ -407,7 +401,7 @@ body[data-mode="explore"] .foot {
 .card-text {
   min-width: 0;
 }
-/* beside Shape it and Play the title wraps to two lines before it's cut */
+/* a long title wraps to two lines before it's cut */
 .card-text h2 {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -416,16 +410,6 @@ body[data-mode="explore"] .foot {
   overflow: hidden;
   overflow-wrap: anywhere;
   line-height: 1.15;
-}
-.shape,
-.done {
-  min-height: 44px;
-  padding: 0 18px;
-  white-space: nowrap;
-}
-[data-view="bench"][data-mode="create"] .card-thumb .thumb {
-  width: 36px;
-  height: 36px;
 }
 .eyebrow {
   margin: 0 0 2px;
@@ -532,250 +516,104 @@ select {
 }
 
 /* starters on an empty bench */
-.starters {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.starter {
-  width: 100%;
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  background: #fff;
-}
-.starter-name {
-  color: var(--teal-ink);
-}
-.starter-blurb {
-  font-weight: 400;
-  color: var(--ink-soft);
-  font-size: 0.9rem;
-}
-
-/* ------------------------------------------------------------ parts */
-
-.parts {
-  display: grid;
-  gap: 10px;
-  margin-top: 8px;
-}
-.part {
-  --holder: transparent;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
-  padding: 4px 12px 8px;
-  transition: box-shadow 160ms ease;
-}
-.part[data-lease="mine"],
-.part[data-lease="held"] {
-  box-shadow: 0 0 0 3px var(--holder);
-  border-color: transparent;
-}
-.part-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 0 !important;
-}
-.part-toggle {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: none;
-  border: none;
-  padding: 8px 0;
-  font-size: 1.02rem;
-  text-align: left;
-}
-.chev {
-  width: 9px;
-  height: 9px;
-  border-right: 2px solid var(--ink-soft);
-  border-bottom: 2px solid var(--ink-soft);
-  transform: rotate(45deg) translate(-2px, -2px);
-  transition: transform 160ms ease;
-}
-.part-toggle[aria-expanded="false"] .chev {
-  transform: rotate(-45deg);
-}
-.lease {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.82rem;
-  color: var(--ink-soft);
-}
-.part[data-lease="held"] .lease {
-  color: var(--ink);
-}
-.part[data-lease="mine"] .lease {
-  color: var(--ink);
-  font-weight: 600;
-}
-.author {
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-  margin: 0 0 6px;
-}
-.placement-h {
-  margin: 10px 0 2px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.param {
-  display: grid;
-  grid-template-columns: 6.5em 1fr 3.4em;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-}
-.param-label {
-  font-size: 0.9rem;
-}
-.param-value {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  font-size: 0.9rem;
-  color: var(--ink-soft);
-}
-input[type="range"] {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  height: 32px;
-  accent-color: var(--coral-ink);
-  cursor: pointer;
-}
-.param-colour {
-  grid-template-columns: 6.5em 1fr;
-}
-.swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.swatch {
-  position: relative;
-  width: 30px;
-  height: 30px;
-}
-.swatch input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-.swatch-face {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: var(--swatch);
-  border: 1px solid rgba(45, 38, 64, 0.3);
-  pointer-events: none;
-}
-.swatch input:checked + .swatch-face {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ink);
-}
-.swatch input:focus-visible + .swatch-face {
-  box-shadow: var(--focus);
-}
-.swatch input:disabled + .swatch-face {
-  opacity: 0.45;
-}
-
-.credits-block h3 {
-  font-size: 0.95rem;
-}
 .bench-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
+  align-items: center;
   margin-top: 14px;
 }
-
-/* Orbit (ADR 15): the pieces as rows, a glow when the ribbon has one */
-.pieces {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-.piece-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-.piece {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  border-radius: 12px;
-  background: #fff;
-  border: 2px solid var(--line);
-  transition: border-color 0.3s, box-shadow 0.3s;
-}
-.piece-ball {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  margin-right: auto;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #fff 0 12%, var(--piece) 45%, color-mix(in srgb, var(--piece), #000 30%) 100%);
-}
-.piece:not(.is-placed) .piece-ball {
-  opacity: 0.55;
-}
-.piece.is-caught {
-  border-color: var(--piece);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--piece), transparent 60%), 0 0 14px color-mix(in srgb, var(--piece), transparent 40%);
-}
-.ribbon-keys {
-  display: flex;
-  gap: 8px;
-}
-.ribbon-keys button {
-  font-weight: 700;
-}
-.fine-tune {
-  margin-top: 10px;
-}
-.fine-tune > summary {
-  cursor: pointer;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  color: var(--ink-soft);
-  font-weight: 600;
-}
-.play,
+.bench-actions .primary,
 .undo {
   min-height: 44px;
-}
-.scene[data-dragging] {
-  cursor: grabbing;
+  padding: 0 18px;
 }
 
-/* publish form */
+/* the loop: a strip with a tick for each gesture in its player's colour,
+   and a head that runs along it, so you can see when it comes round */
+.loop {
+  position: relative;
+  height: 22px;
+  margin: 12px 0 10px;
+  border-radius: 11px;
+  background: var(--ivory-lo);
+  overflow: hidden;
+}
+.loop-ticks {
+  position: absolute;
+  inset: 0;
+}
+.tick {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--who);
+}
+.loop-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+/* one button per gesture: the four spheres as balls, the ribbon, the bell */
+.gestures {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.gesture {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--ivory-hi);
+  color: var(--ink);
+  cursor: pointer;
+  /* someone else holds this sphere: a ring in their colour */
+  box-shadow: inset 0 0 0 3px var(--held, transparent);
+}
+.gesture:hover:not(:disabled) {
+  background: #fff;
+}
+.gesture:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.gesture svg {
+  width: 24px;
+  height: 24px;
+}
+.ball {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff 0 12%, var(--ball) 55%, color-mix(in srgb, var(--ball) 60%, #000) 100%);
+}
+.sound svg {
+  width: 22px;
+  height: 22px;
+}
+.sound[aria-pressed="false"] {
+  color: var(--ink-soft);
+}
+.scene[data-touching] {
+  cursor: grabbing;
+}
+.thumb.is-quiet {
+  opacity: 0.55;
+}
+.thumb.is-old {
+  background: repeating-linear-gradient(45deg, var(--ivory-lo) 0 4px, var(--ivory) 4px 8px);
+}
+
 .publish {
   margin-top: 14px;
   padding: 14px;
@@ -1191,12 +1029,6 @@ body.no-gl .scene {
     left: 50%;
     position: fixed;
   }
-  .param {
-    grid-template-columns: 5.6em 1fr 3.2em;
-  }
-  .param-colour {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1327,26 +1159,6 @@ button.icon {
   text-transform: none;
 }
 
-/* the empty bench: three swatches to start from */
-.starters {
-  grid-template-columns: repeat(3, 1fr);
-}
-.starter {
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 6px;
-  padding: 12px 6px;
-}
-.starter .thumb {
-  width: 52px;
-  height: 52px;
-}
-.starter-name {
-  font-size: 0.85rem;
-  color: var(--ink);
-}
-
 .view-head {
   display: flex;
   align-items: center;
@@ -1369,19 +1181,6 @@ button.icon {
 }
 .slot-n:empty {
   display: none;
-}
-
-/* a part's last author and holder sit beside its name */
-.author {
-  margin: 0;
-}
-.part-head .author:empty {
-  display: none;
-}
-hr.placement-h {
-  border: 0;
-  border-top: 1px dashed var(--line);
-  margin: 10px 0 4px;
 }
 
 /* history: a strip of version chips */
@@ -1488,22 +1287,3 @@ hr.placement-h {
   text-align: left;
 }
 
-/* A slider's position is its value; the number shows only while it's
-   touched, or across your own part while you hold it. Without the 3D room
-   there's nothing else to show the value, so then it always shows. The
-   number stays in the DOM, and an output is announced either way. */
-.param-value {
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.param:focus-within .param-value,
-.param:hover .param-value,
-.part[data-lease="mine"] .param-value,
-.no-gl .param-value {
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .param-value {
-    transition: none;
-  }
-}

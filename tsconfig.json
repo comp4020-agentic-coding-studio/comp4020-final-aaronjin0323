@@ -1,6 +1,6 @@
 {
   // Covers the server (src/), the spec and the scripts. The page's shared
-  // module, public/recipes.js, is plain JS with JSDoc types: `allowJs` lets
+  // module, public/stage.js, is plain JS with JSDoc types: `allowJs` lets
   // the server import it with those types, without type-checking the page.
   "compilerOptions": {
     "target": "ES2023",

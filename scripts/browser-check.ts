@@ -10,8 +10,8 @@
 // It writes screenshots to .shots/ (gitignored). Read them: a green run says
 // the behaviour works, not that the page looks right.
 //
-// It edits the shared workbench and publishes exhibits as fixture visitors,
-// so point it at a throwaway database, never production.
+// It plays on the shared stage and leaves exhibits as fixture visitors, so
+// point it at a throwaway database, never production.
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
@@ -55,21 +55,56 @@ const post = (page: Page, path: string, body: unknown = {}): Promise<{ status: n
     [path, body] as const,
   );
 
-/** Puts a Loop & Lantern on the bench, whatever was there. Clearing archives,
- * so nothing is lost; it may be refused while someone else holds a lease. */
-async function freshBench(page: Page): Promise<void> {
-  await post(page, "/draft/clear");
-  const r = await post(page, "/draft/start", { recipe: "loop" });
-  if (r.status !== 200) throw new Error(`couldn't start a draft: ${r.status} ${JSON.stringify(r.json)}`);
+/** A quiet stage, whatever was playing (starting over archives, so
+ * nothing is lost), with the stage card selected. */
+async function freshStage(page: Page): Promise<void> {
+  await post(page, "/stage/clear");
   await page.click('[data-go="bench"]');
-  await openEditor(page);
+  await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 0, null, { timeout: 3000 }).catch(() => null);
 }
 
-/** Into create mode the way a visitor goes: "Shape it" (ADR 14). */
-async function openEditor(page: Page): Promise<void> {
-  if (await page.locator("[data-shape]").isVisible()) await page.click("[data-shape]");
-  await page.waitForSelector('[data-parts] .part[data-part="ribbon"]', { state: "visible" });
+/** The stage as the scene shows it: each object on the canvas. */
+const stageOf = (page: Page) => page.evaluate(() => (document.querySelector("[data-scene]") as any).probe().stage);
+
+/** A sphere's place on the stage now, in the stage's frame. */
+const sphereAt = async (page: Page, id: string): Promise<number[]> => (await stageOf(page))?.spheres?.[id]?.pos ?? [0, 0, 0];
+
+/** Waits until a sphere has moved on this page's screen; ms taken, or -1. */
+const movedFrom = (page: Page, id: string, from: number[], ms: number, since = Date.now()): Promise<number> =>
+  page
+    .waitForFunction(
+      ([id, p0]) => {
+        const q = (document.querySelector("[data-scene]") as any).probe().stage.spheres[id as string].pos;
+        const p = p0 as number[];
+        return Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) > 0.1;
+      },
+      [id, from] as const,
+      { timeout: ms },
+    )
+    .then(
+      () => Date.now() - since,
+      () => -1,
+    );
+
+/** Drags a sphere on the canvas toward a point and lets go: a throw. */
+async function throwSphere(page: Page, id: string, to: { x: number; y: number }): Promise<void> {
+  const box = (await page.locator("[data-scene]").boundingBox())!;
+  const from = (await stageOf(page)).spheres[id].at;
+  await page.mouse.move(box.x + from.x, box.y + from.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) {
+    await page.mouse.move(box.x + from.x + ((to.x - from.x) * i) / 8, box.y + from.y + ((to.y - from.y) * i) / 8);
+    await page.waitForTimeout(16);
+  }
+  await page.mouse.up();
 }
+
+/** Waits until this page's stage has shown an event of this kind. */
+const heard = (page: Page, kind: string, ms: number): Promise<boolean> =>
+  page.waitForFunction((k) => new RegExp(`\\b${k}\\b`).test(document.querySelector("[data-scene]")!.getAttribute("data-heard") ?? ""), kind, { timeout: ms }).then(
+    () => true,
+    () => false,
+  );
 
 const twoFrames = (page: Page): Promise<unknown> => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
@@ -97,7 +132,7 @@ async function firstVisit(browser: Browser): Promise<void> {
   const box = await page.locator("[data-lede]").boundingBox();
   check(!!box && box.y + box.height < 200, "and sits at the top of the first screen", `${Math.round(box?.y ?? -1)}px`);
   const plinths = await page.locator("[data-go]").count();
-  check(plinths === 7, "the workbench and six plinths are buttons", String(plinths));
+  check(plinths === 7, "the stage and six plinths are buttons", String(plinths));
   const listingHidden = await page.$eval("[data-static]", (el) => getComputedStyle(el).display === "none");
   check(listingHidden, "the no-JS listing steps aside once the page is live");
   const you = (await page.textContent("[data-you]")) ?? "";
@@ -132,13 +167,12 @@ async function noWebGL(browser: Browser): Promise<void> {
   await page.goto(`${APP}/?v=${Date.now()}`);
   await live(page);
   check(await page.$eval("[data-scene]", (el) => getComputedStyle(el).display === "none"), "the canvas is hidden");
-  await freshBench(page);
-  const slider = page.locator("#ribbon-turns");
-  check(await slider.isEnabled(), "the sliders still work");
-  await slider.focus();
-  await page.keyboard.press("ArrowRight");
-  await page.waitForFunction(() => document.querySelector("#ribbon-turns + output")?.textContent === "3", null, { timeout: 3000 }).catch(() => null);
-  check((await page.textContent("#ribbon-turns + output")) === "3", "and the draft's numbers show");
+  await freshStage(page);
+  const bell = page.locator('[data-gesture="tap:bell"]');
+  check(await bell.isEnabled(), "the gesture buttons still work");
+  await bell.click();
+  await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 1, null, { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-loop-ticks] .tick").count()) === 1, "and the loop shows the gesture");
   await page.click('[data-go="slot:1"]');
   await page.waitForSelector("[data-history] .version", { timeout: 3000 }).catch(() => null);
   check((await page.locator("[data-history] .version").count()) > 0, "history still lists versions");
@@ -146,83 +180,102 @@ async function noWebGL(browser: Browser): Promise<void> {
   await ctx.close();
 }
 
+// Real-time play (ADR 16): A throws a sphere by dragging it, and B sees it
+// fly within a second; A's gesture shows on A's screen at once; B grabs
+// what A holds and A's throw is refused; B rings the bell from the
+// keyboard and A sees it; the loop credits both.
 async function realtime(browser: Browser): Promise<void> {
-  console.log("\n— real-time: two people, two browsers —");
-  const a = await visitor(browser);
-  const b = await visitor(browser);
-  await freshBench(a);
+  console.log("\n— real-time: two people play the stage together —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
   await b.click('[data-go="bench"]');
-  await openEditor(b);
-  const before = (await b.textContent("#spheres-count + output")) ?? "";
-  // open the part, then move its slider by keyboard: a real input event
-  await a.click('[data-toggle="spheres"]');
-  await a.focus("#spheres-count");
-  const started = Date.now();
-  await a.keyboard.press("ArrowRight");
-  const want = String(Number(before) + 1);
-  await b.waitForFunction((w) => document.querySelector("#spheres-count + output")?.textContent === w, want, { timeout: 3000 }).catch(() => null);
-  const elapsed = Date.now() - started;
-  const seen = (await b.textContent("#spheres-count + output")) ?? "";
-  check(seen === want, "B sees A's edit without reloading", `${before} → ${seen}`);
-  check(elapsed < 1000, "within about a second", `${elapsed} ms`);
-
-  // B sees the part as A's, with A's name, and can't move it
-  await b.click('[data-toggle="spheres"]');
-  await b.waitForFunction(() => document.querySelector('.part[data-part="spheres"]')?.getAttribute("data-lease") === "held", null, { timeout: 3000 }).catch(() => null);
-  const lease = await b.$eval('.part[data-part="spheres"]', (el) => ({ state: el.getAttribute("data-lease"), text: el.querySelector("[data-lease-text]")?.textContent ?? "" }));
+  await a.waitForTimeout(800);
+  // A throws teal at the ribbon by dragging it
+  const tealA = await sphereAt(a, "teal");
+  const tealB = await sphereAt(b, "teal");
+  await throwSphere(a, "teal", (await stageOf(a)).ribbon);
+  const sent = Date.now();
+  const mine = await movedFrom(a, "teal", tealA, 600, sent);
+  check(mine >= 0 && mine < 250, "A's throw plays on A's screen at once", `${mine} ms after letting go`);
+  const seen = await movedFrom(b, "teal", tealB, 3000, sent);
+  check(seen >= 0 && seen < 1000, "B sees A's throw within about a second, without reloading", `${seen} ms`);
+  // grabbing takes it: A holds gold, B takes it, and A's throw is refused
+  const box = (await a.locator("[data-scene]").boundingBox())!;
+  const gold = (await stageOf(a)).spheres.gold.at;
+  await a.mouse.move(box.x + gold.x, box.y + gold.y);
+  await a.mouse.down();
+  await a.mouse.move(box.x + gold.x + 12, box.y + gold.y - 12, { steps: 3 });
+  await b.waitForFunction(() => document.querySelector('[data-gesture="throw:gold"]')?.getAttribute("aria-label")?.startsWith("Take"), null, { timeout: 3000 }).catch(() => null);
   const aName = ((await a.textContent("[data-you]")) ?? "").trim();
-  check(lease.state === "held" && lease.text.includes(aName), "B sees who holds the part", lease.text);
-  check(await b.locator("#spheres-count").isDisabled(), "and its controls are disabled for B");
-  check(await b.locator("#ribbon-turns").isEnabled(), "while the other parts stay free");
-  check((await a.getAttribute('.part[data-part="spheres"]', "data-lease")) === "mine", "A sees it as theirs");
-  await b.screenshot({ path: ".shots/lease-held.png" });
-  await a.screenshot({ path: ".shots/lease-mine.png" });
-
-  // A's presence is in B's here-now strip
+  const offer = (await b.getAttribute('[data-gesture="throw:gold"]', "aria-label")) ?? "";
+  check(offer.includes(aName), "B sees that A holds the gold sphere, and can take it", offer);
+  await b.click('[data-gesture="throw:gold"]');
+  await b.waitForTimeout(300);
+  await a.mouse.move(box.x + gold.x + 60, box.y + gold.y - 60, { steps: 3 });
+  await a.mouse.up();
+  await a.waitForFunction(() => !(document.querySelector("[data-toast]") as HTMLElement).hidden, null, { timeout: 3000 }).catch(() => null);
+  const toast = (await a.textContent("[data-toast]")) ?? "";
+  check(/has it|Pick it up/.test(toast), "A's throw after B took it is refused, saying who has it", toast);
+  // B rings the bell from the keyboard; A sees it ring
+  await b.focus('[data-gesture="tap:bell"]');
+  await b.keyboard.press("Enter");
+  check(await heard(a, "ring", 3000), "A sees the bell B rang, on A's screen");
+  // both are in the loop, each in their colour
+  await a.waitForFunction(() => document.querySelectorAll("[data-bench-credits] li").length >= 2, null, { timeout: 3000 }).catch(() => null);
+  const credits = await a.$$eval("[data-bench-credits] [aria-label]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+  check(credits.length >= 2, "the loop credits both players", credits.join(" | "));
   const here = await b.$$eval("[data-here] [aria-label]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
   check(here.some((t) => t.includes(aName)), "B's here-now strip lists A", here.join(" | "));
-
-  // A leaves: B sees the part free again at once
+  await a.screenshot({ path: ".shots/play-a.png" });
+  await b.screenshot({ path: ".shots/play-b.png" });
   await a.context().close();
-  await b.waitForFunction(() => document.querySelector('.part[data-part="spheres"]')?.getAttribute("data-lease") === "free", null, { timeout: 3000 }).catch(() => null);
-  check((await b.getAttribute('.part[data-part="spheres"]', "data-lease")) === "free", "when A leaves, the part is free for B");
   await b.context().close();
 }
 
-async function dragging(browser: Browser): Promise<void> {
-  console.log("\n— dragging a slider: draw every frame, send at most every 100 ms —");
-  const page = await visitor(browser);
-  await freshBench(page);
-  const sent: number[] = [];
-  page.on("request", (r) => {
-    if (r.url().endsWith("/draft/edit")) sent.push(Date.now());
-  });
-  const box = (await page.locator("#ribbon-radius").boundingBox())!;
-  await page.mouse.move(box.x + 4, box.y + box.height / 2);
-  await page.mouse.down();
-  const startedAt = Date.now();
-  for (let i = 0; i <= 40; i++) {
-    await page.mouse.move(box.x + 4 + (i / 40) * (box.width - 8), box.y + box.height / 2);
-    await page.waitForTimeout(15);
-  }
-  const dragMs = Date.now() - startedAt;
-  await page.mouse.up();
-  await page.waitForTimeout(400);
-  const gaps = sent.slice(1).map((t, i) => t - sent[i]);
-  // the release send may follow a throttled one closely; every other gap is ≥ ~100 ms
-  const tooClose = gaps.slice(0, -1).filter((g) => g < 90);
-  check(sent.length >= 2 && sent.length <= Math.ceil(dragMs / 100) + 2, "a drag sends a handful of edits, not one per frame", `${sent.length} sends over ${dragMs} ms`);
-  check(tooClose.length === 0, "none closer than 100 ms apart while dragging", gaps.join(","));
-  const final = (await page.textContent("#ribbon-radius + output")) ?? "";
-  check(final === "1.6", "the final value is the one on release", final);
-  await page.context().close();
+// The objects set each other off, on screen: a sphere thrown through the
+// ribbon is caught, another visitor's pluck flings it off, and Undo takes
+// back only your own gesture.
+async function chain(browser: Browser): Promise<void> {
+  console.log("\n— cause and effect: the ribbon catches, a pluck throws off —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
+  await b.click('[data-go="bench"]');
+  await a.waitForTimeout(600);
+  // thrown straight through the ribbon, a moment from now in the loop
+  const now = (await stageOf(a)).moment as number;
+  await post(a, "/stage/grab", { object: "chrome" });
+  const at = Number(((now + 0.4) % 12).toFixed(3));
+  await post(a, "/stage/gesture", { gesture: { kind: "throw", object: "chrome", at, from: [0.62, 0.95, 0], v: [0.9, 0, 0] } });
+  check(await heard(a, "catch", 3000), "a sphere thrown through the ribbon is caught, with a flash and a sound");
+  // B plucks the ribbon while chrome rides it: it's flung off on A's screen
+  await a.waitForTimeout(400);
+  await b.click('[data-gesture="pluck:ribbon"]');
+  check(await heard(a, "fling", 4000), "another visitor's pluck flings it off, on the first visitor's screen");
+  // Undo on A takes back A's throw, never B's pluck
+  await a.click("[data-undo]");
+  await a.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 1, null, { timeout: 3000 }).catch(() => null);
+  const left = await a.locator("[data-loop-ticks] .tick").count();
+  check(left === 1, "Undo takes back your own gesture and leaves the other visitor's", `${left} left`);
+  await a.screenshot({ path: ".shots/chain.png" });
+  await a.context().close();
+  await b.context().close();
 }
 
 async function publishing(browser: Browser): Promise<void> {
-  console.log("\n— publishing, history, restore, storeroom —");
+  console.log("\n— leaving it, history, restore, joining in —");
   const page = await visitor(browser);
-  await freshBench(page);
+  await freshStage(page);
+  check(await page.locator("[data-publish-open]").isDisabled(), "a quiet stage has nothing to leave");
+  await page.click('[data-gesture="tap:bell"]');
+  await page.click('[data-gesture="pluck:ribbon"]');
+  await page.waitForFunction(() => !(document.querySelector("[data-publish-open]") as HTMLButtonElement).disabled, null, { timeout: 3000 }).catch(() => null);
   await page.click("[data-publish-open]");
+  const suggested = await page.inputValue("#publish-title");
+  check(suggested.length > 0 && suggested.length <= 40, "Leave it suggests a playful title", suggested);
   const title = `Check ${Date.now() % 100000}`;
   await page.fill("#publish-title", title);
   // a full slot asks first, naming what moves to the storeroom
@@ -234,58 +287,42 @@ async function publishing(browser: Browser): Promise<void> {
     await page.click('[data-publish] button[type="submit"]');
     const asked = (await page.textContent("[data-ask-text]")) ?? "";
     check(/moves to the storeroom/.test(asked) && (await page.locator("[data-ask]").isVisible()), "and asks before moving it", asked);
-    await page.screenshot({ path: ".shots/publish-confirm.png" });
     await page.click('[data-ask] button[value="no"]');
   }
-  // publish as a new version of slot 1's exhibit: no confirm needed
-  const version = page.locator('input[name="target"][data-group="version"]').first();
-  await version.check();
+  await page.locator('input[name="target"][data-group="version"]').first().check();
   await page.screenshot({ path: ".shots/publish-form.png" });
-  const plan = (await page.textContent("[data-plan]")) ?? "";
-  check(/^Adds version \d+ to ".+"/.test(plan), "adding a version says which", plan);
   await page.click('[data-publish] button[type="submit"]');
   await page.waitForSelector('[data-view="exhibit"]:not([hidden]) [data-history] .version', { timeout: 3000 }).catch(() => null);
   const heading = (await page.textContent("[data-ex-title]")) ?? "";
-  check(heading === title, "publishing shows the exhibit with its new title", heading);
+  check(heading === title, "leaving it shows the exhibit with its new title", heading);
   const versions = await page.locator("[data-history] .version").count();
   check(versions >= 2, "its history lists every version", String(versions));
-  // restore the oldest as a new version
-  const n0 = versions;
   await page.locator("[data-history] .version-chip").last().click();
-  const restore = page.locator('[data-history] button[aria-label^="Restore as version"]');
-  await restore.click();
-  await page.waitForFunction((n) => document.querySelectorAll("[data-history] .version").length === n + 1, n0, { timeout: 3000 }).catch(() => null);
-  check((await page.locator("[data-history] .version").count()) === n0 + 1, "restore adds a version rather than changing one");
-  const top = (await page.locator("[data-history] .version-chip").first().getAttribute("aria-label")) ?? "";
-  check(/restored from version 1/.test(top), "and says where it came from", top.slice(0, 90));
+  await page.locator('[data-history] button[aria-label^="Restore as version"]').click();
+  await page.waitForFunction((n) => document.querySelectorAll("[data-history] .version").length === n + 1, versions, { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-history] .version").count()) === versions + 1, "restore adds a version rather than changing one");
   await page.screenshot({ path: ".shots/history.png" });
-
-  // remix onto a full bench is only "Replace the workbench", confirmed
-  check(await page.locator("[data-ex-remix]").isHidden(), "with a full bench, plain Remix isn't offered");
-  check(await page.locator("[data-ex-replace]").isVisible(), "Replace the workbench is, separately labelled");
-  // The state carries only the latest archived drafts, so after many runs
-  // the count stays at its cap; look for the newest entry changing instead.
+  // Join in, over a loop someone's playing, asks and archives it
   const newest = async () => (await page.locator("[data-archive] .shelf-item").first().textContent().catch(() => "")) ?? "";
   const archivedBefore = await newest();
-  await page.click("[data-ex-replace]");
+  await page.click("[data-ex-join]");
   const asked = (await page.textContent("[data-ask-text]")) ?? "";
-  check(/Archived drafts/.test(asked), "and asks first, saying the bench is archived", asked);
+  check(/Archived loops/.test(asked), "Join in over someone's playing asks first, saying it's archived", asked);
   await page.click("[data-ask-yes]");
   await page.waitForFunction((t) => (document.querySelector("[data-archive] .shelf-item")?.textContent ?? "") !== t, archivedBefore, { timeout: 3000 }).catch(() => null);
-  const archivedTop = await newest();
-  check(archivedTop !== archivedBefore && /replaced/.test(archivedTop), "the old bench is in Archived drafts", archivedTop.replace(/\s+/g, " ").slice(0, 60));
+  check((await newest()) !== archivedBefore, "the loop that was playing is in Archived loops");
+  check((await page.getAttribute('[data-go="bench"]', "aria-pressed")) === "true", "and the performance is on the stage to play along with");
   await page.context().close();
 }
 
 async function archive(browser: Browser): Promise<void> {
-  console.log("\n— every archived draft stays reachable —");
+  console.log("\n— every archived loop stays reachable —");
   const page = await visitor(browser);
-  // archive enough drafts that the state's newest 12 can't hold them all
-  for (let i = 0; i < 14; i++) {
-    await post(page, "/draft/clear");
-    await post(page, "/draft/start", { recipe: "bloom" });
+  // archive enough loops that the state's newest 12 can't hold them all
+  for (let i = 0; i < 15; i++) {
+    await post(page, "/stage/gesture", { gesture: { kind: "tap", object: "bell", at: i * 0.5 } });
+    await post(page, "/stage/clear");
   }
-  await post(page, "/draft/clear");
   await page.waitForFunction(() => Number(document.querySelector("[data-archive-count]")?.textContent) >= 15, null, { timeout: 5000 });
   const total = Number(await page.textContent("[data-archive-count]"));
   await page.click("[data-archive-box] > summary");
@@ -306,7 +343,7 @@ async function archive(browser: Browser): Promise<void> {
 async function disconnect(browser: Browser): Promise<void> {
   console.log("\n— disconnected: look, don't edit —");
   const page = await visitor(browser);
-  await freshBench(page);
+  await freshStage(page);
   await page.context().setOffline(true);
   // EventSource notices a dead network on its own; kick it by closing the stream
   await page.evaluate(() => window.dispatchEvent(new Event("offline")));
@@ -315,18 +352,18 @@ async function disconnect(browser: Browser): Promise<void> {
   check(/Reconnecting/.test(status) && (await page.locator("[data-status]").isVisible()), "it says it's reconnecting", status);
   const enabled = await page.$$eval("[data-edit]", (els) => els.filter((e) => !(e as HTMLButtonElement).disabled && (e as HTMLElement).offsetParent !== null).length);
   check(enabled === 0, "every control is disabled", `${enabled} still enabled`);
-  check((await page.locator('[data-parts] .part').count()) > 0, "and the view stays");
+  check(await page.locator('[data-view="bench"]').isVisible(), "and the view stays");
   await page.screenshot({ path: ".shots/disconnected.png" });
   await page.context().setOffline(false);
   await live(page).catch(() => null);
-  check(await page.locator("#ribbon-turns").isEnabled(), "editing comes back after the first state of the new connection");
+  check(await page.locator('[data-gesture="tap:bell"]').isEnabled(), "play comes back after the first state of the new connection");
   await page.context().close();
 }
 
 async function keyboard(browser: Browser): Promise<void> {
   console.log("\n— keyboard only —");
   const page = await visitor(browser);
-  await freshBench(page);
+  await freshStage(page);
   await page.focus("body");
   const reached = new Set<string>();
   for (let i = 0; i < 80; i++) {
@@ -334,12 +371,13 @@ async function keyboard(browser: Browser): Promise<void> {
     const what = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
       if (!el) return "";
-      return el.dataset.go ? `go:${el.dataset.go}` : el.id || el.dataset.scene !== undefined ? el.id || "scene" : el.tagName;
+      return el.dataset.go ? `go:${el.dataset.go}` : el.dataset.gesture ? `gesture:${el.dataset.gesture}` : el.id || el.dataset.scene !== undefined ? el.id || "scene" : el.tagName;
     });
     reached.add(what);
   }
   check(reached.has("go:slot:1") && reached.has("go:bench"), "plinth buttons are in tab order");
-  check(reached.has("ribbon-turns") || [...reached].some((r) => r.startsWith("ribbon-")), "the sliders are in tab order");
+  const gestures = [...reached].filter((r) => r.startsWith("gesture:"));
+  check(gestures.length === 6, "every gesture is a button in tab order", gestures.join(", "));
   check(reached.has("scene"), "the canvas takes focus");
   // arrow keys on the canvas orbit the camera, and don't scroll the page
   await page.focus("[data-scene]");
@@ -355,17 +393,18 @@ async function keyboard(browser: Browser): Promise<void> {
   await page.focus('[data-go="slot:2"]');
   await page.keyboard.press("Enter");
   check((await page.getAttribute('[data-go="slot:2"]', "aria-pressed")) === "true", "Enter on a plinth selects it");
-  // a swatch by keyboard
+  // a gesture by keyboard: Enter on the bell adds it to the loop
   await page.focus('[data-go="bench"]');
   await page.keyboard.press("Enter");
-  await page.focus("[data-shape]");
+  await page.focus('[data-gesture="tap:bell"]');
   await page.keyboard.press("Enter");
-  const swatch = page.locator('input[type="radio"][data-part="ribbon"][data-key="colour"]').first();
-  await swatch.focus();
-  await page.keyboard.press("ArrowRight");
-  await page.waitForTimeout(400);
-  const checked = await page.$eval('input[type="radio"][data-part="ribbon"][data-key="colour"]:checked', (e) => (e as HTMLInputElement).value).catch(() => "");
-  check(checked === "1", "arrow keys pick a colour", checked);
+  await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length >= 1, null, { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-loop-ticks] .tick").count()) >= 1, "Enter on a gesture button plays it");
+  // and a throw from the keyboard: grabbed and thrown in one press
+  await page.focus('[data-gesture="throw:teal"]');
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length >= 2, null, { timeout: 3000 }).catch(() => null);
+  check((await page.locator("[data-loop-ticks] .tick").count()) >= 2, "a sphere can be thrown from the keyboard");
   await page.context().close();
 }
 
@@ -394,8 +433,9 @@ async function viewports(browser: Browser): Promise<void> {
       q.addEventListener("change", (e) => seen.push(e.matches));
       Object.assign(window, { touchSeen: seen });
     });
-    // with a sculpture on the bench and a part open
-    await freshBench(page);
+    // with something playing on the stage
+    await freshStage(page);
+    await page.click('[data-gesture="tap:bell"]');
     await page.waitForTimeout(800);
     const sw = await page.evaluate(() => document.documentElement.scrollWidth);
     check(sw === width, `${name}: no sideways scroll`, `${sw}px`);
@@ -404,13 +444,13 @@ async function viewports(browser: Browser): Promise<void> {
       await wholePage(page, `.shots/${name}-whole.png`);
       const seen = await page.evaluate(() => (window as unknown as { touchSeen: boolean[] }).touchSeen);
       check(seen.length > 0 && seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
-      // the slider and the sculpture it changes: where they land
-      const slider = await page.locator("#ribbon-turns").boundingBox();
-      check(!!slider && slider.width >= 150, "phone: sliders are wide enough to drag", `${Math.round(slider?.width ?? 0)}px`);
+      // every gesture button is a comfortable thumb's width
+      const narrow = await page.$$eval("[data-gesture]", (els) => els.filter((e) => e.getBoundingClientRect().width < 44).length);
+      check(narrow === 0, "phone: every gesture button is at least 44px wide", `${narrow} narrower`);
       // the row shows colours and numbers; each button names its exhibit
       // in full for screen readers and on hover (ADR 13)
       const named = await page.$$eval("[data-go]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
-      check(named.length === 7 && named.every((n) => /^(Workbench|Plinth \d): .+/.test(n)), "phone: every plinth button names its exhibit", named.join(" | "));
+      check(named.length === 7 && named.every((n) => /^(The stage|Plinth \d): .+/.test(n)), "phone: every plinth button names its exhibit", named.join(" | "));
       const small = await page.$$eval("button:not([hidden])", (els) => els.filter((e) => (e as HTMLElement).offsetParent && e.getBoundingClientRect().height < 32).map((e) => e.textContent?.trim()));
       check(small.length === 0, "phone: every visible button is a comfortable tap", small.join(", "));
     } else {
@@ -511,12 +551,9 @@ async function words(browser: Browser): Promise<void> {
   console.log("\n— words on the first screen (ADR 13) —");
   for (const [name, opts, budget] of [["desktop", DESKTOP, 40], ["phone", PHONE, 30]] as const) {
     const page = await visitor(browser, opts);
-    // the bench card, a plinth, and the bench editor once it's opened
-    for (const sel of ["bench", "slot:1", "create"]) {
-      if (sel === "create") {
-        await page.click('[data-go="bench"]');
-        await page.click("[data-shape]");
-      } else await page.click(`[data-go="${sel}"]`);
+    // the stage card and a plinth
+    for (const sel of ["bench", "slot:1"]) {
+      await page.click(`[data-go="${sel}"]`);
       await page.waitForTimeout(800);
       const seen = await page.evaluate(() => {
         const out: string[] = [];
@@ -544,12 +581,11 @@ async function words(browser: Browser): Promise<void> {
 // is worked (CLAUDE.md, "Phone and keyboard"): the scene is pinned above a
 // panel that scrolls on its own, and the page never scrolls.
 async function phoneEdit(browser: Browser): Promise<void> {
-  console.log("\n— phone: the sculpture stays in sight while you edit —");
+  console.log("\n— phone: the stage stays in sight while you play —");
   const page = await visitor(browser, PHONE);
-  await freshBench(page);
-  // open every part, so every control is reachable
-  for (const t of await page.locator("[data-toggle]").all()) if ((await t.getAttribute("aria-expanded")) === "false") await t.click();
-  const controls = await page.locator('[data-view="bench"] input[data-part], [data-publish-open], [data-clear]').all();
+  await freshStage(page);
+  await page.click('[data-gesture="tap:bell"]');
+  const controls = await page.locator('[data-view="bench"] button').filter({ visible: true }).all();
   const misses: string[] = [];
   for (const c of controls) {
     await c.scrollIntoViewIfNeeded();
@@ -560,8 +596,7 @@ async function phoneEdit(browser: Browser): Promise<void> {
       const vw = innerWidth;
       const scene = document.querySelector("[data-scene]")!.getBoundingClientRect();
       const box = (el as Element).getBoundingClientRect();
-      // a radio swatch is visually its label
-      const shown = (el as HTMLInputElement).type === "radio" ? (el as Element).closest("label")!.getBoundingClientRect() : box;
+      const shown = box;
       // the sculpture itself, not just its canvas: inside the uncovered
       // scene, unblocked, and big enough to see a change
       const canvas = document.querySelector("[data-scene]") as any;
@@ -578,7 +613,7 @@ async function phoneEdit(browser: Browser): Promise<void> {
     }, await c.elementHandle());
     if (!r.sceneIn || !r.controlIn || !r.sculptureIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.sculptureIn ? "" : " sculpture-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
   }
-  check(controls.length >= 30 && misses.length === 0, "every bench control is worked with the sculpture on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
+  check(controls.length >= 9 && misses.length === 0, "every stage control is worked with the stage on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
   // scrolling the panel, for longer than the idle drift waits, leaves the
   // camera where it was (with motion on: reduced motion stops the drift anyway)
   const yaw = async () => Number(await page.locator("[data-scene]").getAttribute("data-yaw"));
@@ -599,17 +634,15 @@ async function phoneEdit(browser: Browser): Promise<void> {
   const yawAfter = await yaw();
   await page.emulateMedia({ reducedMotion: "reduce" });
   check(Number.isFinite(yawBefore) && scrolled && Math.abs(yawAfter - yawBefore) < 0.005, "scrolling the controls never turns the scene", `yaw ${yawBefore} → ${yawAfter}`);
-  // and a slider's change shows in the scene while it's on screen: the
-  // canvas pixels differ before and after moving the last part's Scale
-  const scale = page.locator('[data-view="bench"] input[data-key="scale"]').last();
-  await scale.scrollIntoViewIfNeeded();
-  const sceneBox = (await page.locator("[data-scene]").boundingBox())!;
-  const before = await page.screenshot({ clip: sceneBox });
-  await scale.focus();
-  for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
-  await page.waitForTimeout(400);
-  const after = await page.screenshot({ clip: sceneBox });
-  check(!before.equals(after), "and the sculpture changes in view as a slider moves");
+  // and a gesture's effect shows in the scene while its button is on screen
+  const ring = page.locator('[data-gesture="throw:gold"]');
+  await ring.scrollIntoViewIfNeeded();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const before = await sphereAt(page, "gold");
+  await ring.click();
+  const moved = await page.waitForFunction((p0) => { const q = (document.querySelector("[data-scene]") as any).probe().stage.spheres.gold.pos; return Math.hypot(q[0] - p0[0], q[1] - p0[1], q[2] - p0[2]) > 0.1; }, before, { timeout: 3000 }).then(() => true, () => false);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  check(moved, "and a thrown sphere flies in view as its button is pressed");
   await page.screenshot({ path: ".shots/phone-edit.png" });
   await page.context().close();
 }
@@ -632,9 +665,6 @@ async function names(browser: Browser): Promise<void> {
 // scene the panel doesn't cover (CLAUDE.md, "The opening view").
 async function opening(browser: Browser): Promise<void> {
   console.log("\n— the opening view —");
-  const setup = await visitor(browser);
-  await freshBench(setup);
-  await setup.context().close();
   for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
     const page = await visitor(browser, opts);
     await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
@@ -646,116 +676,10 @@ async function opening(browser: Browser): Promise<void> {
     const area = (p.box.w * p.box.h) / (p.view.w * p.view.h);
     const cx = (p.box.x + p.box.w / 2 - p.view.x) / p.view.w;
     const cy = (p.box.y + p.box.h / 2 - p.view.y) / p.view.h;
-    check(area >= 0.25 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the bench sculpture is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
+    check(area >= 0.25 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the stage is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
     await page.screenshot({ path: `.shots/opening-${label}.png` });
     await page.context().close();
   }
-}
-
-// Orbit (CLAUDE.md, "Orbit"; ADR 15): Play starts one; dragging a sphere
-// from the shelf onto the ribbon places it and the ribbon catches it; a
-// second visitor reshaping the ribbon moves that sphere on the first
-// visitor's screen; Undo puts the last edit back; the keyboard does what a
-// drag does; sliders, history and drawers are out of sight.
-async function orbit(browser: Browser): Promise<void> {
-  console.log("\n— Orbit: pieces that affect each other —");
-  // A moves as most visitors do, so spheres ride the real shared clock
-  // (reduced motion draws at t = 0, which once hid a sphere landing astray)
-  const a = await visitor(browser, { ...DESKTOP, reducedMotion: "no-preference" });
-  const b = await visitor(browser);
-  const probe = (p: Page) => p.evaluate(() => (document.querySelector("[data-scene]") as any).probe().orbit);
-  // from something else on the bench, so Play is offered and asks first
-  await post(a, "/draft/clear");
-  await post(a, "/draft/start", { recipe: "loop" });
-  await a.waitForSelector("[data-play]:not([hidden])", { timeout: 3000 }).catch(() => null);
-  // A starts it, by Play
-  await a.click("[data-play]", { timeout: 1500 }).catch(() => null);
-  await a.click("[data-ask-yes]", { timeout: 2000 }).catch(() => null);
-  const started = await a.waitForFunction(() => document.body.dataset.recipe === "orbit" && document.body.dataset.mode === "create" && !document.querySelector("[data-pieces]")!.hasAttribute("hidden"), null, { timeout: 4000 }).then(() => true, () => false);
-  check(started, "Play starts an Orbit, in the editor, with its pieces");
-  if (!started) {
-    await a.context().close();
-    await b.context().close();
-    return;
-  }
-  // the main experience: no slider, no history, no drawer in sight
-  const sliders = await a.locator('[data-view="bench"] input[type=range]').filter({ visible: true }).count();
-  const drawers = await a.locator("[data-drawers]").isVisible();
-  const history = await a.locator("[data-history], .history").filter({ visible: true }).count();
-  check(sliders === 0 && !drawers && history === 0, "sliders, history and drawers are out of sight", `${sliders} sliders, drawers ${drawers}, history ${history}`);
-  check(await a.locator("[data-undo]").isVisible() && await a.locator("[data-publish-open]").isVisible(), "Undo and Exhibit are there");
-  await a.waitForTimeout(1200);
-  // drag the chrome sphere from the shelf onto the ribbon
-  const o0 = await probe(a);
-  const box = (await a.locator("[data-scene]").boundingBox())!;
-  const from = o0?.shelf?.chrome;
-  const to = o0?.ribbon;
-  if (from && to) {
-    await a.mouse.move(box.x + from.x, box.y + from.y);
-    await a.mouse.down();
-    for (let i = 1; i <= 12; i++) await a.mouse.move(box.x + from.x + ((to.x - from.x) * i) / 12, box.y + from.y + ((to.y - from.y) * i) / 12);
-    const glowing = await a.locator("[data-scene]").getAttribute("data-catches");
-    await a.mouse.up();
-    check(glowing === "true", "a sphere dragged over the ribbon glows before it's dropped", `catches ${glowing}`);
-  } else check(false, "the shelf and ribbon are on screen to drag between", JSON.stringify(o0));
-  const placed = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome?.caught === true, null, { timeout: 3000 }).then(() => true, () => false);
-  const row = await a.locator('[data-piece-row="chrome"]').getAttribute("data-caught").catch(() => null);
-  check(placed, "dropped on the ribbon, the sphere is placed and caught", `row says caught ${row}`);
-  // and it lands under the pointer that let it go (it rides on slowly, so
-  // read it at once; a sphere put back by the clock lands anywhere on the loop)
-  if (placed && to) {
-    const at = (await probe(a))?.spheres?.chrome?.at;
-    const off = at ? Math.hypot(at.x - to.x, at.y - to.y) : Infinity;
-    check(off < 40, "the sphere lands where it was dropped", `${Math.round(off)}px from the pointer`);
-  }
-  // B, a different visitor, reshapes the ribbon; A's sphere moves on A's screen
-  await b.click("[data-shape]").catch(() => null);
-  await b.waitForSelector("[data-pieces]:not([hidden])", { timeout: 3000 }).catch(() => null);
-  const posBefore = await a.evaluate(() => (document.querySelector("[data-scene]") as any).probe().orbit.spheres.chrome.world);
-  const t0 = Date.now();
-  await b.click('[data-ribbon="turns:1"]');
-  const moved = await a
-    .waitForFunction(
-      (before) => {
-        const w = (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome?.world;
-        return w && Math.hypot(w[0] - before[0], w[1] - before[1], w[2] - before[2]) > 0.05;
-      },
-      posBefore,
-      { timeout: 2000 },
-    )
-    .then(() => true, () => false);
-  const turnsA = await a.evaluate(() => (document.querySelector('[data-view="bench"] input[data-part="ribbon"][data-key="turns"]') as HTMLInputElement)?.value);
-  check(moved, "another visitor reshaping the ribbon moves your sphere on your screen", `${Date.now() - t0} ms, A sees loops ${turnsA}`);
-  // Undo, on A: A's last edit was the drop, so the sphere goes back to the shelf
-  await a.click("[data-undo]");
-  const undone = await a.waitForFunction(() => !(document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.chrome, null, { timeout: 3000 }).then(() => true, () => false);
-  const turnsAfter = await a.evaluate(() => (document.querySelector('[data-view="bench"] input[data-part="ribbon"][data-key="turns"]') as HTMLInputElement)?.value);
-  check(undone && turnsAfter === turnsA, "Undo takes back your own last change, and leaves the other visitor's", `sphere back ${undone}, loops ${turnsA} → ${turnsAfter}`);
-  // the keyboard does what a drag does
-  await a.locator('[data-piece="teal:place"]').focus();
-  await a.keyboard.press("Enter");
-  const keyed = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().orbit?.spheres?.teal?.caught === true, null, { timeout: 3000 }).then(() => true, () => false);
-  check(keyed, "the keyboard places a sphere on the ribbon too");
-  await a.screenshot({ path: ".shots/orbit-desktop.png" });
-  // and it keeps: Exhibit is the ordinary publish, with both visitors credited
-  const credits = await a.locator("[data-bench-credits] li").count();
-  check(credits >= 2, "both visitors are credited on the draft", `${credits} contributors`);
-  await a.context().close();
-  await b.context().close();
-  // the phone, in the editor: pieces and the sculpture both in view
-  const ph = await visitor(browser, PHONE);
-  await ph.click("[data-shape]").catch(() => null);
-  await ph.waitForSelector("[data-pieces]:not([hidden])", { timeout: 3000 }).catch(() => null);
-  await ph.waitForTimeout(1200);
-  const pr = await ph.evaluate(() => {
-    const c = document.querySelector("[data-scene]") as any;
-    const p = c.probe();
-    const pieces = document.querySelector("[data-pieces]")!.getBoundingClientRect();
-    return { box: p.box, view: p.view, piecesIn: pieces.top < innerHeight && pieces.bottom > 0 && pieces.height > 40 };
-  });
-  check(pr.piecesIn && pr.box.w * pr.box.h > 0.15 * pr.view.w * pr.view.h, "phone: the pieces and the sculpture are both in view", JSON.stringify(pr.box));
-  await ph.screenshot({ path: ".shots/orbit-phone.png" });
-  await ph.context().close();
 }
 
 // The look of the opening view, at both sizes: a soft sunset sky, stone
@@ -875,65 +799,29 @@ async function focus(browser: Browser): Promise<void> {
   }
 }
 
-// Explore first, then create (ADR 14), at both sizes: the first screen is a
-// compact card with no editing control showing; "Shape it", by keyboard,
-// opens the editor with focus on its heading; Done, Gallery and Escape each
-// come back to the card with focus on "Shape it"; a plinth never opens it.
+// The first screen (ADR 14, 16), at both sizes: a compact stage card whose
+// gestures are right there, no editor to open and nothing to read first;
+// a plinth shows its card with Join in; Escape comes back.
 async function explore(browser: Browser): Promise<void> {
-  console.log("\n— explore first, then create —");
-  const setup = await visitor(browser);
-  await post(setup, "/draft/clear");
-  await post(setup, "/draft/start", { recipe: "loop" });
-  await setup.context().close();
-  const EDIT = '[data-view="bench"] input[data-part], [data-publish-open], [data-clear]';
-  const visibleEditing = (page: Page) => page.locator(EDIT).evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length);
-  const focusedIs = (page: Page, sel: string) => page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, sel);
+  console.log("\n— the first screen: play is right there —");
   for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
     const page = await visitor(browser, opts);
-    await page.waitForSelector("[data-shape]", { state: "attached", timeout: 3000 }).catch(() => null);
-    const card = page.locator("[data-card]").filter({ visible: true }).first();
-    const cardShown = (await card.count()) > 0 && (await card.isVisible());
-    const cardH = cardShown ? ((await card.boundingBox())?.height ?? 999) : 999;
-    const editingAtStart = await visibleEditing(page);
-    check(cardShown && editingAtStart === 0, `${label}: it opens on a selection card, no editing controls`, `card ${cardShown}, ${editingAtStart} controls showing`);
-    check(cardH <= (label === "phone" ? 240 : 280), `${label}: and the card is compact`, `${Math.round(cardH)}px`);
-    // the title is read whole beside Shape it and Play, not cut to "Loop & L…"
+    const card = page.locator('[data-view="bench"]');
+    const cardH = (await card.boundingBox())?.height ?? 999;
+    check(await card.isVisible(), `${label}: it opens on the stage card`);
+    check(cardH <= (label === "phone" ? 330 : 360), `${label}: and the card is compact`, `${Math.round(cardH)}px`);
+    const gestures = await page.locator("[data-gesture]").evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length);
+    check(gestures === 6, `${label}: every gesture is on the first screen, no editor to open`, `${gestures} gestures`);
+    const panels = await page.locator('input[type="range"], details.fine-tune, [data-parts]').count();
+    check(panels === 0, `${label}: no sliders or parameter panels anywhere`, String(panels));
     const title = await page.locator("#bench-h").evaluate((h) => ({ text: h.textContent ?? "", cut: h.scrollWidth > h.clientWidth + 1 || h.scrollHeight > h.clientHeight + 1 }));
-    check(!title.cut, `${label}: the bench title shows in full`, title.text);
-    // the tab order has no hidden editor in it
-    const tabbable = await page.locator(EDIT).evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility() && (e as HTMLElement).tabIndex >= 0).length);
-    check(tabbable === 0, `${label}: nothing from the editor is in the tab order`, String(tabbable));
-    // into create, by keyboard
-    await page.focus("[data-shape]", { timeout: 1500 }).catch(() => null);
-    await page.keyboard.press("Enter");
-    await page.waitForTimeout(300);
-    const editing = await visibleEditing(page);
-    check(editing >= 10 && (await focusedIs(page, "#bench-h")), `${label}: "Shape it" opens the editor, focus on its heading`, `${editing} controls`);
-    // every way out comes back to the card, focus on what opened it
-    const ways: Array<[string, () => Promise<void>]> = [
-      ["Done", () => page.click("[data-done]", { timeout: 1500 })],
-      ["Gallery", () => page.click("[data-home]", { timeout: 1500 })],
-      ["Escape", async () => {
-        await page.focus('[data-view="bench"] input[type="range"]', { timeout: 1500 });
-        await page.keyboard.press("Escape");
-      }],
-    ];
-    for (const [name, leave] of ways) {
-      await page.click("[data-shape]", { timeout: 1500 }).catch(() => null);
-      await page.waitForTimeout(150);
-      await leave().catch(() => null);
-      await page.waitForTimeout(250);
-      const back = (await visibleEditing(page)) === 0 && (await card.isVisible().catch(() => false)) && (await focusedIs(page, "[data-shape]"));
-      check(back, `${label}: ${name} goes back to the card, focus on "Shape it"`);
-    }
-    // a plinth is looked at, never edited
-    await page.click("[data-shape]", { timeout: 1500 }).catch(() => null);
+    check(!title.cut, `${label}: the stage's title shows in full`, title.text);
     await page.click('[data-go="slot:1"]');
     await page.waitForTimeout(200);
-    check((await visibleEditing(page)) === 0 && (await card.isVisible().catch(() => false)), `${label}: choosing a plinth shows its card, not the editor`);
-    await page.click('[data-go="bench"]');
-    await page.waitForTimeout(200);
-    check((await visibleEditing(page)) === 0, `${label}: and coming back to the bench is explore too`);
+    check((await page.locator("[data-ex-join]").isVisible()) && (await card.isHidden()), `${label}: a plinth shows its card, with Join in`);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    check((await card.isVisible()) && (await page.evaluate(() => document.activeElement?.id === "bench-h")), `${label}: Escape comes back to the stage, focus on its heading`);
     await page.screenshot({ path: `.shots/explore-${label}.png` });
     await page.context().close();
   }
@@ -944,12 +832,11 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   explore,
   opening,
   look,
-  orbit,
   focus,
   noScript,
   noWebGL,
   realtime,
-  dragging,
+  chain,
   publishing,
   archive,
   disconnect,

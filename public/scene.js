@@ -1,20 +1,22 @@
 // The gallery in 3D: a round floor floating above sunset clouds, stone
-// arches on pillars, six plinths in a ring and the workbench at the centre. It only
-// draws; every control lives in the DOM (app.js). Loaded with a dynamic
-// import, so if WebGL or the CDN is missing the page carries on without it.
+// arches on pillars, six plinths in a ring, each playing a performance, and
+// the stage at the centre where visitors play together (ADR 16). Touching an
+// object on the stage is a gesture: the scene works out which (onGesture)
+// and the page sends it. Every control also lives in the DOM (app.js).
+// Loaded with a dynamic import, so if WebGL or the CDN is missing the page
+// carries on without it.
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { VISITOR_COLOURS } from "./recipes.js";
+import { BELL, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
+import { createStageView } from "./stageview.js";
 import { clearFrame, frameHeight, viewOffsetFor } from "./ui-logic.js";
-import { ORBIT_CENTRE, animate, buildSculpture, disposeSculpture } from "./sculpture.js";
-import { SPHERES, dropOn, ribbonPoint } from "./orbit.js";
-import { PALETTE } from "./recipes.js";
 
 const TAU = Math.PI * 2;
 const PLINTH_R = 5.4;
 const FLOOR_R = 8.6;
 const PLINTH_H = 1.0;
-const ON_PLINTH = 0.78;
+// a performance on a plinth, scaled so its flying room fits the plinth top
+const ON_PLINTH = 0.4;
 
 const C = {
   ivory: "#f4ead8",
@@ -389,32 +391,41 @@ function numberTexture(n) {
   return t;
 }
 
+/** The stage at the centre: a wide round glass top on a stone drum, as
+ * big as the space the spheres can fly in, with a faint ring of light at
+ * the wall they bounce off. */
 function bench() {
   const g = new THREE.Group();
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.45, 0.55, 64), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.78 }));
+  const R = SETS.orbit.radius;
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.05, R + 0.3, 0.55, 72), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.78 }));
   base.position.y = 0.275;
   base.castShadow = true;
   base.receiveShadow = true;
   const glassTop = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.42, 1.42, 0.1, 64),
+    new THREE.CylinderGeometry(R + 0.12, R + 0.12, 0.1, 72),
     new THREE.MeshPhysicalMaterial({ color: "#bfe6e2", transmission: 0.9, roughness: 0.08, thickness: 0.3, ior: 1.4, attenuationColor: C.teal, attenuationDistance: 0.8 }),
   );
   glassTop.position.y = 0.6;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.43, 0.035, 10, 96), new THREE.MeshStandardMaterial({ color: C.chrome, metalness: 0.95, roughness: 0.15 }));
+  glassTop.receiveShadow = true;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(R + 0.13, 0.035, 10, 120), new THREE.MeshStandardMaterial({ color: C.chrome, metalness: 0.95, roughness: 0.15 }));
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.65;
   for (const m of [base, glassTop, ring]) m.userData.pick = "bench";
-  g.add(base, glassTop, ring, contactShadow(2.1));
+  g.add(base, glassTop, ring, contactShadow(R + 0.7));
   const holder = new THREE.Group();
   holder.position.y = 0.66;
   g.add(holder);
-  // the "empty bench" marker: a slowly turning ghost ring
-  const ghost = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.02, 8, 64), new THREE.MeshBasicMaterial({ color: C.teal, transparent: true, opacity: 0.6 }));
-  ghost.rotation.x = Math.PI / 2;
-  ghost.position.y = 1.0;
-  g.add(ghost);
+  // where the wall is: a faint glowing band the spheres bounce off
+  const wall = new THREE.Mesh(
+    new THREE.CylinderGeometry(R, R, 0.5, 96, 1, true),
+    new THREE.MeshBasicMaterial({ color: "#fff1dc", transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }),
+  );
+  wall.position.y = 0.25;
+  holder.add(wall);
+  const ghost = new THREE.Group();
+  ghost.visible = false;
   const leases = new THREE.Group();
-  g.add(leases);
+  holder.add(leases);
   return { group: g, holder, ghost, leases };
 }
 
@@ -477,7 +488,7 @@ function plants() {
   return g;
 }
 
-export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {}, onPiece = () => {} }) {
+export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {}, onGesture = () => {}, onEvents = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -558,6 +569,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   const nearestYaw = (a) => goal.yaw + ((((a - goal.yaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
 
   const box = new THREE.Box3();
+  // what a camera fits of a performance, in its holder's frame: where the
+  // play mostly is (the ribbon, the bell and the spheres at rest), not the
+  // whole flying room nor where the spheres happen to be, so the camera
+  // holds still as it plays and the objects are big enough to touch
+  const STAGE_BOX = new THREE.Box3(new THREE.Vector3(-1.4, 0.05, -1.4), new THREE.Vector3(1.4, 1.5, 1.4));
 
   // The bench view stands inside the pavilion, between plinths 6 and 1,
   // looking slightly down at the bench sculpture as it is now: on a phone a
@@ -570,9 +586,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   const EYE = 1.62;
   function benchFit(tight) {
     box.makeEmpty();
-    if (wb.holder.children.length) box.setFromObject(wb.holder);
-    // making an Orbit: the shelf of spheres is in the picture too
-    if (shelf.visible && !box.isEmpty()) box.expandByPoint(SHELF.clone().setY(1.3)).expandByPoint(SHELF.clone().setY(0.6));
+    // the stage's own extent, not where its spheres happen to be this frame,
+    // so the camera holds still while a performance plays
+    box.copy(STAGE_BOX).applyMatrix4(wb.holder.matrixWorld);
     if (box.isEmpty()) return { focusY: 1.2, dist: 6.6, pitch: Math.asin((EYE - 1.2) / 6.6) };
     // the sculpture itself, with only a sliver of glass under it
     const lo = Math.max(box.min.y, 0.45);
@@ -585,9 +601,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     // standing, not hovering: the camera at eye height, so the glass top
     // reads as a thin lens and the arches rise round the sculpture
     const pitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp((EYE - f.focusY) / dist, -1, 1)), -0.08, 0.3);
-    // centred between the sculpture and the shelf while making an Orbit
-    const focusX = shelf.visible ? (box.min.x + box.max.x) / 2 : 0;
-    return { focusX, focusY: f.focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
+    return { focusX: 0, focusY: f.focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
   }
 
   // ---- composing a close-up: measure what a pose would show
@@ -622,8 +636,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   function targetOf(t) {
     const holder = t === "bench" ? wb.holder : plinths.get(t).holder;
     const root = t === "bench" ? wb.group : plinths.get(t).group;
+    holder.updateMatrixWorld();
     box.makeEmpty();
-    if (holder.children.length) box.setFromObject(holder);
+    if (holder.children.length) box.copy(STAGE_BOX).applyMatrix4(holder.matrixWorld);
     if (box.isEmpty()) {
       const c = t === "bench" ? new THREE.Vector3(0, 0.66, 0) : slotPos(t).setY(PLINTH_H);
       box.set(c.clone().add(new THREE.Vector3(-0.6, 0, -0.6)), c.clone().add(new THREE.Vector3(0.6, 1.3, 0.6)));
@@ -812,14 +827,14 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
 
   let drag = null;
   canvas.addEventListener("pointerdown", (e) => {
-    if (pieceDown(e)) return;
+    if (touchDown(e)) return;
     drag = { x: e.clientX, y: e.clientY, yaw: goal.yaw, pitch: goal.pitch, moved: 0, id: e.pointerId };
     canvas.setPointerCapture(e.pointerId);
     interacting = performance.now();
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (piece) return pieceMove(e);
-    hoverPiece(e);
+    if (touch) return touchMove(e);
+    hover(e);
     if (!drag) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -831,7 +846,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     wake();
   });
   const endDrag = (e) => {
-    if (piece) return pieceUp(e);
+    if (touch) return touchUp(e);
     if (!drag) return;
     const d = drag;
     drag = null;
@@ -880,225 +895,209 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     onPick(o.userData.pick);
   }
 
-  // ---- Orbit pieces (ADR 15): a shelf beside the bench, and dragging
-  // spheres onto the sculpture, or the ribbon to reshape it. The scene only
-  // reports where a piece was dropped (onPiece); the page sends the edit.
-  const shelf = new THREE.Group();
-  shelf.visible = false;
-  scene.add(shelf);
-  const shelfBalls = new Map(); // sphere id -> mesh
-  const SHELF = new THREE.Vector3(-1.75, 0, 1.0); // beside the bench, on the opening view's left
-  const shelfStand = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.9, 40), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.78 }));
-  shelfStand.position.copy(SHELF).setY(0.45);
-  shelfStand.castShadow = true;
-  shelfStand.receiveShadow = true;
-  const shelfShadow = contactShadow(0.95);
-  shelfShadow.position.copy(SHELF).setY(0.006);
-  shelf.add(shelfStand, shelfShadow);
-  const shelfSpot = (i) => SHELF.clone().add(new THREE.Vector3(Math.cos((i / 4) * TAU) * 0.3, 1.08, Math.sin((i / 4) * TAU) * 0.3));
-  let orbitParts = null;
-  // the bench sculpture's ribbon frame, in world space
-  const ribbonFrame = () => {
-    const holder = wb.holder;
-    holder.updateMatrixWorld();
-    return new THREE.Matrix4().makeTranslation(0, ORBIT_CENTRE, 0).premultiply(holder.matrixWorld);
-  };
-  function syncShelf(parts, editing) {
-    orbitParts = parts;
-    shelf.visible = !!parts && editing;
-    for (const [i, id] of SPHERES.entries()) {
-      const s = parts?.[id];
-      let m = shelfBalls.get(id);
-      if (!s) {
-        if (m) m.visible = false;
-        continue;
-      }
-      if (!m) {
-        m = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.25 }));
-        m.castShadow = true;
-        m.userData.piece = id;
-        shelf.add(m);
-        shelfBalls.set(id, m);
-      }
-      m.material.color.set(PALETTE[s.colour]?.hex ?? "#ccc");
-      m.scale.setScalar(s.size * 1.1);
-      m.position.copy(shelfSpot(i));
-      // placed spheres leave the shelf; one being dragged follows the pointer
-      m.visible = shelf.visible && !s.placed && piece?.id !== id;
-    }
-  }
-  // the working plane for a drag: through the bench sculpture's centre,
-  // facing the camera, so a sphere moves where the pointer goes
-  const plane = new THREE.Plane();
-  const hitPoint = new THREE.Vector3();
+  // ---- touching the stage (ADR 16): which object is under the finger,
+  // and what the gesture is. Dragging a sphere picks it up and letting go
+  // throws it at the finger's speed; a tap on a sphere hops it, on the
+  // ribbon plucks it there, on the bell rings it. The scene only says what
+  // the gesture was (onGesture); the page sends it.
   function pointerRay(e) {
     const r = canvas.getBoundingClientRect();
     ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
   }
-  function pickPiece(e) {
-    if (!orbitParts || !shelf.visible) return null;
+  // the stage's frame, in world space: its holder sits on the bench
+  const stageFrame = () => {
+    wb.holder.updateMatrixWorld();
+    return wb.holder.matrixWorld;
+  };
+  const toStage = (v) => v.clone().applyMatrix4(stageFrame().clone().invert());
+  function objectAt(e) {
+    if (!stageView || !playable) return null;
     pointerRay(e);
-    const targets = [...shelfBalls.values()].filter((m) => m.visible);
-    wb.holder.traverse((o) => o.isMesh && o.userData.part && targets.push(o));
+    const o = stageView.objects();
+    const targets = [o.ribbon, ...Object.values(o.balls).filter((b) => b.visible)];
+    o.bell.traverse((m) => m.isMesh && targets.push(m));
+    // a sphere is small: a near miss on screen still counts, so it can be
+    // caught by a finger
     const hit = ray.intersectObjects(targets, false)[0];
-    if (!hit) return null;
-    return hit.object.userData.piece ?? hit.object.userData.part;
+    if (hit) return { object: hit.object.userData.object, point: hit.point };
+    const r = canvas.getBoundingClientRect();
+    let best = null;
+    for (const [id, b] of Object.entries(o.balls)) {
+      if (!b.visible) continue;
+      const w = b.getWorldPosition(new THREE.Vector3());
+      const v = w.clone().project(camera);
+      const d = Math.hypot(((v.x + 1) / 2) * r.width - (e.clientX - r.left), ((1 - v.y) / 2) * r.height - (e.clientY - r.top));
+      if (d < 30 && (!best || d < best.d)) best = { d, object: id, point: w };
+    }
+    return best;
   }
-  let piece = null; // { id, ghost?, startY, startX, pointer }
-  const ghost = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.25 }));
-  const ghostHalo = new THREE.Mesh(new THREE.SphereGeometry(1.7, 20, 14), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false }));
-  ghost.add(ghostHalo);
-  ghost.visible = false;
-  scene.add(ghost);
-  function pieceDown(e) {
-    const id = pickPiece(e);
-    if (!id) return false;
+  let touch = null; // { object, x, y, moved, trail: [{x, y, p, at}] }
+  const grabPlane = new THREE.Plane();
+  const hitPoint = new THREE.Vector3();
+  const heldBall = new THREE.Mesh(new THREE.SphereGeometry(SETS.orbit.sphereR, 32, 20), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.2 }));
+  const heldRing = new THREE.Mesh(new THREE.TorusGeometry(SETS.orbit.sphereR * 1.6, 0.02, 8, 40), new THREE.MeshBasicMaterial({ color: "#fff" }));
+  heldBall.add(heldRing);
+  heldBall.visible = false;
+  scene.add(heldBall);
+  function touchDown(e) {
+    const hit = objectAt(e);
+    if (!hit) return false;
     canvas.setPointerCapture(e.pointerId);
     interacting = performance.now();
-    piece = { id, x: e.clientX, y: e.clientY, moved: 0 };
-    if (id !== "ribbon") {
-      const s = orbitParts[id];
-      ghost.material.color.set(PALETTE[s.colour]?.hex ?? "#ccc");
-      ghostHalo.material.color.copy(ghost.material.color);
-      ghost.scale.setScalar(s.size * ON_BENCH);
-      plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), new THREE.Vector3(0, ORBIT_CENTRE * ON_BENCH + 0.66, 0));
-      pieceMove(e);
+    touch = { object: hit.object, x: e.clientX, y: e.clientY, moved: 0, trail: [], point: hit.point.clone() };
+    if (SPHERES.includes(hit.object)) {
+      // picked up: held on a plane facing the camera through the sphere
+      grabPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
+      const mat = stageView.objects().balls[hit.object].material;
+      heldBall.material.color.copy(mat.color);
+      heldBall.material.metalness = mat.metalness;
+      heldBall.material.roughness = mat.roughness;
+      heldBall.position.copy(hit.point);
+      onGesture({ kind: "grab", object: hit.object });
     }
-    onPiece({ kind: "grab", id });
-    canvas.dataset.dragging = id;
+    canvas.dataset.touching = hit.object;
     wake();
     return true;
   }
-  const ON_BENCH = 1; // the bench holder isn't scaled
-  function localDrop(e) {
-    pointerRay(e);
-    if (!ray.ray.intersectPlane(plane, hitPoint)) return null;
-    const inv = ribbonFrame().invert();
-    const p = hitPoint.clone().applyMatrix4(inv);
-    return { world: hitPoint.clone(), local: [p.x, p.y, p.z] };
-  }
-  function pieceMove(e) {
-    piece.moved = Math.max(piece.moved, Math.hypot(e.clientX - piece.x, e.clientY - piece.y));
+  function touchMove(e) {
+    touch.moved = Math.max(touch.moved, Math.hypot(e.clientX - touch.x, e.clientY - touch.y));
     interacting = performance.now();
-    if (piece.id === "ribbon") {
-      // up and down: loops; sideways: reach. Reported as steps.
-      const dy = Math.round((piece.y - e.clientY) / 60);
-      const dx = Math.round((e.clientX - piece.x) / 50);
-      if (dy !== piece.dy || dx !== piece.dx) {
-        piece.dy = dy;
-        piece.dx = dx;
-        onPiece({ kind: "reshape", id: "ribbon", loops: dy, reach: dx * 0.05 });
+    if (!SPHERES.includes(touch.object)) return;
+    pointerRay(e);
+    if (!ray.ray.intersectPlane(grabPlane, hitPoint)) return;
+    // kept within the stage, and above its floor
+    const local = toStage(hitPoint);
+    const R = SETS.orbit.radius - SETS.orbit.sphereR;
+    const rr = Math.hypot(local.x, local.z);
+    if (rr > R) local.multiplyScalar(R / rr).setY(local.y * (rr / R));
+    local.y = THREE.MathUtils.clamp(local.y, SETS.orbit.sphereR, SETS.orbit.ceiling - SETS.orbit.sphereR);
+    const world = local.clone().applyMatrix4(stageFrame());
+    heldBall.position.copy(world);
+    heldBall.visible = touch.moved >= 6;
+    touch.trail.push({ p: local, at: performance.now() });
+    while (touch.trail.length > 8) touch.trail.shift();
+    wake();
+  }
+  function touchUp(e) {
+    const t = touch;
+    touch = null;
+    heldBall.visible = false;
+    delete canvas.dataset.touching;
+    const at = loopMoment(drawTime());
+    const r3 = (v) => v.toArray().map((x) => Number(x.toFixed(3)));
+    if (SPHERES.includes(t.object)) {
+      if (t.moved < 6) {
+        // a tap: a little hop straight up from where it is
+        const p = toStage(stageView.objects().balls[t.object].getWorldPosition(new THREE.Vector3()));
+        onGesture({ kind: "throw", object: t.object, at, from: r3(p), v: [0, 1.4, 0] });
+      } else {
+        // let go: thrown at the speed the finger was moving over its last
+        // few positions, capped to what the stage allows
+        const tr = t.trail;
+        const a = tr[0];
+        const b = tr[tr.length - 1];
+        const dt = b && a && b.at > a.at ? (b.at - a.at) / 1000 : 1;
+        const v = b && a ? b.p.clone().sub(a.p).divideScalar(Math.max(dt, 0.016)) : new THREE.Vector3();
+        if (v.length() > 5.5) v.setLength(5.5);
+        onGesture({ kind: "throw", object: t.object, at, from: r3(b?.p ?? toStage(t.point)), v: r3(v) });
       }
-      return wake();
+    } else if (t.object === "ribbon") {
+      // plucked where it was touched: the nearest point of its path
+      const local = toStage(t.point);
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < 240; i++) {
+        const q = ribbonPoint(i / 240);
+        const d = (q[0] - local.x) ** 2 + (q[1] - local.y) ** 2 + (q[2] - local.z) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = i / 240;
+        }
+      }
+      onGesture({ kind: "pluck", object: "ribbon", at, u: Number(best.toFixed(3)) });
+    } else if (t.object === "bell") {
+      onGesture({ kind: "tap", object: "bell", at });
     }
-    const d = localDrop(e);
-    if (!d) return;
-    ghost.visible = true;
-    ghost.position.copy(d.world);
-    // would the ribbon catch it here? glow before the drop
-    // caught by what the visitor sees: the pointer over the ribbon as drawn
-    // snaps the sphere onto that point of it, whatever its depth
-    const snap = orbitParts?.ribbon ? ribbonUnder(e) : null;
-    if (snap) {
-      ghost.position.copy(snap.world);
-      d.local = snap.local;
-    }
-    const onBench = !!snap || Math.hypot(d.world.x, d.world.z) < 2.4;
-    piece.local = onBench && orbitParts?.ribbon ? d.local : null;
-    piece.drop = piece.local ? dropOn(orbitParts.ribbon, piece.local, drawTime()) : null;
-    ghostHalo.visible = !!piece.drop?.ride;
-    piece.catches = ghostHalo.visible;
-    canvas.dataset.catches = String(piece.catches);
-    syncShelf(orbitParts, true);
     wake();
   }
-  // The ribbon point drawn nearest the pointer, if it's within a finger's
-  // reach on screen.
-  function ribbonUnder(e) {
-    const r = canvas.getBoundingClientRect();
-    const px = e.clientX - r.left, py = e.clientY - r.top;
-    const frame = ribbonFrame();
-    let best = null;
-    for (let i = 0; i < 160; i++) {
-      const local = ribbonPoint(orbitParts.ribbon, i / 160);
-      const world = new THREE.Vector3().fromArray(local).applyMatrix4(frame);
-      const v = world.clone().project(camera);
-      const d = Math.hypot(((v.x + 1) / 2) * r.width - px, ((1 - v.y) / 2) * r.height - py);
-      if (!best || d < best.d) best = { d, local, world };
-    }
-    return best && best.d < 36 ? best : null;
-  }
-  function pieceUp(e) {
-    const p = piece;
-    piece = null;
-    ghost.visible = false;
-    delete canvas.dataset.dragging;
-    delete canvas.dataset.catches;
-    if (p.id === "ribbon") onPiece({ kind: "release", id: "ribbon" });
-    else if (p.moved < 6 && orbitParts[p.id].placed === 0) onPiece({ kind: "release", id: p.id, values: null });
-    // decided again at the moment of letting go, so it lands where it's seen
-    else onPiece({ kind: "release", id: p.id, values: p.local ? dropOn(orbitParts.ribbon, p.local, drawTime()) : { placed: 0, ride: 0 } });
-    syncShelf(orbitParts, true);
-    wake();
-  }
-  function hoverPiece(e) {
-    if (drag || !shelf.visible) return (canvas.style.cursor = "");
-    canvas.style.cursor = pickPiece(e) ? "grab" : "";
+  function hover(e) {
+    if (drag || touch) return;
+    const hit = objectAt(e);
+    canvas.style.cursor = hit ? (SPHERES.includes(hit.object) ? "grab" : "pointer") : "";
   }
 
-  // ---- sculptures: rebuilt only when their numbers change
-  const shown = new Map(); // key -> { sig, group }
-  function place(key, holder, recipe, parts) {
-    const sig = recipe && parts ? `${recipe}:${JSON.stringify(parts)}` : "";
-    const was = shown.get(key);
-    if (was && was.sig === sig) return;
-    if (was) {
-      holder.remove(was.group);
-      disposeSculpture(was.group);
+  // ---- performances: the stage, and one on each plinth
+  const views = new Map(); // key -> { view, holder, perf }
+  let stageView = null;
+  let playable = false;
+  function place(key, holder, perf) {
+    let v = views.get(key);
+    const isPerf = perf && Object.hasOwn(SETS, perf.set);
+    if (!isPerf) {
+      if (v) {
+        holder.remove(v.view.root);
+        v.view.dispose();
+        views.delete(key);
+      }
+      return null;
     }
-    if (!sig) return shown.delete(key);
-    const group = buildSculpture(recipe, parts);
-    group.traverse((o) => {
-      if (o.isMesh) o.userData.pick = key === "bench" ? "bench" : key;
-    });
-    holder.add(group);
-    shown.set(key, { sig, group });
+    if (!v) {
+      const view = createStageView();
+      view.root.traverse((o) => {
+        if (o.isMesh) o.userData.pick = key;
+      });
+      holder.add(view.root);
+      v = { view, holder, perf };
+      views.set(key, v);
+    }
+    v.perf = perf;
+    return v.view;
   }
 
   let last = null;
   let aimed = false;
   let aimedShape = null;
-  let override = null;
   let selected = { kind: "bench" };
+  let pending = []; // the visitor's own gestures, drawn before the server has them
+  let held = []; // spheres this visitor has in hand, and others' claims
   function sync() {
     if (!last) return;
     for (const s of last.slots) {
       const p = plinths.get(s.slot);
-      place(`slot:${s.slot}`, p.holder, s.exhibit?.latest.recipe, s.exhibit?.latest.parts);
+      const v = s.exhibit?.latest;
+      place(`slot:${s.slot}`, p.holder, v && v.recipe === "stage" ? v.parts : null);
       const on = selected.kind === "slot" && selected.slot === s.slot;
       p.top.material.color.set(on ? "#ff8a73" : C.coral);
       p.spot.intensity = s.exhibit ? (on ? 26 : 14) : 4;
     }
-    const d = last.draft;
-    place("bench", wb.holder, d.recipe, d.recipe ? (override ?? d.parts) : null);
-    syncShelf(d.recipe === "orbit" ? (override ?? d.parts) : null, selected.kind === "bench" && selected.mode === "create");
-    wb.ghost.visible = !d.recipe;
-    // a ring in the holder's colour for each part someone is shaping
+    stageView = place("bench", wb.holder, last.draft.parts);
+    playable = !!stageView;
+    wb.ghost.visible = false;
+    // a ring on the stage floor in each holder's colour, for each sphere
+    // someone has in hand
     wb.leases.clear();
     const now = Date.now();
-    const order = d.recipe ? Object.keys(d.parts) : [];
-    for (const l of last.leases) {
-      if (Date.parse(l.expiresAt) <= now - 1000) continue;
-      const i = order.indexOf(l.part);
-      if (i < 0) continue;
-      const colour = VISITOR_COLOURS[l.holder.colour] ?? VISITOR_COLOURS[0];
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(1.55 + i * 0.13, 0.035, 8, 96), new THREE.MeshBasicMaterial({ color: colour }));
+    for (const c of last.claims ?? []) {
+      if (Date.parse(c.expiresAt) <= now - 1000) continue;
+      const colour = VISITOR_COLOURS[c.holder.colour] ?? VISITOR_COLOURS[0];
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.025, 8, 40), new THREE.MeshBasicMaterial({ color: colour }));
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.62;
+      ring.userData.sphere = c.part;
       wb.leases.add(ring);
     }
     wake();
+  }
+
+  // the colour of the player with this tag, if they're known
+  function colourOf(tag) {
+    const who = [...(last?.present ?? []), ...(last?.draft.contributors ?? [])].find((p) => p.tag === tag);
+    if (who) return VISITOR_COLOURS[who.colour] ?? VISITOR_COLOURS[0];
+    for (const s of last?.slots ?? []) {
+      const c = s.exhibit?.latest.contributors.find((p) => p.tag === tag);
+      if (c) return VISITOR_COLOURS[c.colour] ?? VISITOR_COLOURS[0];
+    }
+    return "#fff3d6";
   }
 
   // ---- the loop: renders while anything moves, idles otherwise
@@ -1132,11 +1131,35 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const yaw = view.yaw.toFixed(3);
     if (canvas.dataset.yaw !== yaw) canvas.dataset.yaw = yaw;
     fadeBays(rim.userData.bays, camera.position);
-    for (const { group } of shown.values()) animate(group, t);
-    wb.ghost.rotation.z = t * 0.3;
+    const moment = loopMoment(t);
+    const hand = touch && SPHERES.includes(touch.object) && touch.moved >= 6 ? [touch.object] : [];
+    let busy = false;
+    for (const [key, v] of views) {
+      const isStage = key === "bench";
+      const perf = isStage && pending.length ? { ...v.perf, gestures: [...v.perf.gestures, ...pending] } : v.perf;
+      const events = v.view.update(perf, moment, { colourOf, held: isStage ? hand : [], still });
+      busy ||= v.view.busy();
+      // sound for what's in view: the stage, or the chosen plinth
+      if (events.length && ((isStage && selected.kind === "bench") || key === `slot:${selected.slot}`)) {
+        onEvents(events);
+        // for the browser check: what this screen just saw happen, and when
+        if (isStage) {
+          canvas.dataset.heard = events.map((e) => e.kind).join(" ");
+          canvas.dataset.heardAt = String(Date.now());
+        }
+      }
+    }
+    // claim rings follow the spheres they mark
+    if (stageView) {
+      const balls = stageView.objects().balls;
+      for (const ring of wb.leases.children) {
+        const b = balls[ring.userData.sphere];
+        if (b) ring.position.copy(b.position).setY(b.position.y - SETS.orbit.sphereR - 0.02);
+      }
+    }
     renderer.render(scene, camera);
     const settling = Math.abs(goal.yaw - view.yaw) + Math.abs(goal.pitch - view.pitch) + Math.abs(goal.dist - view.dist) + goal.focus.distanceTo(view.focus) > 0.001;
-    if (!still || settling) wake();
+    if (!still || settling || busy) wake();
   }
 
   // For the browser check: where the camera stands, the clear rectangle,
@@ -1159,29 +1182,28 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       cuts: m?.cuts ?? 99,
       moved,
       look: lookOf(),
-      orbit: orbitOf(),
+      stage: stageOf(),
     };
   };
 
-  // For the browser check's `orbit` section: where each sphere is on the
-  // canvas, whether the ribbon has it, and where the shelf and ribbon are.
-  function orbitOf() {
-    const bench = shown.get("bench")?.group;
-    const o = bench?.children[0]?.userData.orbit;
-    if (!o) return null;
+  // For the browser check's `stage` section: where each object of the
+  // stage is on the canvas and in the stage's frame.
+  function stageOf() {
+    if (!stageView) return null;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     const px = (v) => {
-      v.project(camera);
-      return { x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h };
+      const p = v.clone().project(camera);
+      return { x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h };
     };
+    const o = stageView.objects();
     const spheres = {};
-    for (const r of o.riders) spheres[r.id] = { caught: !!r.g.userData.caught, at: px(r.g.getWorldPosition(new THREE.Vector3())), world: r.g.getWorldPosition(new THREE.Vector3()).toArray() };
-    const shelfAt = {};
-    for (const [id, m] of shelfBalls) if (m.visible) shelfAt[id] = px(m.getWorldPosition(new THREE.Vector3()));
-    // a point on the ribbon's path (the middle of the band), for grabbing it
-    const r = orbitParts?.ribbon;
-    const onPath = r ? o.ribbon.localToWorld(new THREE.Vector3().fromArray(ribbonPoint(r, 0.25))) : new THREE.Vector3();
-    return { spheres, shelf: shelfAt, ribbon: px(onPath) };
+    for (const [id, b] of Object.entries(o.balls)) {
+      const world = b.getWorldPosition(new THREE.Vector3());
+      spheres[id] = { at: px(world), pos: toStage(world).toArray(), visible: b.visible };
+    }
+    const onRibbon = new THREE.Vector3().fromArray(ribbonPoint(0.125)).applyMatrix4(stageFrame());
+    const bell = new THREE.Vector3().fromArray(BELL.pos).applyMatrix4(stageFrame());
+    return { spheres, ribbon: px(onRibbon), bell: px(bell), rings: wb.leases.children.length, moment: loopMoment(drawTime()), loop: LOOP };
   }
 
   // For the browser check's `look` section: the arches' build, the depth
@@ -1254,17 +1276,17 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       aimAt({ kind: "bench" });
       wake();
     },
-    update(state, sel, draftParts, holding = false) {
+    update(state, sel) {
       const changed = JSON.stringify(sel) !== JSON.stringify(selected);
       last = state;
       selected = sel;
-      override = state.draft.recipe ? draftParts : null;
+      // the server has the gestures now: stop drawing them as pending
+      const have = new Set(state.draft.parts?.gestures.map((g) => JSON.stringify(g)) ?? []);
+      pending = pending.filter((g) => !have.has(JSON.stringify(g)) && Date.now() - (g._at ?? 0) < 4000);
       sync();
-      // after sync, so the framing measures the sculpture now on the plinth;
-      // re-aimed when the selected exhibit itself changes shape
-      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : sel.kind === "bench" ? `bench:${state.draft.id}:${state.draft.revision}` : null;
-      // while a slider is held the framing waits for the release
-      if (changed || !aimed || (shape !== aimedShape && !holding)) {
+      // re-aimed when what's selected changes, never as a performance plays
+      const shape = sel.kind === "slot" ? `slot:${sel.slot}:${!!state.slots[sel.slot - 1]?.exhibit}` : sel.kind;
+      if (changed || !aimed || shape !== aimedShape) {
         aimAt(sel);
         // the first view eases in a step, from just behind and to the side
         // of where it settles, rather than swooping in from outside the room
@@ -1278,19 +1300,17 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
         aimedShape = shape;
       }
     },
-    /** Draw the bench from local numbers while a slider moves. */
-    setDraftOverride(parts) {
-      override = parts;
-      if (!last) return;
-      // coalesce rebuilds to one per frame
-      if (!this._pending) {
-        this._pending = true;
-        requestAnimationFrame(() => {
-          this._pending = false;
-          sync();
-        });
-      }
+    /** Draw one of this visitor's gestures at once, before the server has it. */
+    play(gesture) {
+      pending.push(gesture);
+      wake();
     },
-    focusPart() {},
+    /** Forget a pending gesture the server refused. */
+    unplay(gesture) {
+      pending = pending.filter((g) => g !== gesture);
+      wake();
+    },
+    /** The loop moment the stage is at now (0 when held still). */
+    moment: () => loopMoment(drawTime()),
   };
 }

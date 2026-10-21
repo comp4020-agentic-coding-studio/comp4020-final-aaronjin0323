@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Impossible Museum</title>
-  <meta name="description" content="A small shared gallery above the clouds where visitors shape impossible sculptures together, exhibit them and remix each other's work.">
+  <meta name="description" content="A small shared gallery above the clouds where visitors play impossible objects together, improvise little performances, and leave them for the next visitors to join.">
   <meta name="theme-color" content="#3a3366">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='19' width='16' height='9' rx='2' fill='%23ef6f5e'/%3E%3Ccircle cx='16' cy='12' r='6.5' fill='%233fa7a3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
@@ -27,6 +27,11 @@
     <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4v11H3V8zM8 19v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
     <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 5h16v4H4zM5 9v10h14V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="M10 6l-6 6 6 6M4 12h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-throw" viewBox="0 0 24 24"><circle cx="9" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 11l6-6M14 5h5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pluck" viewBox="0 0 24 24"><path d="M3 12c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   </svg>
   <a class="skip" href="#panel">Skip to the controls</a>
@@ -34,7 +39,7 @@
   <header class="top">
     <div class="brand">
       <h1>Impossible Museum</h1>
-      <p class="lede" data-lede>Touch a sculpture. Change it.</p>
+      <p class="lede" data-lede>Throw, pluck, ring. Together.</p>
     </div>
     <div class="people" data-people hidden>
       <div class="you">
@@ -57,12 +62,12 @@
   </header>
 
   <div class="stage" data-stage>
-    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in 3D. Drag, or use the arrow keys, to turn the camera."></canvas>
+    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in 3D, with the stage at its centre. Drag a sphere to throw it, tap the ribbon or the bell; drag anywhere else, or use the arrow keys, to turn the camera. Every gesture is also a button in the panel."></canvas>
     <p class="status" data-status role="status" hidden></p>
     <button type="button" class="home" data-home hidden aria-label="Back to the gallery" title="Back to the gallery (Esc)"><svg aria-hidden="true"><use href="#i-back"/></svg>Gallery</button>
   </div>
 
-  <nav class="plinths" aria-label="Plinths and workbench" data-nav hidden>
+  <nav class="plinths" aria-label="The stage and the plinths" data-nav hidden>
     <ul class="plinth-list" data-plinths></ul>
   </nav>
 
@@ -70,78 +75,64 @@
     <section class="listing-wrap" data-static aria-labelledby="listing-h">
       <h2 id="listing-h">On display</h2>
       <!--museum-->
-      <p class="hint">The workbench and the 3D gallery need JavaScript.</p>
+      <p class="hint">Playing on the stage and the 3D gallery need JavaScript.</p>
     </section>
 
     <section class="view" data-view="bench" hidden aria-labelledby="bench-h">
       <div class="view-head" data-card>
         <span class="card-thumb" data-bench-thumb></span>
         <div class="card-text">
-          <h2 id="bench-h" tabindex="-1"><span class="sr-only">The workbench: </span><span data-bench-title>Workbench</span></h2>
-          <ul class="dots" data-bench-credits aria-label="Shaped by"></ul>
+          <h2 id="bench-h" tabindex="-1"><span class="sr-only">The stage: </span><span data-bench-title>The stage</span></h2>
+          <ul class="dots" data-bench-credits aria-label="Playing in this loop"></ul>
         </div>
-        <button type="button" class="primary shape" data-shape hidden aria-label="Shape it: open the editor for the workbench sculpture">Shape it</button>
-        <button type="button" class="quiet play" data-play hidden data-edit aria-label="Play: start an Orbit on the workbench, where spheres ride a ribbon anyone can bend" title="Drop spheres on a ribbon; anyone can bend it">Play</button>
-        <button type="button" class="quiet done" data-done hidden aria-label="Done shaping: back to exploring">Done</button>
+        <button type="button" class="icon sound" data-sound aria-pressed="false" aria-label="Sound" title="Sound"><svg aria-hidden="true"><use href="#i-sound"/></svg></button>
       </div>
-      <div data-bench-empty hidden>
-        <ul class="starters" data-starters aria-label="Start a sculpture"></ul>
+      <p class="sr-only" data-bench-about></p>
+      <div class="loop" data-loop aria-hidden="true"><span class="loop-ticks" data-loop-ticks></span><span class="loop-head" data-loop-head></span></div>
+      <div class="gestures" role="group" aria-label="Play the stage" data-gestures>
+        <button type="button" class="gesture" data-gesture="throw:chrome" data-edit aria-label="Throw the chrome sphere" title="Throw the chrome sphere"><span class="ball" style="--ball:#c9d1d6"></span></button>
+        <button type="button" class="gesture" data-gesture="throw:teal" data-edit aria-label="Throw the teal sphere" title="Throw the teal sphere"><span class="ball" style="--ball:#3fa7a3"></span></button>
+        <button type="button" class="gesture" data-gesture="throw:gold" data-edit aria-label="Throw the gold sphere" title="Throw the gold sphere"><span class="ball" style="--ball:#e3b65b"></span></button>
+        <button type="button" class="gesture" data-gesture="throw:dusk" data-edit aria-label="Throw the dusk sphere" title="Throw the dusk sphere"><span class="ball" style="--ball:#7a6aa8"></span></button>
+        <button type="button" class="gesture" data-gesture="pluck:ribbon" data-edit aria-label="Pluck the ribbon" title="Pluck the ribbon"><svg aria-hidden="true"><use href="#i-pluck"/></svg></button>
+        <button type="button" class="gesture" data-gesture="tap:bell" data-edit aria-label="Ring the bell" title="Ring the bell"><svg aria-hidden="true"><use href="#i-bell"/></svg></button>
       </div>
-      <div data-bench-full hidden>
-        <p class="sr-only"><span data-bench-recipe></span><span data-bench-based></span></p>
-        <div class="editor" data-editor hidden>
-        <div class="pieces" data-pieces hidden>
-          <ul class="piece-list" data-piece-list aria-label="Pieces"></ul>
-          <div class="ribbon-keys" role="group" aria-label="Reshape the ribbon">
-            <button type="button" class="icon" data-ribbon="turns:1" data-edit aria-label="More loops in the ribbon" title="More loops">+∞</button>
-            <button type="button" class="icon" data-ribbon="turns:-1" data-edit aria-label="Fewer loops in the ribbon" title="Fewer loops">−∞</button>
-            <button type="button" class="icon" data-ribbon="radius:0.1" data-edit aria-label="Widen the ribbon" title="Wider">↔</button>
-            <button type="button" class="icon" data-ribbon="radius:-0.1" data-edit aria-label="Narrow the ribbon" title="Narrower">→←</button>
-          </div>
-        </div>
-        <details class="fine-tune" data-fine-tune>
-          <summary>Fine-tune</summary>
-          <div class="parts" data-parts></div>
-        </details>
-        <div class="bench-actions">
-          <button type="button" class="primary" data-publish-open data-edit>Exhibit</button>
-          <button type="button" class="quiet undo" data-undo data-edit hidden aria-label="Undo your last change" title="Undo your last change">Undo</button>
-          <button type="button" class="icon" data-clear data-edit aria-label="Clear the bench (it's archived)" title="Clear the bench (it's archived)"><svg aria-hidden="true"><use href="#i-clear"/></svg></button>
-        </div>
-        <form class="publish" data-publish hidden aria-labelledby="publish-h">
-          <h3 id="publish-h" class="sr-only">Exhibit the workbench</h3>
-          <label for="publish-title">Title</label>
-          <input id="publish-title" name="title" maxlength="60" required data-edit>
-          <fieldset class="targets">
-            <legend>Where it goes</legend>
-            <div data-targets></div>
-          </fieldset>
-          <p class="plan" data-plan aria-live="polite"></p>
-          <p class="field-error" data-publish-error role="alert"></p>
-          <div class="row">
-            <button type="submit" class="primary" data-edit>Publish</button>
-            <button type="button" class="quiet" data-publish-cancel>Cancel</button>
-          </div>
-        </form>
-        </div>
+      <div class="bench-actions">
+        <button type="button" class="primary" data-publish-open data-edit aria-label="Leave it: put this performance on a plinth for others to find" title="Put this performance on a plinth">Leave it</button>
+        <button type="button" class="quiet undo" data-undo data-edit aria-label="Undo your last gesture" title="Undo your last gesture">Undo</button>
+        <button type="button" class="icon" data-clear data-edit aria-label="Start over (this loop is archived)" title="Start over (this loop is archived)"><svg aria-hidden="true"><use href="#i-clear"/></svg></button>
       </div>
+      <form class="publish" data-publish hidden aria-labelledby="publish-h">
+        <h3 id="publish-h" class="sr-only">Leave this performance on a plinth</h3>
+        <label for="publish-title">Title</label>
+        <input id="publish-title" name="title" maxlength="60" required data-edit>
+        <fieldset class="targets">
+          <legend>Where it goes</legend>
+          <div data-targets></div>
+        </fieldset>
+        <p class="plan" data-plan aria-live="polite"></p>
+        <p class="field-error" data-publish-error role="alert"></p>
+        <div class="row">
+          <button type="submit" class="primary" data-edit>Leave it</button>
+          <button type="button" class="quiet" data-publish-cancel>Cancel</button>
+        </div>
+      </form>
     </section>
 
     <section class="view" data-view="exhibit" hidden aria-labelledby="exhibit-h">
       <div class="view-head" data-card>
         <span class="slot-n" data-ex-where></span>
         <h2 id="exhibit-h" tabindex="-1" data-ex-title></h2>
-        <ul class="dots" data-ex-credits aria-label="Shaped by"></ul>
+        <ul class="dots" data-ex-credits aria-label="Played by"></ul>
       </div>
       <div data-ex-empty hidden>
         <p class="sr-only" data-ex-empty-text></p>
-        <button type="button" class="primary" data-ex-publish-here data-edit>Exhibit here</button>
+        <button type="button" class="primary" data-ex-publish-here data-edit>Leave it here</button>
       </div>
       <div data-ex-full hidden>
         <p class="sr-only" data-ex-meta></p>
         <div class="row ex-actions">
-          <button type="button" class="primary" data-ex-remix data-edit><svg aria-hidden="true"><use href="#i-remix"/></svg>Remix</button>
-          <button type="button" class="warn" data-ex-replace data-edit aria-label="Replace the workbench with this" title="Replace the workbench with this"><svg aria-hidden="true"><use href="#i-remix"/></svg>Swap in</button>
+          <button type="button" class="primary" data-ex-join data-edit aria-label="Join in: bring this performance to the stage and play along" title="Bring it to the stage and play along">Join in</button>
           <button type="button" class="icon" data-ex-store data-edit aria-label="Move to the storeroom" title="Move to the storeroom"><svg aria-hidden="true"><use href="#i-store"/></svg></button>
         </div>
         <div class="row ex-display" data-ex-display hidden>
@@ -160,7 +151,7 @@
         <ul class="shelf" data-storeroom></ul>
       </details>
       <details class="drawer" data-archive-box>
-        <summary title="Archived drafts: whatever left the bench"><svg aria-hidden="true"><use href="#i-archive"/></svg><span class="sr-only">Archived drafts</span> <span class="count" data-archive-count></span></summary>
+        <summary title="Archived loops: whatever left the stage"><svg aria-hidden="true"><use href="#i-archive"/></svg><span class="sr-only">Archived loops</span> <span class="count" data-archive-count></span></summary>
         <ul class="shelf" data-archive></ul>
       </details>
     </section>
