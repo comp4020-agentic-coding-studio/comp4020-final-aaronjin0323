@@ -9,643 +9,291 @@ where it lives --- `fly.toml`, the `Dockerfile`, the CI workflow and
 [final project brief](https://comp.anu.edu.au/courses/comp4020-agentic-coding-studio/assessments/final-project/).
 What the agent needs to carry from any of it is your call.
 
+
 ## Goal
 
-This project is a multi-user, real-time, persistent game: a shared board of
-tiles that people claim, shown as a 3D scene rather than a flat grid. It's
-built for a room of strangers at the showcase --- the point is that it gets
-more interesting because other people are claiming tiles at the same time, not
-just that it remembers input.
+**Impossible Museum** is a small, shared 3D gallery where visitors assemble
+impossible sculptures together, exhibit them, and make variations of one
+another's work. It's built for a handful of people visiting together for five
+to ten minutes, including someone opening the URL with no introduction. It
+replaces Skyline ([ADR 11](docs/adr/0011-rebuild-after-skyline.md)); the
+museum's own decisions are [ADR 12](docs/adr/0012-impossible-museum.md).
 
-**The hook is adjacency.** Each person holds one tile, and a tile rises for
-every claimed neighbour. Standing alone keeps you flat; settling next to
-strangers builds a skyline. Where you stand matters because of who else is
-there, which is what makes it a game for a room rather than a form with a
-database behind it.
+**The loop:** explore, then select a sculpture, change it together, exhibit
+it, discover its history, and return later.
 
-For crit 8, the working slice is the smallest version of that: a visitor
-claims a tile, and it's still theirs when anyone comes back later. Real-time
-updates between visitors arrive at crit 9, and logging at crit 10.
+**Good, here:** a visitor quickly understands how to contribute, can see
+someone else's contribution, and feels free to experiment because their work
+is credited and recoverable. Every change answers in the moment you make it.
+These are starting decisions: change them when evidence warrants it, with the
+reason recorded here and in an ADR.
 
 ## Decisions
 
 Settled; change them here first, then in the code.
 
-- **A person is an anonymous visitor.** A random ID in a cookie (`pid`,
-  HttpOnly, `SameSite=Lax`, `Secure` in production, one-year `Max-Age`)
-  decides ownership. The typed label is display only and never proves who
-  anyone is. No accounts.
-- **Labels are 1--24 characters after trimming**, and escaped on every
-  output. Anything else is refused with a message, not silently truncated.
-- **One tile per person.** Claiming a new tile releases the old one, in the
-  same transaction.
-- **First claim wins.** Claiming a tile someone else holds fails: the form
-  path redirects back with a visible "someone got there first" notice, and a
-  script client gets `409`. Nobody can take a held tile. With JS, clicking a
-  tile the page already shows as held never posts: it says whose it is
-  ("Ari's Townhouse"), so "got there first" only ever means a real race.
-- **Grid is 12×12 (144 tiles).** `N = 12` is a constant in code, not a config
-  table.
-- **Height = building level + occupied neighbours** (ADR 5), counting the
-  8 surrounding tiles. Derived when the page renders, never stored.
-- **The 3D board is CSS 3D transforms over real DOM buttons.** The board is
-  tilted with `perspective`/`rotateX` and each tile is raised with
-  `translateZ` by its height. Three.js/WebGL was the alternative and was
-  turned down: the server-rendered form grid below has to exist anyway, and
-  CSS 3D makes that grid *the* scene instead of a second copy for a canvas to
-  keep in sync. Keyboard focus, screen readers and no-JS all come for free.
-  Revisit only if the scene needs something CSS can't do (lighting,
-  shadows, anything beyond rotate and tilt).
-- **The camera turns.** `public/app.js` drives `--tilt` (clamped 10--75°)
-  and `--spin` on `.board`: a drag turns it (touch only turns, so vertical
-  swipes still scroll), and Turn/Tilt/Reset buttons do the same from the
-  keyboard. A drag that moved never claims a tile. The view is remembered in
-  `localStorage`. Phones start at 36° tilt and 20° spin on an 80%-wide board:
-  with no spin the blocks face away and the board reads flat, and the spin
-  swings the corners out, so the board narrows to keep them on a 360px screen
-  with tiles no smaller than before. Without JS the board stays at the default angle and every
-  claim still works. Because the camera can face any side, every tile draws
-  all four side faces (`::before`/`::after` on the button, plus `.sides`).
-- **WASD and arrows work anywhere on the page.** Nobody should need to
-  discover a Tab stop to play. The only exception is while typing in a text
-  field. The first key press from elsewhere lands on the board (your tile,
-  else the centre) and shows a focus ring; each press after that moves it.
-  Moves are *relative to the screen*: the spin, rounded to the nearest
-  quarter turn, picks which board direction a key means, so W is always
-  visually up. Enter claims, Q/E turn the camera, and Enter in the name field
-  jumps to the board instead of submitting. The board is still a single Tab
-  stop (roving tabindex), and without JS every tile is tabbable.
-- **Enter in the name field never claims a tile.** Implicit form submission
-  uses the form's first submit button, so the form starts with a disabled,
-  hidden one, which cancels it. Without that, Enter claims tile 0.
-- **Claims work without JavaScript.** Each tile is a `<button>` in a form
-  that `POST`s to `/claim`, answered with a `303` back to `/`, which renders
-  from the database. Script may enhance this; it can't be the only path.
-- **Server: bare `node:http`**, TypeScript run directly by Node 24 (type
-  stripping, so erasable syntax only: no enums, no namespaces, no parameter
-  properties). No framework and no build step.
-- **`/readme/` is rendered by `marked`** on each request, so it can't lag
-  behind `README.md`.
-- **Storage: SQLite through `node:sqlite`**, one file on the `/data` volume.
-  It's built in, needs no native compile, and fits a 256 MB machine.
-- **Schema changes are numbered migrations** run at boot, tracked with
-  `PRAGMA user_version`. Each step runs once, in a transaction, against
-  whatever production already holds. A committed migration is never edited;
-  a fix is a new step.
+### Who is who
 
-### The city economy (ADR 5)
+- **A visitor is a cookie.** A new browser gets a random `pid` (UUID v4,
+  HttpOnly, `SameSite=Lax`, `Secure` in production, one-year `Max-Age`), and
+  the server creates a `visitors` row for it on first sight, with a generated
+  display name ("Coral Heron") and a colour index. Two browser profiles are
+  two visitors. No accounts, passwords or email.
+- **A name is a label, never proof.** A visitor may rename themselves (1--24
+  characters after trimming, escaped on every output; anything else is a
+  `400`, never truncated). Names may collide; the colour and tag tell people
+  apart. Nothing the page sends is trusted as identity except the cookie.
+- **The pid never leaves the server.** Everyone else sees a visitor as
+  `{ tag, name, colour }`, where `tag` is the first 6 hex of a SHA-256 of the
+  pid: in every payload, in the logs, and in attribution.
 
-Skyline is a city game: land on a lease, buildings that earn coins. Read
-`docs/adr/0005-a-city-economy.md`. It replaced crit 9's dormant tiles
-(fading, waking by visiting, displacement; ADR 1 and ADR 3) and ADR 4's Wave.
+### The museum
 
-- **Every game number lives in `src/economy.ts`**, nowhere else: starting
-  coins 100; base income 10/min; +20% per occupied neighbour; 4 h cap on
-  uncollected income; levels 1--5 (Small House, Townhouse, Apartment, Office
-  Building, Skyscraper) with upgrade costs 150, 400, 900, 1800; relocation
-  50 coins, 30 min cooldown; lease 24 h, renewals 6 h/100, 12 h/180,
-  24 h/300, never past 48 h from the ownership start; help +50 to the
-  neighbour, +20 to the helper, once an hour; helping back within an hour
-  of being helped +30 more to each (ADR 8); a park 60 coins, 2 h, at most
-  2 running per player; gold needs 3 distinct people (ADR 7); zones civic
-  0/0, market +15% to each adjacent other person's building (at most +30%
-  received from markets), factory +35% self and −10% to each adjacent other
-  person's building, total bonus never below 0 (the no-neighbour base);
-  rezoning 40 coins, 1 h cooldown per player (ADR 9); districts 4×4 (nine),
-  a mayor needs Lv2+, the single highest level (a tie is no mayor) and 1
-  other Lv2+ building, +8% per other, at most +40% (ADR 10). The one exception:
-  `public/diff.js` keeps a mirror (`ECONOMY`) because the browser can't
-  import a `.ts` file, and `spec/diff.test.ts` fails if the two differ by a
-  single field. Change `src/economy.ts` first, then the mirror.
-- **Players are rows.** `players (pid PRIMARY KEY, label, coins INTEGER,
-  created_at, last_relocated_at, last_helped_at)`, created on first sight
-  with 100 coins. Coins are integers and never negative (a `CHECK`).
-- **A plot holds one building.** `cells` gains `level`, `lease_ends_at`,
-  `owned_since` (the start of this ownership, which caps renewals),
-  `pending_cents` (earned, not yet collected, in hundredths of a coin) and
-  `settled_at`. One active plot per player stays a unique index.
-- **Income is settled, never guessed.** `settle(now)` brings every building's
-  `pending_cents` up to `now` at the rate each one had since `settled_at`,
-  stopping at its lease end and at the 4 h cap. Every change that can alter
-  any rate (claim, relocate, upgrade, expiry, collect) runs `settle` first,
-  in the same `BEGIN IMMEDIATE` transaction, then applies the change. A rate
-  is never applied to time before the change that set it.
-- **A lease ends on the clock, not on absence.** Expired land is free on
-  read: a plot whose `lease_ends_at` is past is free for heights, claims and
-  income, whether or not a sweep has run. The sweep clears expired rows
-  (after settling them, so their earnings stay collectable on the player) and
-  broadcasts. Uncollected earnings from an ended lease move to
-  `players.unclaimed_cents`, collectable later.
-- **Each action is one POST, checked on the server, one transaction:**
-  `/claim` (also relocation, when you already hold land: 50 coins,
-  cooldown), `/collect`, `/upgrade`, `/renew` (`hours` 6|12|24), `/help`
-  (`cellId` of an adjacent neighbour), `/park` (`cellId` of a free plot,
-  ADR 7), `/rezone` (`zone`, ADR 9). Same-origin, `pid` only, JSON or form
-  (form gets a `303` with a notice key, as `/claim` does). Refusals are
-  specific: `409` taken, `402` not enough coins, `429` cooldown, `400` bad
-  input or rule (`max-level`, `max-lease`, `not-neighbour`, `no-land`,
-  `park-limit`).
-  Nothing the client sends is trusted except the plot and option it picks.
-- **The board event carries public state for all, private state for you.**
-  Every tile: `{ state, label, hue, level, neighbours, height, rate,
-  leaseEndsAt }` (no `pid`). Your stream also gets `me: { coins, pending,
-  rate, cellId, level, leaseEndsAt, ownedSince, relocateAt, helpAt,
-  welcome? }`. The page counts `pending` up between events from `rate`, for
-  display only.
-- **The city log** is a table of public events (`type`, text fields, plot,
-  time; never a `pid`), the latest 8 sent on each board.
-- **Landmarks stay** (ADR 4): a building with all 8 neighbours occupied,
-  now the gold tier of three (ADR 6: bronze 3, silver 5, gold 8).
-  **Help replaces Wave**: `/wave` is removed.
+- **One gallery: six plinths and one workbench.** Six exhibition slots,
+  numbered 1--6, and a single shared draft on the workbench. No rooms, no
+  free-roaming avatars.
+- **Three recipes, bounded parts.** A sculpture is a recipe id plus numbers
+  for each of its three parts. The recipes and every parameter's range and
+  step live in `public/recipes.js`, the one copy, imported by both the
+  server (to refuse) and the page (to draw sliders and the sculpture). An
+  out-of-range or unknown value is a `400`, never clamped. Nobody draws a
+  mesh.
+- **Three starters are seeded once** (a numbered migration, so a redeploy
+  never re-seeds): the Loop & Lantern (ribbon, glass cube, spheres) in slot
+  1, the Arch Totem in slot 2, the Glass Bloom in slot 3. Each is exhibit
+  version 1, published by the museum (`publishedBy: null`).
 
-### Parks (ADR 7): a public good you place for your neighbours
+### The workbench (the shared draft)
 
-Read `docs/adr/0007-parks.md`. One building per person stays; a park is
-not a tile anyone holds.
+- **Anyone present can edit the draft.** Every accepted edit is written to
+  the database before it's broadcast. Publishing is not the only persistence
+  boundary.
+- **Transforms and parameters of a part need that part's lease.** A lease is
+  per part, held by one visitor, 15 s long, renewed by every accepted edit
+  and by `POST /draft/lease` while the slider is held. Different parts are
+  editable at the same time; one part can't be silently fought over: an edit
+  to a part someone else holds is a `409 lease-held` that names the holder.
+  The server enforces leases; the page only mirrors them.
+- **Leases end on the clock or on disconnect.** An expired lease is free on
+  every read, whether or not a sweep has run. When a visitor's last stream
+  closes, their leases are released and broadcast at once.
+- **Edits are throttled on the page, not dropped on the server.** Dragging a
+  slider redraws locally on every frame; the page sends the latest value at
+  most every 100 ms, and always the final value on release. Other viewers see
+  an accepted edit within about a second under the test conditions (two
+  local streams). No promise is made about arbitrary network failure.
+- **Starting a draft:** when the workbench is empty, anyone may start one
+  from a recipe's defaults or **remix** an exhibit version into it. Remix
+  into a non-empty draft is refused (`409 draft-not-empty`) unless the
+  request says `replace: true`, which the page offers only as a separately
+  labelled action ("Replace the workbench"). Replacing **archives the
+  current draft first**, in the same transaction. **Clearing** the workbench
+  archives too. An archived draft can be brought back as a remix source.
+- **Credit follows the work.** The draft records, per part, who last shaped
+  it, and counts each contributor's accepted edits. A remix records the
+  version it came from.
 
-- **`POST /park {cellId}`**: you must hold land; 60 coins; lasts 2 h from
-  placement; never renewed; at most 2 running per player. One `BEGIN
-  IMMEDIATE`, settle first. Refusals: `402` coins, `409` plot not free, `400`
-  `no-land`, `park-limit`, `cell`.
-- **A park is an occupied neighbour for every building except its placer's
-  own**: height, the +20% bonus and landmark tiers all count it. It earns
-  nothing and blocks building on its plot (a claim on it is `409`).
-- **Gold also needs 3 distinct people** among the holder, the neighbours'
-  holders and the counted parks' placers. Bronze and silver don't.
-- **A park ends on the clock**: an ended park is gone on every read; the
-  sweep deletes it, writes the city log, logs `park.end` and broadcasts. Park
-  starts and ends are cut points in `integrate()`, like lease ends.
-- **Schema: migration 6** adds `parks (cell_id INTEGER PRIMARY KEY,
-  placed_by TEXT NOT NULL, label TEXT, placed_at TEXT NOT NULL, ends_at TEXT
-  NOT NULL)`. `placed_by` is a `pid` and never leaves the store.
-- **Payload:** a park tile is `state: "park"` with the placer's label,
-  `endsAt` and `mine` (yours only), never a `pid`; `me` gains `parks` and
-  `parkLimit`. The page offers "Place park (60)" on a free plot beside
-  someone else's building. Logged as `park who=… at=… label=…`.
+### Exhibits and versions
 
-### Return the favour (ADR 8): a decision about each other
+- **Anyone may publish the draft as an exhibit version.** Publishing takes a
+  title (1--40 characters) and either a new slot or an existing exhibit to
+  add a version to. The draft stays on the workbench after publishing.
+- **Versions are immutable.** No route updates or deletes a version row, and
+  a database trigger refuses `UPDATE` and `DELETE` on `versions`. Every
+  version keeps its contributors (names and colours as they were) and its
+  publisher.
+- **Restore makes a new version.** Restoring version 2 of an exhibit
+  publishes version N+1 with version 2's recipe and numbers and
+  `restoredFrom` set. History only grows.
+- **Six slots, never silent eviction.** Publishing a new exhibit into a slot
+  someone's exhibit already holds is a `409 slot-taken` unless the request
+  says `replace: true`; the page shows what's there and asks. Replacing moves
+  the old exhibit to the **storeroom**, with all its versions, and it can be
+  put back on a free slot later. Taking an exhibit off display does the same.
+  Nothing published is ever deleted.
 
-Read `docs/adr/0008-return-the-favour.md`. Help is unchanged (adjacent only;
-help at a distance was turned down).
+### Live, and leaving
 
-- **If B helps A within an hour of A helping B, both get +30 more**
-  (`RETURN_BONUS`, `RETURN_WINDOW_MS`). Checked and cleared inside `help()`'s
-  `BEGIN IMMEDIATE`, so it pays once; a return doesn't open a favour back.
-  Only the latest helper counts. **Migration 7** adds `players.helped_by`
-  (a `pid`, never leaves the store) and `helped_by_at`, both nullable.
-- **`me.returnable: { cellId, until } | null`**, only while the window is
-  open and the helper stands beside you, and you can help now. The page
-  glows that building green (`data-return`, "+30" over its roof) and its
-  Help reads "Help back +30 each". City log: "Kai
-  returned Mia's help"; server log: the `help` line with `returned=true`.
+- **SSE, with the whole state in every event.** `GET /events` sends a
+  `state` event on connect and after every change, so a reconnecting page is
+  right from its first message. A 15 s comment heartbeat keeps Fly's proxy
+  from closing an idle stream. On `SIGTERM` every stream ends and the
+  database closes.
+- **Presence is open streams.** A visitor is present while at least one of
+  their streams is open; the event lists who's here and which parts each is
+  editing. Presence is never stored.
+- **Disconnected means view-only.** When the stream drops, the page keeps
+  showing the museum, disables every control, and says so ("Reconnecting...
+  you can look, but not edit until we're back"). It re-enables editing only
+  after the first `state` event of the new connection has replaced its
+  copy.
+- **Animation is never a write.** Motion is derived from saved parameters
+  and a shared time base (`serverTime` in each event, against the page's
+  clock), so two screens show the same sculpture at the same phase. No
+  animation frame touches the server.
 
-### Zoning (ADR 9): what your building does to the people beside it
+### Phone and keyboard
 
-Read `docs/adr/0009-zoning.md`. The one choice with a cost to someone else
-in it, and it's public.
-
-- **Every building has a zone** (`civic` default, `market`, `factory`).
-  Income is `10 × level × (100 + 20 × neighbours + zone terms)` cents a
-  minute: own zone's self term, plus each adjacent *other person's*
-  building's zone effect; market effects received capped at +30%; the
-  whole bonus floored at 0. Parks have no zone. `rate(level, n, bonus)`
-  takes one summed percentage term, so a later term adds into it.
-- **`POST /rezone {zone}`** on your own building: 40 coins, 1 h cooldown,
-  one `BEGIN IMMEDIATE`, **settle first** (it changes neighbours' rates, so
-  it's a cut point for every adjacent building). Refusals `402`, `429`,
-  `400` (`no-land`, `zone`, `same-zone`). A new claim is civic; a freed plot
-  goes back to civic; **a move keeps the zone** (part of the building, like
-  its level).
-- **Migration 8:** `cells.zone TEXT NOT NULL DEFAULT 'civic'`,
-  `players.last_rezoned_at TEXT`. Civic is neutral, so the deploy changes
-  nobody's income.
-- **Payload:** every building tile has `zone` (public); `me.rezoneAt`. The
-  page draws a roof icon for market and factory (civic none); your own
-  inspector offers the other zones with cost while you can act; the
-  preview's `+N/min` and each neighbour's `+N%` include zones. A neighbour
-  rezoning is narrated on your page only, one line ("Kai built a factory
-  beside you · −10%"). Logged `rezone who=… at=… zone=… from=…`; city log
-  "Kai zoned a factory".
-
-### Districts and mayors (ADR 10): a contest that scales to a room
-
-Read `docs/adr/0010-districts-and-mayors.md`. No new action, no schema
-change: everything is derived from plots and levels.
-
-- **Nine 4×4 districts**, `district = floor(r/4)*3 + floor(c/4)` (0..8 in
-  the payload; people read 1..9, in the page and both logs).
-- **Mayor:** the holder of a district's single highest-level building at
-  Lv2+, if at least 1 other Lv2+ building there is someone else's. A tie at
-  the top is no mayor. Parks never count; the mayor's own buildings are
-  never "others". The mayor earns +8% per other (cap +40%), added into
-  `rate()`'s summed bonus inside the same floor.
-- **Mayors change only at cut points** (claim, move, upgrade, lease end),
-  all settle-first already; `integrate()` recomputes them per piece.
-  Never stored.
-- **Payload:** every tile has `district`; the board has `mayors: [{
-  district, cellId, label }]`, labels only. The page draws grid lines every
-  4 plots (CSS only), a gold star on the mayor's roof (opposite edge from a
-  zone sign), an inspector line, the mayor term in the preview, and one
-  line for your own building ("You're mayor! +16%" / "Kai took mayor").
-  Logged `mayor district=N who=<tag|none> label=… from=<tag|none>` by
-  comparing before and after each broadcast; city log "Kai became mayor of
-  district 5".
-
-### Crit 9: real-time and leaving
-
-- **Live updates over SSE** (`GET /events`). Claims stay `POST`s; the server
-  pushes the board to every open page after any change. SSE fits bare
-  `node:http` with no library, reconnects by itself, and only the server ever
-  needs to push. WebSockets would earn their keep only for streaming input
-  from clients (live cursors), which this game doesn't have.
-- **Streams are expected to drop, so every event carries the whole board.**
-  Fly's proxy closes a connection after about 60 s with nothing sent (one
-  recent report says about 30 s for a stalled stream), so a comment
-  heartbeat goes out every 15 s. Fly can also stop the machine with streams
-  open. The client reconnects on its own (`retry: 2000`), and since each
-  `board` event is the full state, not a diff, reconnecting resyncs with no
-  replay logic. On `SIGTERM` the server ends every stream and closes the
-  database before exiting, so clients reconnect at once rather than hanging.
-- **Each stream gets its own payload.** "Mine" depends on who's asking, and a
-  `pid` is the only thing that proves identity, so it never leaves the
-  server: each connection is sent the board with its own tile marked, and
-  other people appear only through the public tile fields, never a `pid`.
-- **With JS, claiming happens in place.** The form posts with `fetch` and the
-  board updates from the response and the stream: no reload, and the camera
-  and focus stay put. Without JS it's the `303` reload, as before, and other
-  people's claims show on the next load.
-- Crit 9's dormant tiles (fading, waking by a visit, displacement) were
-  replaced by leases in ADR 5.
-- **Losing land is told, not hidden.** When a lease ends, the player's next
-  visit says so once, with what's waiting in the same line ("Your lease
-  ended. 2880 coins waiting: collect, then pick a new plot."; the figure is
-  what Collect pays, so the two never disagree), and their coins and
-  uncollected earnings are kept. With no land but earnings waiting, the
-  wallet shows coins and Collect only (no income, lease ring, Upgrade or
-  Renew). This is the next-day return a marker checks for persistence: an
-  empty board with the money hidden reads as data lost. A rule that takes
-  something from you has to be readable off the screen.
-- **Phones tap to select, then confirm.** On a coarse pointer the first tap
-  on a tile selects it and shows a full-width bar; its button ("Build here",
-  or "Move here · 50" when you hold land) does the action. Mouse and keyboard
-  claim directly. The bar names whose building it is, and for a free plot
-  shows what building there would earn and whose income it would lift: on a
-  phone it's the only way to learn who you'd stand beside.
-
-### Showing what your choice does to other people
-
-A project review found the game was one decision deep: you claim, and the
-page never shows that your position lifts or drops strangers, which is the
-whole point. So:
-
-- **Every height change is visible to everyone.** A tile whose height
-  changes *while keeping its holder* shows a floating "+1" or "−1" on every
-  open screen. A tile that changes hands, or becomes claimed, doesn't: that's
-  a new arrival, not a rise.
-- **Your own neighbourhood is narrated, and only yours.** Building says
-  whose income you lifted ("Your building is up! +14/min · Mia and Kai
-  +20%"). Someone building beside you, moving away, or their lease ending
-  says so, with what it did to your income ("Mia built beside you · +20%").
-  Limiting messages to your own tile keeps a busy room from flooding anyone's
-  screen or screen reader. A change of holder shows as a change of hue,
-  which comes from the holder.
-- **It's all worked out on the page.** Each `board` event is the full board,
-  so `public/diff.js` compares consecutive boards; the server sends nothing
-  new. The first board to compare against is read from the server-rendered
-  HTML, so a claim made before the stream connects still gets its message.
-  Your claim's result can arrive by the stream or by the claim's response,
-  whichever is first; both go through the same comparison, so the message
-  shows exactly once. `diff.js` is a pure module unit-tested in
-  `spec/diff.test.ts`.
-- **Scripts are ES modules, served `no-cache`,** so an `app.js` and a
-  `diff.js` from different deploys can never run together.
-
-### Crit 10: telling people apart, and who did what
-
-- **What each person may see and change is decided on the server, and
-  recorded in `docs/adr/0002-who-may-see-and-change-what.md`** with the
-  options turned down. The page may hide things as a courtesy; every rule
-  has to hold for a client that ignores the page and posts with `curl`.
-  Change the ADR's table before changing who may do what.
-- **One line per event on stdout, `event key=value`,** so `flyctl logs` is
-  the narration at the crit and the first thing read when production
-  misbehaves. Events: `start`, `page`, `welcome`, `expired.seen`,
-  `stream.open`/`stream.close`; one per successful action from the `action`
-  wrapper in `src/server.ts` (`claim` with `from`, `renamed`, `lifted`,
-  `dropped`; `relocate`, `collect`, `upgrade`, `renew`, `help`, `park`,
-  `rezone`), and `<action>.refused` (status, reason, and `held` on a claim's
-  `409`); `expire`, `park.end`, `landmark`, `mayor`, `error`, `shutdown`.
-- **A person in the logs is a tag, never their `pid`.** The tag is the first
-  6 hex of a SHA-256 of the `pid`: two visitors read apart, and nobody
-  reading the logs can turn it back into a cookie. Logs leave the server, and
-  the `pid` is the only proof of identity, so a `pid` next to a label would
-  let a log reader act as that person.
-- **Every typed string is quoted as JSON,** with line separators and format
-  characters (bidi overrides) escaped too, so a label can't end the line,
-  forge a second one, or hide text. Only tags, tiles, numbers and fixed
-  words go in unquoted.
-- **Logging lives in `src/log.ts`, called from `src/server.ts`.** `db.ts`
-  and `board.ts` stay pure. What a claim did (`lifted`, `dropped`)
-  is worked out by comparing the board before and after, the same rule as
-  the page's +1/−1.
-
-### A goal for the room, and something to do with your neighbours
-
-Playing it found the game was one action: claim, then wait. Recorded in
-`docs/adr/0004-landmarks-and-waves.md`.
-
-- **The goal is landmarks, in tiers on the same spot** (ADR 6, amending
-  ADR 4). A tower earns a **bronze** crown at 3 occupied neighbours,
-  **silver** at 5 and **gold** at 8 (gold is ADR 4's landmark: nine people).
-  The thresholds are game numbers: `LANDMARK_TIERS` in `src/economy.ts`,
-  mirrored in `public/diff.js`'s `ECONOMY`. Bronze and silver give a room of
-  three or four something to reach; every step is on the way to gold, and
-  every gap round a nearly finished tower is still a reason to move. A
-  threshold that scales with the number of players was turned down (ADR 6):
-  a moving goal, a reason to keep people away, and untestable.
-- **Landmarks are stored, permanent, and only ever counted up.** Migration 3
-  adds `landmarks (id INTEGER PRIMARY KEY, cell_id INTEGER, label TEXT,
-  raisers TEXT, raised_at TEXT)`, with `raisers` a JSON array of the holder
-  and the occupied neighbours' labels and no `pid`. Migration 5 adds `tier`
-  (`'gold'` by default, which every earlier row was), makes the unique index
-  `(cell_id, tier)`, and backfills silver and bronze under every gold row.
-  One row per (cell, tier), ever (`INSERT OR IGNORE`): a tower that drops and
-  reaches a tier again doesn't record a second. **Reaching a tier records
-  every tier below it too**, so a cell's tiers are always a prefix of bronze,
-  silver, gold, and its crown is its highest.
-  `store.raise(now)` runs inside every `broadcast()`, since every change that
-  can lift a tower already broadcasts; it's the same synchronous turn as the
-  change, not the same SQL transaction (inside `claim()` it slowed the
-  random-board test past its limit). It also runs once at boot, logged but
-  not celebrated. They can't be derived,
-  because the people who raised one may have left.
-- **A landmark is a mark on the spot, not a lock.** Ownership rules are
-  unchanged: its holder can move, and its lease can end and the plot be
-  settled again. It
-  shows as a crown on that cell, coloured by its highest tier.
-- **The only room-wide messages are crowns being raised.** Gold is the
-  celebration: every open page bursts and names all nine. Bronze and silver
-  are a lighter toast ("Silver crown at row 4, column 4: Mia, Kai and 4
-  others") and the live region, no burst. Only the highest new tier of a
-  change is told; the rest are logged. Everything else is still narrated for
-  your own tile only.
-- **The page always shows what's next:** crowned cells so far, and the
-  tower nearest its next tier ("Closest: Mia's building, 4 of 5 neighbours
-  for silver"; fewest neighbours still needed, ties to the higher tier). A
-  corner can only ever reach bronze and an edge silver, so neither is ever
-  shown chasing a tier it can't reach. Tiles that would bring a tower closer
-  glow (`data-helps`), and the preview and inspector say so. This is worked
-  out on the page from the board, like the +1/−1, and held equal to the
-  server's heights by a test.
-- **Each `board` event carries `landmarks`** (count of crowned cells, plus
-  per crowned cell its highest `tier`, label and raisers) and, once, a
-  `raised` entry (with `tier`) for a crown that just happened, so a
-  reconnecting page doesn't replay old celebrations. The log line is
-  `landmark at=… tier=… label=… raisers=…`, one per row recorded.
-- ADR 4's Wave was replaced by Help in ADR 5; `/wave` is gone.
-
-### Seeing a claim before and while you make it
-
-- **A placement preview, never a change.** Hover, keyboard focus or a phone
-  tap on a free plot previews its resulting height and income and marks the
-  neighbours it would lift (`data-preview="lift"`) and, on a move, the old
-  ones it would drop (`"drop"`). It's computed by `preview()` in
-  `public/diff.js`, and `spec/diff.test.ts` holds it equal to the server's
-  heights and income on random boards with ended leases, parks, zones and
-  mayors in them, so the preview and the real claim can't disagree.
-- **"Claimed" only once the server says so.** A claim in flight marks its
-  tile `data-pending` and ignores every further claim until it answers. The
-  stream may show the new board first; success is still announced only from
-  the reply. A network failure says nothing was claimed, rather than falling
-  back to a full form post. Each refusal (`403`, `409`, `402`, `429`, `400`,
-  network) has its own message, sent through the `[data-announce]` live
-  region.
-- **Any tile can be inspected,** by hover, focus or tap: whose building,
-  income, occupied neighbours, zone, district seat, landmark, and lease left,
-  counted down on the page from the server's `leaseEndsAt` (a time, not a
-  countdown); a park shows whom it lifts and when it closes. The inspector is
-  server-rendered and follows the latest input.
-- **Others' claims are marked, never announced.** A tile someone else just
-  claimed gets `data-fresh` for about two seconds; focus never moves.
-- **The first board after a reconnect is accepted even with a lower
-  version,** since a restarted server seeds its version from the clock.
-  Within one stream, a lower version is still stale and dropped.
-- **The connection line says live, reconnecting or offline,** by shape as
-  well as colour, and is hidden without JS.
-
-### Show, don't tell
-
-Playing it cold, the first screen was too complicated to start: a full
-dashboard of empty stats, four greyed buttons, a goal line, a key and an
-activity list, before the player had done anything. The game is learned by
-playing, so the page guides with motion, highlight and numbers on the
-board, and as few words as possible.
-
-- **Show only what you can act on now.** Nothing is drawn disabled to
-  explain itself. A control appears when it becomes possible and goes when
-  it isn't: no land means no dashboard and no action buttons (except
-  Collect, for earnings an ended lease left); Upgrade appears
-  once you can afford it; Renew once the lease is under 6 h; Relocate and
-  Help in the inspector of the plot you picked. The disabled-with-a-reason
-  pattern is gone.
-- **The first screen is one step.** Logo, a single-line tagline, the name
-  field, and the board with free plots gently glowing. Typing a name isn't a
-  gate: tapping a plot with no name focuses and pulses the name field, and
-  the claim goes through once a name is there. No instruction text beyond
-  the tagline and the field's placeholder.
-- **The board teaches.** Hovering, focusing or tapping a plot shows, on the
-  board itself, what claiming would do: a ghost building, `+N/min` floating
-  over it, and `+20%` over each neighbour it would lift. Money is shown as
-  coins flying from your building to your wallet when you collect, and a
-  `+N` that ticks up over your building while income waits.
-- **Numbers and icons over sentences.** The wallet is a coin icon and a
-  number. Income is `+12/min`. The lease is a draining ring round your
-  building, not "23 h 59 m". Words stay only where an icon would be
-  ambiguous, and every icon still has an accessible name.
-- **One message at a time, short.** Narration is at most one line of a few
-  words ("Kai built beside you, +20%"), shown briefly near the thing it's
-  about, and spoken through the live region. No stacked notices, no
-  paragraphs.
-- **Secondary things are tucked away until asked for.** The map key, the
-  city activity list, the camera buttons and the keyboard hint sit behind
-  small icon buttons (or appear after your first claim), not on the first
-  screen. The landmark goal shows only once a crown stands or some
-  building is one neighbour short of its next tier (ADR 6).
-- **Accessibility is kept, not traded away.** Every visual cue has a
-  text equivalent for screen readers, keyboard and no-JS paths still work,
-  and reduced motion replaces motion with a static highlight.
+- **Every action works from the keyboard and at 390x844.** Plinths and
+  workbench parts are real buttons in tab order, sliders are `<input
+  type="range">`, and the 3D canvas is decoration over a DOM that holds every
+  control. Arrow keys orbit the camera when the canvas has focus.
+- **Without WebGL** the page still lists exhibits, history and the draft's
+  numbers, and every control still works.
 
 ### The look
 
-- **Styled after a GTA title screen.** A framed sunset header over a
-  skyline with palms, flat colour with black outlines and hard shadows, and
-  the board as a city map at night: the gaps are roads, and every claimed
-  tile is a tower with one row of lit windows per floor, so a height reads
-  as a count of floors. Each person keeps their own hue; that was the one part of the old warm-paper
-  look worth keeping, since it's how you tell people apart.
-- **Pricedown is artwork, never a font.** The wordmark is Pricedown (the
-  GTA logo face) converted to outlines in `public/art/logo.svg`. Its free
-  licence (Typodermic's desktop EULA) allows fixed artwork and logos, and
-  forbids a web font or putting the font file anywhere public, so no
-  Pricedown file ever enters the repo, and new words in it are new
-  artwork, not new text. Live text uses Passion One under the SIL OFL,
-  with its licence beside it in `public/fonts/`.
-- **Every tile state reads in greyscale.** Free is a flat lot with a kerb,
-  taken a lit tower, yours a gold ring with a gold marker, a park a low
-  lawn with a hedge and a tree. Focus is one gold outline, selected a double
-  cream one, pending moving stripes, a preview a dashed ghost at the
-  resulting height, a fresh claim a spreading ring. Ghosts are drawn in each
-  tile's `.beacon`, which never takes a click.
-- **The board takes the page.** On wide screens the name, map key and
-  inspector sit in a narrow column beside it; on phones the board follows
-  the name, with the camera buttons under it at thumb height. A small map
-  key names each state, instead of any tutorial.
-- **One type scale, held in tokens,** with AA contrast measured on the
-  rendered pixels over the gradient. Every animation and transition is off
-  under `prefers-reduced-motion`, and a style test fails if one is added
-  outside that block.
-- **The skyline is drawn by a script.** `scripts/draw-skyline.ts` writes
-  `public/art/city.svg` from a fixed seed, so it's redrawn, never
-  hand-edited. The page shows it as a mask, so its colour is in the CSS.
+- **A compact circular gallery suspended above dusk clouds.** Warm ivory
+  floors, open arches, peach light, restrained teal glass, chrome and coral
+  accents, a few sculptural plants and warm exhibit lighting. Playful and
+  calm. The palette is `PALETTE` in `public/recipes.js`.
+- **Visitors are coloured markers, never avatars.** A visitor shows as their
+  colour and name: a dot in the "here now" strip, a ring on the part they're
+  editing, a chip on every credit. Attention stays on the sculpture.
+- **Live text is a system font stack or an SIL OFL face** with its licence
+  beside it. AA contrast is measured on the rendered pixels over the sky.
+- **Every animation and transition has a `prefers-reduced-motion` path**:
+  sculptures hold still at their saved pose, the camera stops drifting.
+
+## The contract
+
+`src/types.ts` holds the payload shapes; this is the prose for them.
+
+Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
+`Origin` with `403 cross-origin`; every refusal is
+`{ error: ErrorCode, message }`):
+
+| Route | Body | Does | Refusals |
+|---|---|---|---|
+| `GET /` | | the museum page, server-rendered with the current exhibits so it reads without JS | |
+| `GET /events` | | SSE `state` events | |
+| `GET /exhibits/:id` | | `ExhibitHistory`: every version, newest first | `404` |
+| `POST /me` | `{ name }` | rename yourself | `400` |
+| `POST /draft/start` | `{ recipe }` | start a draft from defaults | `409 draft-not-empty`, `400` |
+| `POST /draft/remix` | `{ versionId, replace? }` | copy a version into the draft; with `replace`, archive the old draft first | `409 draft-not-empty`, `404`, `400` |
+| `POST /draft/restore-archived` | `{ archivedId, replace? }` | bring an archived draft back to the bench | as remix |
+| `POST /draft/lease` | `{ part }` | take or renew a part's lease | `409 lease-held`, `409 draft-empty`, `400` |
+| `POST /draft/release` | `{ part }` | let go of your lease | `400` |
+| `POST /draft/edit` | `{ part, values, revision? }` | set some of a part's numbers; needs the lease (taken implicitly if free) | `409 lease-held`, `409 draft-empty`, `400` |
+| `POST /draft/clear` | | archive the draft, empty the bench | `409 draft-empty`, `409 lease-held` if anyone else holds a lease |
+| `POST /publish` | `{ title, slot?, exhibitId?, replace? }` | publish the draft as a new exhibit in `slot`, or as the next version of `exhibitId` | `409 draft-empty`, `409 slot-taken`, `404`, `400` |
+| `POST /exhibits/:id/restore` | `{ versionId }` | publish that version again as the newest | `404`, `400` |
+| `POST /exhibits/:id/display` | `{ slot, replace? }` | put a storeroom exhibit on a slot | `409 slot-taken`, `404`, `400` |
+| `POST /exhibits/:id/store` | | take it off display, into the storeroom | `409 slot-empty`, `404` |
+| `GET /readme/` | | README.md rendered with `marked` | |
+| `GET /recipes.js`, `/app.js`, `/style.css`, ... | | static files from `public/`, ES modules `no-cache` | |
 
 ## Build sketch
 
-The schema is the migrations in `src/db.ts`, 1--8; read them, not a copy
-here. `cells` (one row per plot, `id` 0..143 row-major, all 144 created at
-startup with `INSERT OR IGNORE`; `one_tile_each` unique on `claimer_id`),
-`players`, `events` (the city log), `landmarks`, `parks`. Migration 2's
-`cells.last_seen_at` and `displaced` table were crit 9's dormancy (replaced
-by ADR 5); migration 4 keeps them unused rather than dropping history.
+- **Server: bare `node:http`**, TypeScript run directly by Node 24 (erasable
+  syntax only). No framework and no build step. `src/server.ts` (routes,
+  SSE, cookie), `src/db.ts` (the store), `src/log.ts`, `src/readme.ts`,
+  `src/types.ts`.
+- **Storage: SQLite through `node:sqlite`**, one file on `/data`. The store
+  is `openStore(path)` with every time-dependent function taking `now`, so
+  tests open `:memory:` with an injected clock.
+- **A fresh database file.** Skyline's tables are left alone in the old file;
+  the museum opens `museum.db` beside it (`DB_PATH` defaults to
+  `/data/museum.db` in the image, `./.data/museum.db` locally). Migrations
+  are numbered and tracked with `PRAGMA user_version`; a committed migration
+  is never edited.
+- **Tables:** `visitors`, `drafts` (one live row; archived rows keep theirs
+  with `archived_at`), `draft_credits`, `leases` (part, holder, expires_at),
+  `exhibits` (slot nullable, unique when set), `versions` (immutable, with a
+  trigger), `version_credits`.
+- **Page: Three.js 0.186.1** from a pinned CDN URL (import map), plain ES
+  modules in `public/`, no build step. `public/recipes.js` builds nothing 3D;
+  `public/sculpture.js` turns a recipe and numbers into a Three.js group, and
+  `public/app.js` holds the scene, the UI and the stream.
+- **Logs:** one line per event on stdout, `event key=value`, a person as
+  their tag, every typed string JSON-quoted.
 
-A claim is one `UPDATE ... WHERE claimer_id IS NULL` (and no running park on
-the plot) after `settle(now)` has freed every ended lease, so "did I win?" is
-its change count.
+## Out of scope
 
-**The store takes its database and its clock as arguments.**
-`openStore(path)` returns the store, and every function that depends on time
-takes `now`. The server opens `DB_PATH`; tests open `:memory:`. That's how
-lease ends, income over hours, and each migration (an older database
-upgraded with its rows intact) get tested without waiting or touching the
-volume.
-
-Routes:
-
-- `GET /`: the board, rendered on the server from current state
-- `POST /claim`, `/collect`, `/upgrade`, `/renew`, `/help`, `/park`,
-  `/rezone`: see the economy section above. A plain form always gets a `303`
-  back to `/?notice=<key>`, so a no-JS visitor sees what happened; a client
-  sending `Accept: application/json` gets real statuses instead. A POST whose
-  `Origin` isn't this host is refused with a `403`
-- Notices are picked by key from a fixed table in `src/board.ts`; nothing
-  from the query string is echoed into the page
-- `GET /events`: SSE. On connect, and after every change, it sends a `board`
-  event (the payload in the economy section). A sweep once a minute settles
-  income and ends leases and parks, broadcasting if any ended
-- `GET /readme/`: `README.md` rendered to HTML (headings intact), replacing
-  the placeholder's verbatim copy. `docs/` is served beneath it so the README's
-  relative image links resolve there as they do on GitHub
-
-The database path comes from `DB_PATH`: `/data/app.db` in the image,
-`./.data/app.db` locally (gitignored).
-
-Deliberately out of scope so far: accounts, chat, live cursors, and rate
-limiting (ADR 0002 says why).
+Free-roaming characters, chat, accounts and passwords, uploaded assets,
+runtime AI models, physics, VR, an infinite world, arbitrary mesh editing,
+multiple rooms, leaderboards, economies, rate limiting.
 
 ## Open decisions
 
-Named so they're decided on purpose, not by default. Record the answer above
-and delete the line when one is settled.
-
-- **What "good" means**: the README's argument, with sources (small web,
-  games for a few friends, single-workshop tools). Every claim in it needs a
-  matching rule here or a check in `spec/`, and the README says which claims
-  are tested and which are judged.
-- **The rest of the roadmap (weeks 11--12)**, from the same review:
-  "N here now" (a count of open streams); "since you left, 4 people settled
-  near you" on return; a "room here" invite marker. The move warning shipped
-  as the preview's "drop" marks, the room score became landmarks (ADR 4),
-  and the cooldown on moving shipped with the economy (ADR 5: 50 coins,
-  30 min).
+- **What "good" means, argued with sources**: the README, 400--600 words,
+  saying which claims are tested and which are judged.
+- **The lease length** (15 s) and the page's send interval (100 ms) are
+  first guesses; measure them with two browsers before the showcase.
 
 ## How to work in here
 
+- **Decide before code.** A change starts as a decision in this file (and an
+  ADR in `docs/adr/` for any decision with real alternatives), then the
+  server with its tests, then the page: separate commits.
+- **Red first.** A check counts only once it has been seen to fail with the
+  rule broken. Write the failing test, run it, then make it pass.
 - Run the app locally and look at it in a browser. The rendered page is the
   truth; your mental model of it isn't.
-- Run `pnpm check` before you commit (it needs the app running; `APP_URL`
-  says where). Run `pnpm check:evidence` before anything ships.
+- Run `pnpm check` before you commit, against a throwaway local server:
+  `DB_PATH=$(mktemp -d)/x.db PORT=8080 node src/server.ts`. Run
+  `pnpm check:evidence` before anything ships.
 - When a check fails, read its output before you change anything.
 - Never commit a red state.
-- **Commit freely; ask before every push and every deploy.** Small commits as
-  each piece works are the process record the marker reads against
-  `PROCESS.md`, so don't batch them. Pushing and deploying are the
-  outward-facing steps: ask each time, and one yes doesn't cover the next.
-- **Since the repo went public, a push to `main` is a deploy.** CI deploys
-  every push once its checks pass, so a half-built feature pushed is a
-  half-built feature live. Push only when the slice works end to end.
+- **Commit freely; ask before every push and every deploy.** Since the repo
+  is public, a push to `main` is a deploy (CI deploys every push once its
+  checks pass), so a half-built feature pushed is a half-built feature live.
+  Ask each time; one yes doesn't cover the next.
 - **Look at it at both sizes before calling a UI change done.** Run
-  `node scripts/browser-check.ts` against the running app (`APP_URL`; it
-  drives your installed Chrome through `playwright-core`). It screenshots
-  1440x900 and 390x844 into `.shots/` (gitignored), checks `scrollWidth`,
-  does the keyboard pass, and opens two browsers to time a claim in one
-  appearing in the other. Read the screenshots; the script can't judge them.
-  It isn't in CI, which has no Chrome; it's the hands-on check before a
-  commit that changes the page.
-- **After a deploy, fetch the URL and read the status.** The deploy command
-  finishing is not the site answering.
-- **Model the slice, not the system.** Build the one flow the current crit
-  names, end to end, before widening anything. A feature not in the slice is
-  an open decision or a line in the README's "left out", not a half-finished
-  page.
+  `node scripts/browser-check.ts` against the running local app. It
+  screenshots 1440x900 and 390x844 into `.shots/` (gitignored), checks
+  `scrollWidth`, does a keyboard pass, and opens two separate browser
+  contexts to time an edit in one appearing in the other. Read the
+  screenshots; the script can't judge them. It isn't in CI, which has no
+  Chrome.
+- **After a deploy, confirm CI is green, the Fly image matches the commit,
+  and the URL answers 200.** The deploy command finishing is not the site
+  answering.
+- **Model the slice, not the system.** Build one flow end to end before
+  widening anything. A feature not in the slice is an open decision or a
+  line in "Out of scope".
 
 ## The database
 
 - **The deployed volume outlives every deploy.** A schema change runs against
-  whatever state production already holds, not an empty file. New `NOT NULL`
-  columns need a default; renames and drops need a thought about the rows
-  already there. The local `.data/` database is not evidence that a change
-  is safe.
+  whatever production holds. New `NOT NULL` columns need a default.
 - **Never hand-edit the database**, locally or on the volume. State changes go
   through the app or a committed script.
-- **Tests run against a live app and write to its database.** Point local
-  runs at a throwaway `DB_PATH`, never at data you want to keep. A test that
-  claims a tile must not depend on the board starting empty, since a second
-  run won't find it empty.
-- **Never point `pnpm check` at the live URL.** The spec claims tiles as its
-  fixture players, so a run against production leaves Alice, Bob and Fay
-  holding tiles on the real board. CI already runs the spec against the
-  built image; after a deploy, fetch the URL instead. It did happen once
-  before crit 10 (Alice, Bob, Fay and `<b>x</b>` were found on the live
-  board), so it's now enforced, not just a rule: `spec/not-production.ts`
-  makes both `pnpm check` and `scripts/browser-check.ts` refuse any
+- **Tests write to the app's database.** Point local runs at a throwaway
+  `DB_PATH`. A test must not depend on the museum starting empty, since a
+  second run won't find it empty.
+- **Never point `pnpm check` or the browser check at the live URL.** They act
+  as fixture visitors and would leave drafts and exhibits on the museum the
+  marker sees. It's enforced: `spec/not-production.ts` makes both refuse any
   `fly.dev` host before sending a request, held by
   `spec/not-production.test.ts`. Don't weaken it to get a check to run.
 
 ## The checks
 
 - **Real-time is a test, not a claim.** A spec test opens two `/events`
-  streams as different people, claims from a third, and fails unless both
-  receive the change within 1000 ms. It runs in CI against the built image.
-- **Leases, income and migrations are unit tests over `openStore(":memory:")`**
-  with an injected clock, in `spec/` alongside the HTTP tests.
-- **The logs are tested from a server the test starts itself.** The app at
-  `APP_URL` is a separate process (a container in CI), so its stdout can't be
-  read. `spec/log.test.ts` spawns `node src/server.ts` on `PORT=0` with a
-  temp `DB_PATH` and reads what it prints.
-- **Every access rule in ADR 0002 has a test in `spec/access.test.ts` or
-  `spec/claim.test.ts`,** each seen to fail with the rule broken.
-- **Spec files run in parallel against one app.** A test that claims many
-  tiles takes them from the far end of the board, so it can't make another
-  file's "first free tile" fail for the wrong reason.
-- **Only one HTTP spec file takes the first free tile.** That's
-  `claim.test.ts`; `access.test.ts` takes from the far end and
-  `realtime.test.ts` from row 7 on. Even one claim on the first free tile
-  from another file races it (`realtime.test.ts` once failed it ~1 run in 2).
+  streams as different visitors, edits from one, and fails unless the other
+  receives the change within 1000 ms. It runs in CI against the built image.
+- **Leases, versions and migrations are unit tests over
+  `openStore(":memory:")`** with an injected clock.
+- **Every access and ownership rule above has an HTTP test**, each seen to
+  fail with the rule broken: two cookies are two visitors; a lease held by
+  one refuses the other; versions never change; restore adds a version;
+  replace archives; a full slot is never silently replaced; bad input is a
+  `400`; a cross-site POST is a `403`.
+- **The shared module is held by a test.** `spec/recipes.test.ts` checks
+  every default is in range and on its step, and that `checkEdit` refuses
+  unknown keys (including `constructor`), non-numbers and out-of-range
+  values.
+- **Spec files run in parallel against one app, and there is one shared
+  draft.** Tests that need the workbench run in one file, in sequence
+  (`describe.sequential`), and never assume it starts empty: they clear it
+  first.
+- **The logs are tested from a server the test starts itself**
+  (`PORT=0`, temp `DB_PATH`), since the app under `APP_URL` is a separate
+  process.
 
 `spec/invariants.test.ts` ships with the template: `/` answers, and `/readme/`
-carries every README heading in order. Keep it. Everything else in `spec/` is
-ours, and every rule in **Decisions** that can be checked over HTTP should have
-a test: a claim survives a fresh `GET`, a second claim on a held tile loses
-with a `409`, claiming again moves your one tile, bad input is a `400`.
+carries every README heading in order. Keep it.
 
 ## Things this stack keeps getting wrong
 
@@ -823,10 +471,6 @@ these tools, not tied to any one prototype's content.
 - **Headless Chrome hides GPU failures.** A screenshot with pieces missing
   is a bug until a headed, GPU-on run (`HEADED=1`) shows otherwise; never
   write it off as a capture artefact.
-- **A reach check followed by a hover races other players' claims.** A
-  building can rise between the two. Give the hover a short timeout and
-  turn the camera again, rather than waiting out the default on a blocked
-  angle.
 - **A recorded "source" field is not necessarily a bare URL.** Notes get
   appended to it. Anything that turns data into an `href` extracts and tests
   the URL shape, or the link checker finds it after the deploy.
@@ -849,15 +493,3 @@ these tools, not tied to any one prototype's content.
   as a separate call-out rather than folding a silent content edit into the
   restyle.
 
-## Deliverables still owed
-
-- `README.md`: the argument for good, with sources. 400--600 words by
-  submission, and the main material at crit 8. It's about 730 words now
-  (`wc -w`), so it needs cutting.
-- `PROCESS.md`: rewritten, not appended, at each crit. It must argue for the
-  stack and the agent workflow and link commits by hash.
-- `reflections/crit-8.md`, `crit-9.md`, `crit-10.md`, each by its cutoff.
-  `crit-8.md` and `crit-9.md` are in; `crit-10.md` isn't yet.
-- `research-note.md` (COMP8020), not started: 600--800 words, a cited
-  position that a durable in-repo harness (rules plus executable checks) beats per-session
-  prompting for agentic development. It has to meet the counter-case.
