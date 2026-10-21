@@ -194,6 +194,28 @@ words are labels. Read `docs/adr/0013-show-dont-tell.md`.
 - **Escape and the Gallery button** return to the stage view, focus on
   the card's heading.
 
+### First person (ADR 17)
+
+Read `docs/adr/0017-first-person.md`.
+
+- **The view is your eyes.** Eye height 1.62, inside the ring of arches.
+  Walk with WASD or arrows (a thumb joystick on the phone), look with the
+  mouse under pointer lock (a drag on the phone). You can't walk through
+  the stage, plinths or arches, or off the floor. The movement rules are
+  pure functions in `public/walk.js`, held by `spec/walk.test.ts`.
+- **A reticle is your hand.** What it rests on within 3.2 m lights up.
+  Hold to pick up a sphere, release to throw it where you look, harder the
+  longer you held; click a sphere to hop it, the ribbon to pluck it, the
+  bell to ring it. On the phone a round hand button does hold and release.
+- **Others' poses are live and never stored.** `POST /pose` at most 8 a
+  second per page; the server keeps the newest per visitor in memory and
+  sends a `poses` event to every stream at most 10 a second; a pose older
+  than 5 s is dropped. Poses never reach the database or the `state` event.
+  Held by `spec/poses.test.ts`.
+- **Every gesture keeps its button** in the panel, so playing never needs
+  walking. "Back to the stage" walks you back to your starting spot;
+  choosing a plinth from the row walks you in front of it.
+
 ### Phone and keyboard
 
 - **Every action works from the keyboard and at 390x844.** Plinths, the
@@ -280,9 +302,11 @@ words are labels. Read `docs/adr/0013-show-dont-tell.md`.
   `Escape` does the same when focus isn't in a field. Held by `focus`: the
   button shows on a plinth and after a drag, and pressing it restores the
   opening pose.
-- **Visitors are coloured markers, never avatars.** A visitor shows as their
-  colour and name: a dot in the "here now" strip, a ring on the part they're
-  editing, a chip on every credit. Attention stays on the sculpture.
+- **Visitors are there with you, in first person (ADR 17).** Each is a soft
+  floating head in their colour with their name above it and a hand orb
+  where they reach; a sphere they hold floats in front of them. In the
+  panel they're still a dot in the "here now" strip and a chip on every
+  credit.
 - **Live text is a system font stack or an SIL OFL face** with its licence
   beside it. AA contrast is measured on the rendered pixels over the sky,
   by the `contrast` section of `scripts/browser-check.ts` (seen failing with
@@ -305,6 +329,7 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
 | `GET /exhibits/:id` | | `ExhibitHistory`: every version, newest first | `404` |
 | `GET /archive?before=<id>` | | `{ drafts: ArchivedDraftView[], more: boolean }`: the next 12 archived loops older than `id` | `400` |
 | `POST /me` | `{ name }` | rename yourself | `400` |
+| `POST /pose` | `{ at, look, reach?, holding? }` | where you stand and look, in memory only; sent on as a `poses` event | `400` |
 | `POST /stage/grab` | `{ object }` | claim a sphere (taking it from whoever held it) | `400` |
 | `POST /stage/gesture` | `{ gesture }` | add one gesture to the loop (a throw needs your claim and ends it) | `409 taken`, `400` |
 | `POST /stage/drop` | `{ object }` | let go of a sphere without throwing | `400` |
@@ -344,7 +369,7 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
 
 ## Out of scope
 
-Free-roaming characters, chat, accounts and passwords, uploaded assets,
+Bodies, faces or customisable avatars (a head and a hand only), chat, accounts and passwords, uploaded assets,
 runtime AI models, a physics library, VR, an infinite world, sliders or
 parameter panels, multiple rooms, leaderboards, economies, puzzles or
 goals, rate limiting.
