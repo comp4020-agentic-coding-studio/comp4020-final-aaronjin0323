@@ -8,8 +8,9 @@
 // that happens on the stage is computed from those and the loop moment
 // alone, by a fixed 60 Hz step from the start of the loop with no
 // randomness, so every screen shows the same performance and no frame is
-// ever a write. The step itself uses only arithmetic and square roots
-// (exact in IEEE floats); trig is used only to lay out the ribbon once.
+// ever a write. Everything here is + - * / and square roots, which IEEE 754
+// rounds the same in every browser; no Math.sin or **, which engines may
+// each approximate in their own way.
 
 /** The colours an object can wear, by index: the gallery's palette. */
 export const PALETTE = [
@@ -108,11 +109,27 @@ export const SETS = {
 
 const TAU = Math.PI * 2;
 
-/** A point on the ribbon's path at u in [0, 1). Trig: for layout only. */
+// Sine and cosine of a whole number of turns `x` (sin(x * TAU)), from
+// + - * / only, so every browser computes the same bits (CLAUDE.md: Math.sin
+// may differ in the last digit between engines). The turn is cut to its
+// nearest quarter, then a Taylor series runs over a small angle, good to
+// about 1e-13: plenty for a ribbon's curve, and the same everywhere.
+function turnSin(x) {
+  const k = Math.round(x * 4); // nearest quarter turn
+  const f = (x - k / 4) * TAU; // |f| <= pi/4
+  const f2 = f * f;
+  const s = f * (1 - (f2 / 6) * (1 - (f2 / 20) * (1 - (f2 / 42) * (1 - (f2 / 72) * (1 - (f2 / 110) * (1 - f2 / 156))))));
+  const c = 1 - (f2 / 2) * (1 - (f2 / 12) * (1 - (f2 / 30) * (1 - (f2 / 56) * (1 - (f2 / 90) * (1 - f2 / 132)))));
+  const q = ((k % 4) + 4) % 4;
+  return q === 0 ? s : q === 1 ? c : q === 2 ? -s : -c;
+}
+const turnCos = (x) => turnSin(x + 0.25);
+
+/** A point on the ribbon's path at u in [0, 1). */
 export function ribbonPoint(u) {
-  const a = u * TAU;
-  const r = RIBBON.radius * (1 - RIBBON.breathe * Math.sin(RIBBON.turns * a));
-  return [r * Math.cos(a), RIBBON.height + RIBBON.swing * Math.sin(RIBBON.turns * a), r * Math.sin(a)];
+  const w = turnSin(RIBBON.turns * u);
+  const r = RIBBON.radius * (1 - RIBBON.breathe * w);
+  return [r * turnCos(u), RIBBON.height + RIBBON.swing * w, r * turnSin(u)];
 }
 
 // The path sampled once; the step looks points up here, never calls trig.
@@ -140,7 +157,10 @@ function catchOf(p) {
   let bestD = T.catchR * T.catchR;
   for (let i = 0; i < PATH_N; i += 2) {
     const q = PATH[i];
-    const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    const dz = q[2] - p[2];
+    const d = dx * dx + dy * dy + dz * dz;
     if (d < bestD) {
       bestD = d;
       best = i;

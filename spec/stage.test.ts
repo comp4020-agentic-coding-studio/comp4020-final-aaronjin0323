@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BELL,
@@ -218,5 +219,44 @@ describe("the objects set each other off", () => {
   it("the loop starts over: every cycle replays the same performance from rest", () => {
     const p = perf([throwAt("teal", 1, [0.3, 0.4, 0.2], [0.5, 1.5, -0.4])]);
     expect(simulate(p, 0)).toEqual(simulate(emptyPerformance("orbit"), 0));
+  });
+});
+
+describe("every browser plays the same performance", () => {
+  // JavaScript lets each engine approximate sin, cos, pow, exp and ** in
+  // the last digit; + - * / and sqrt are exactly rounded everywhere. A
+  // last-digit difference grows through collisions until two screens
+  // disagree (CLAUDE.md, "The rules use only arithmetic every engine rounds
+  // the same").
+  it("the rules use no maths an engine may approximate", () => {
+    const code = readFileSync("public/stage.js", "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+    const bad = code.match(/Math\.(sin|cos|tan|asin|acos|atan2?|pow|exp|expm1|log\w*|cbrt|hypot|sinh|cosh|tanh)\b|\*\*/g) ?? [];
+    expect(bad).toEqual([]);
+  });
+
+  // A busy performance's exact positions, every half second, hashed. Node
+  // and Chrome share an engine, so this can't compare browsers itself; what
+  // it holds is that the bits never drift: any change to the rules that
+  // moves a sphere by even the last digit shows here, and must be a
+  // decision, since it changes every saved performance.
+  it("a busy performance plays to the exact same positions, bit for bit", () => {
+    const g: Gesture[] = [
+      { kind: "throw", object: "teal", at: 0.5, from: [-0.62, 0.95, 0], v: [-0.9, 0, 0], by: "aaaaaa" },
+      { kind: "throw", object: "gold", at: 1, from: [-0.6, 0.3, -0.2], v: [2.2, 0.2, 0.1], by: "aaaaaa" },
+      { kind: "tap", object: "bell", at: 2, by: "aaaaaa" },
+      { kind: "throw", object: "dusk", at: 3, from: [0, 0.15, 0], v: [0, 1.8, 0], by: "aaaaaa" },
+      { kind: "pluck", object: "ribbon", at: 5, u: 0.5, by: "aaaaaa" },
+      { kind: "throw", object: "chrome", at: 6.5, from: [1.2, 0.3, 0.6], v: [-2, 0.3, -0.6], by: "aaaaaa" },
+      { kind: "tap", object: "bell", at: 9, by: "aaaaaa" },
+    ];
+    let text = "";
+    for (let t = 0; t < LOOP; t += 0.5) {
+      const s = simulate(perf(g), t);
+      for (const id of SPHERES) text += s.spheres[id].pos.join(",") + ";";
+    }
+    let h = 0n;
+    for (const c of text) h = (h * 131n + BigInt(c.charCodeAt(0))) % (2n ** 61n - 1n);
+    expect(h.toString()).toBe("368604101253897324");
+    expect(events(perf(g), 0, LOOP)).toHaveLength(15);
   });
 });
