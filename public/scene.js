@@ -343,7 +343,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
 
   // ---- camera: orbit around a focus point; drag and arrow keys turn it
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900);
-  const view = { yaw: 0.35, pitch: 0.48, dist: 21, focus: new THREE.Vector3(0, 0.8, 0) };
+  // yaw 0 looks in between plinths 6 and 1, so neither hides the bench
+  const view = { yaw: 0, pitch: 0.48, dist: 21, focus: new THREE.Vector3(0, 0.8, 0) };
   const goal = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, focus: view.focus.clone() };
   let interacting = 0;
   let side = 0; // px the panel covers on the right
@@ -365,8 +366,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     } else if (selected.kind === "bench") {
       // the whole floating floor, with sky and clouds round it, the bench
       // in the middle
-      goal.focus.set(0, 0.2, 0);
-      goal.dist = innerWidth < 600 ? 27 : 23;
+      const narrow = innerWidth < 600;
+      // on a phone the stage is short and wide: aim higher so the floor
+      // fills it rather than floating over empty fog
+      goal.focus.set(0, narrow ? 1.6 : 0.2, 0);
+      goal.dist = narrow ? 22 : 23;
       goal.pitch = 0.4;
     } else {
       // a storeroom exhibit isn't in the room: show the room

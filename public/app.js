@@ -119,15 +119,29 @@ function connect() {
     conn = connection(conn, "state");
     render();
   });
-  es.addEventListener("error", () => {
-    conn = connection(conn, "error");
-    for (const part of sending.keys()) stopHolding(part);
-    renderConnection();
-    // EventSource retries by itself unless the server answered with an
-    // error; then it gives up, so start a fresh one.
-    if (es.readyState === EventSource.CLOSED) retry = setTimeout(connect, 2000);
-  });
+  es.addEventListener("error", () => dropped(es.readyState === EventSource.CLOSED));
 }
+
+function dropped(closed) {
+  conn = connection(conn, "error");
+  for (const part of sending.keys()) stopHolding(part);
+  renderConnection();
+  // EventSource retries by itself unless the server answered with an
+  // error; then it gives up, so start a fresh one.
+  if (closed && navigator.onLine !== false) retry = setTimeout(connect, 2000);
+}
+
+// An open stream can outlive the network going away without an error for a
+// long while; the browser saying it's offline is a drop now.
+window.addEventListener("offline", () => {
+  es?.close();
+  clearTimeout(retry);
+  dropped(false);
+});
+window.addEventListener("online", () => {
+  es?.close();
+  connect();
+});
 
 // ---------------------------------------------------------------- toast and ask
 

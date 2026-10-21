@@ -109,7 +109,8 @@ select {
 .status {
   position: fixed;
   left: 50%;
-  top: calc(var(--top-h) + 8px);
+  top: 132px;
+  left: calc((100vw - var(--panel-w) - 24px) / 2);
   transform: translateX(-50%);
   z-index: 30;
   margin: 0;
@@ -435,8 +436,8 @@ button.small {
 button.link {
   background: none;
   border: none;
-  min-height: 0;
-  padding: 2px 4px;
+  min-height: 36px;
+  padding: 2px 6px;
   color: var(--teal-ink);
   text-decoration: underline;
 }
@@ -987,6 +988,7 @@ body.no-gl .scene {
   }
   .status {
     top: 8px;
+    left: 50%;
     position: fixed;
   }
   .param {
