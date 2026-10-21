@@ -173,6 +173,15 @@ carry the meaning and the words are labels. Read
   workbench parts are real buttons in tab order, sliders are `<input
   type="range">`, and the 3D canvas is decoration over a DOM that holds every
   control. Arrow keys orbit the camera when the canvas has focus.
+- **On a phone the sculpture never scrolls away from its controls.** At
+  390x844 the page is a fixed `100svh` shell that doesn't scroll: a slim top
+  bar, then the live 3D scene (pinned, about 38% of the height), then the
+  plinth row, then the panel, which scrolls on its own. When the workbench
+  is selected the phone camera frames the bench sculpture itself, not the
+  room, so a slider's effect is visible as it moves. Held by the browser
+  check (`phone-edit`): for every editing control on the bench, scrolled to
+  and focused in turn, the sculpture's canvas stays fully on screen and the
+  control is on screen with it; and the page itself never scrolls.
 - **Without WebGL** the page still lists exhibits, history and the draft's
   numbers, and every control still works.
 
