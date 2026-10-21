@@ -182,6 +182,13 @@ carry the meaning and the words are labels. Read
   check (`phone-edit`): for every editing control on the bench, scrolled to
   and focused in turn, the sculpture's canvas stays fully on screen and the
   control is on screen with it; and the page itself never scrolls.
+- **Scrolling the controls never turns the scene.** In the phone layout the
+  camera moves only when the visitor drags it, uses its keys, or picks
+  something; the idle drift that circles the room on desktop is off, so a
+  sculpture being edited holds its angle however long the panel is
+  scrolled. Held by `phone-edit`: the camera's yaw (`data-yaw` on the
+  canvas) is the same before and after scrolling the panel end to end for
+  longer than the drift's 6 s wait.
 - **Without WebGL** the page still lists exhibits, history and the draft's
   numbers, and every control still works.
 
