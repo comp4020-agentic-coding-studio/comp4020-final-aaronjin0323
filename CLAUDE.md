@@ -198,6 +198,17 @@ carry the meaning and the words are labels. Read
   floors, open arches, peach light, restrained teal glass, chrome and coral
   accents, a few sculptural plants and warm exhibit lighting. Playful and
   calm. The palette is `PALETTE` in `public/recipes.js`.
+- **The opening view stands inside the pavilion.** The first thing a
+  visitor sees, and the view the workbench returns to, is taken from
+  within the ring of arches (camera inside the arch radius, below the arch
+  tops), a little above eye height, looking slightly down at the
+  workbench sculpture. That sculpture fills the middle of the visible
+  scene; two plinths and the arches with the dusk sky behind them frame
+  it. On first load the camera eases in a short way to that pose instead
+  of swooping from outside the room. Held by the browser check
+  (`opening`), at both sizes: the camera is inside the pavilion, and the
+  bench sculpture's on-screen box is at least a fifth of the uncovered
+  scene's area and centred in it.
 - **Visitors are coloured markers, never avatars.** A visitor shows as their
   colour and name: a dot in the "here now" strip, a ring on the part they're
   editing, a chip on every credit. Attention stays on the sculpture.
