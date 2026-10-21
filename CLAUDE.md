@@ -68,6 +68,14 @@ Settled; change them here first, then in the code.
   randomness (`simulate` in `public/stage.js`). Every screen computes the
   same performance; no frame writes to the server. Held by
   `spec/stage.test.ts`.
+- **The rules use only arithmetic every engine rounds the same.** In
+  `public/stage.js`: + − × ÷ and `Math.sqrt` (exactly rounded by IEEE 754
+  in every browser), never `Math.sin`, `cos`, `pow`, `exp` or `**`, which
+  JavaScript lets each engine approximate differently in the last digit,
+  enough for Safari and Chrome to disagree about a collision a few seconds
+  in. The ribbon's curve uses a fixed polynomial sine of its own. Held by a
+  source check in `spec/stage.test.ts`, and by a fingerprint of a busy
+  performance's exact positions.
 - **The objects set each other off.** A thrown sphere floats upward,
   bounces off the ceiling and other spheres; passing close to the ribbon
   it's caught and rides it. Plucking the ribbon sends a pulse round it that
