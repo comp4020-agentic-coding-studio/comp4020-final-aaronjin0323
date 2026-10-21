@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
-import { VISITOR_COLOURS } from "../public/recipes.js";
+import { VISITOR_COLOURS } from "../public/stage.js";
 import { openStore, SLOTS, type Snapshot } from "./db.ts";
 import { MARK, renderMuseum, SHELL } from "./html.ts";
-import { log, person, raw, type Value, values, who } from "./log.ts";
+import { log, person, raw, type Value, who } from "./log.ts";
 import { renderDoc, renderReadme } from "./readme.ts";
 import type { ErrorCode, ExhibitView, Refusal, StateEvent, VisitorView } from "./types.ts";
 
@@ -16,9 +16,9 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const DB_PATH = process.env.DB_PATH ?? "./.data/museum.db";
-// LEASE_MS (like SWEEP_MS and HEARTBEAT_MS below) is shortened by the
-// environment only so the log test can watch a lease run out.
-const store = openStore(DB_PATH, { leaseMs: Number(process.env.LEASE_MS) || undefined });
+// CLAIM_MS (like SWEEP_MS and HEARTBEAT_MS below) is shortened by the
+// environment only so the log test can watch a claim run out.
+const store = openStore(DB_PATH, { claimMs: Number(process.env.CLAIM_MS) || undefined });
 
 // --- who is who ---
 
@@ -160,12 +160,12 @@ async function servePage(req: IncomingMessage, res: ServerResponse): Promise<voi
 
 // --- live updates (SSE) ---
 // Every open page holds a stream. After any change each one is sent the
-// whole museum as its own visitor sees it (`you` and `lease.mine` depend on
+// whole museum as its own visitor sees it (`you` and `claim.mine` depend on
 // who's asking, and a pid never leaves the server). A whole state, not a
 // diff, so a stream that reconnects is right from its first event. Both
 // intervals can be shortened by the environment so a test can watch them.
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS) || 15_000; // Fly's proxy closes idle connections
-const SWEEP_MS = Number(process.env.SWEEP_MS) || 5_000; // leases end on the clock
+const SWEEP_MS = Number(process.env.SWEEP_MS) || 2_000; // claims end on the clock
 
 type Stream = { pid: string; res: ServerResponse; since: number };
 const streams = new Set<Stream>();
@@ -181,14 +181,14 @@ function presentPids(): string[] {
 }
 
 function stateFor(pid: string, snap: Snapshot, now: Date): StateEvent {
-  const editing = (p: string): string[] => snap.leases.filter((l) => l.pid === p).map((l) => l.part);
+  const holding = (p: string): string[] => snap.claims.filter((c) => c.pid === p).map((c) => c.part);
   return {
     serverTime: now.toISOString(),
     seq,
     you: store.view(pid),
-    present: presentPids().map((p) => ({ ...store.view(p), editing: editing(p) })),
+    present: presentPids().map((p) => ({ ...store.view(p), holding: holding(p) })),
     draft: snap.draft,
-    leases: snap.leases.map((l) => ({ part: l.part, holder: l.holder, expiresAt: l.expiresAt, mine: l.pid === pid })),
+    claims: snap.claims.map((c) => ({ part: c.part, holder: c.holder, expiresAt: c.expiresAt, mine: c.pid === pid })),
     slots: snap.slots,
     storeroom: snap.storeroom,
     archivedDrafts: snap.archivedDrafts,
@@ -238,7 +238,7 @@ function openStream(req: IncomingMessage, res: ServerResponse): void {
       secs: Math.round((Date.now() - stream.since) / 1000),
       released: released.length ? raw(released.join(",")) : undefined,
     });
-    // Gone, and their leases with them, at once (CLAUDE.md).
+    // Gone, and what they held with them, at once (CLAUDE.md).
     if (leaving) broadcast();
   });
 }
@@ -248,12 +248,12 @@ setInterval(() => {
   for (const { res } of streams) res.write(": hb\n\n");
 }, HEARTBEAT_MS).unref();
 
-// A lease that ran out is already free on every read; the sweep makes sure
+// A claim that ran out is already free on every read; the sweep makes sure
 // every page hears it, even when nobody acts.
 setInterval(() => {
   const now = new Date();
   const ended = store.expire(now);
-  for (const l of ended) log("lease.expire", { who: who(l.pid), part: raw(l.part), at: l.expiresAt });
+  for (const l of ended) log("claim.expire", { who: who(l.pid), part: raw(l.part), at: l.expiresAt });
   if (ended.length) broadcast(now);
 }, SWEEP_MS).unref();
 
@@ -301,10 +301,10 @@ const STATUS: Record<ErrorCode, number> = {
   "bad-request": 400,
   "cross-origin": 403,
   "not-found": 404,
-  "lease-held": 409,
-  "no-lease": 409,
-  "draft-not-empty": 409,
-  "draft-empty": 409,
+  taken: 409,
+  "nothing-to-undo": 409,
+  "stage-busy": 409,
+  "stage-empty": 409,
   "slot-taken": 409,
   "slot-empty": 409,
 };
@@ -350,8 +350,8 @@ function flag(v: unknown, field: string): boolean {
   if (typeof v !== "boolean") throw bad(`${field} must be true or false`);
   return v;
 }
-// A recipe or part id: checked against recipes.js by the store; here only
-// its shape, so the log can print it raw.
+// An object id: checked against stage.js by the store; here only its
+// shape, so the log can print it raw.
 function word(v: unknown, field: string): string {
   if (typeof v !== "string" || !/^[a-z]{1,24}$/.test(v)) throw bad(`no such ${field}`);
   return v;
@@ -418,24 +418,50 @@ const postMe = action("rename", (pid, body) => {
   return { log: { from, to: name } };
 });
 
-const postStart = action("draft.start", (pid, body, now) => {
-  only(body, ["recipe"]);
-  const recipe = word(body.recipe, "recipe");
-  const r = check(store.start(pid, recipe, now));
-  return { log: { recipe: raw(recipe), draft: r.draftId }, json: { draftId: r.draftId } };
+const postGrab = action("grab", (pid, body, now) => {
+  only(body, ["object"]);
+  const object = word(body.object, "object");
+  const r = check(store.grab(pid, object, now));
+  return { log: { object: raw(object), from: r.from ? person(r.from) : undefined }, json: { from: r.from, expiresAt: r.expiresAt } };
 });
 
-const postRemix = action("draft.remix", (pid, body, now) => {
+const postDrop = action("drop", (pid, body) => {
+  only(body, ["object"]);
+  const object = word(body.object, "object");
+  const r = store.drop(pid, object);
+  return { log: { object: raw(object), dropped: r.dropped }, json: { dropped: r.dropped }, quiet: !r.dropped };
+});
+
+const postGesture = action("gesture", (pid, body, now) => {
+  only(body, ["gesture"]);
+  const r = check(store.gesture(pid, body.gesture, now));
+  const g = r.gesture;
+  return { log: { kind: raw(g.kind), object: raw(g.object), at: g.at, rev: r.revision }, json: { gesture: g, revision: r.revision } };
+});
+
+const postUndo = action("undo", (pid, body, now) => {
+  only(body, []);
+  const r = check(store.undo(pid, now));
+  return { log: { kind: raw(r.removed.kind), object: raw(r.removed.object), at: r.removed.at }, json: { removed: r.removed } };
+});
+
+const postClear = action("stage.clear", (pid, body, now) => {
+  only(body, []);
+  const r = check(store.clear(pid, now));
+  return { log: { archived: r.archivedId }, json: { archivedId: r.archivedId } };
+});
+
+const postJoin = action("stage.join", (pid, body, now) => {
   only(body, ["versionId", "replace"]);
   const versionId = id(body.versionId, "versionId");
-  const r = check(store.remix(pid, versionId, flag(body.replace, "replace"), now));
+  const r = check(store.join(pid, versionId, flag(body.replace, "replace"), now));
   return {
     log: { version: versionId, draft: r.draftId, archived: r.archivedId ?? undefined },
     json: { draftId: r.draftId, archivedId: r.archivedId },
   };
 });
 
-const postRestoreArchived = action("draft.restore-archived", (pid, body, now) => {
+const postRestoreArchived = action("stage.restore-archived", (pid, body, now) => {
   only(body, ["archivedId", "replace"]);
   const archivedId = id(body.archivedId, "archivedId");
   const r = check(store.restoreArchived(pid, archivedId, flag(body.replace, "replace"), now));
@@ -443,39 +469,6 @@ const postRestoreArchived = action("draft.restore-archived", (pid, body, now) =>
     log: { from: archivedId, draft: r.draftId, archived: r.archivedId ?? undefined },
     json: { draftId: r.draftId, archivedId: r.archivedId },
   };
-});
-
-const postLease = action("lease", (pid, body, now) => {
-  only(body, ["part"]);
-  const part = word(body.part, "part");
-  const r = check(store.lease(pid, part, now));
-  // A renewal moves expiresAt, which pages count down to, so it broadcasts too.
-  return { log: { part: raw(part), taken: r.taken || undefined }, json: { expiresAt: r.expiresAt } };
-});
-
-const postRelease = action("release", (pid, body, now) => {
-  only(body, ["part"]);
-  const part = word(body.part, "part");
-  const r = store.release(pid, part, now);
-  return { log: { part: raw(part), released: r.released }, json: { released: r.released }, quiet: !r.released };
-});
-
-const postEdit = action("edit", (pid, body, now) => {
-  only(body, ["part", "values", "revision"]);
-  const part = word(body.part, "part");
-  // The revision the page last saw: checked for shape, not enforced. The
-  // part's lease already keeps two people off the same numbers.
-  if (body.revision !== undefined && (typeof body.revision !== "number" || !Number.isInteger(body.revision) || body.revision < 0)) {
-    throw bad("revision must be a whole number");
-  }
-  const r = check(store.edit(pid, part, body.values, now));
-  return { log: { part: raw(part), values: values(r.values), rev: r.revision }, json: { revision: r.revision, values: r.values } };
-});
-
-const postClear = action("draft.clear", (pid, body, now) => {
-  only(body, []);
-  const r = check(store.clear(pid, now));
-  return { log: { archived: r.archivedId }, json: { archivedId: r.archivedId } };
 });
 
 const postPublish = action("publish", (pid, body, now) => {
@@ -514,13 +507,13 @@ const postStore = action("store", (_pid, body, _now, [exhibit]) => {
 
 const POSTS: Record<string, Route> = {
   "/me": postMe,
-  "/draft/start": postStart,
-  "/draft/remix": postRemix,
-  "/draft/restore-archived": postRestoreArchived,
-  "/draft/lease": postLease,
-  "/draft/release": postRelease,
-  "/draft/edit": postEdit,
-  "/draft/clear": postClear,
+  "/stage/grab": postGrab,
+  "/stage/drop": postDrop,
+  "/stage/gesture": postGesture,
+  "/stage/undo": postUndo,
+  "/stage/clear": postClear,
+  "/stage/join": postJoin,
+  "/stage/restore-archived": postRestoreArchived,
   "/publish": postPublish,
 };
 const EXHIBIT_POSTS: Record<string, Route> = {

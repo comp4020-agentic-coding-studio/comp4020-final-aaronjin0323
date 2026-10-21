@@ -11,7 +11,7 @@ import { open, post, sleep, type Visitor } from "./helpers.ts";
 // separate process (a container in CI) whose stdout the spec can't read, so
 // this file starts its own copy of src/server.ts on a free port with a
 // throwaway database, and reads what it prints. Its own server, so its
-// workbench is its own too.
+// stage is its own too.
 
 const MIA: Visitor = { pid: "00000000-0000-4000-8000-00000000017a", cookie: "pid=00000000-0000-4000-8000-00000000017a" };
 const KAI: Visitor = { pid: "00000000-0000-4000-8000-0000000004a1", cookie: "pid=00000000-0000-4000-8000-0000000004a1" };
@@ -25,7 +25,7 @@ let out = "";
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "museum-log-"));
   app = spawn(process.execPath, ["src/server.ts"], {
-    env: { ...process.env, PORT: "0", DB_PATH: join(dir, "museum.db"), NODE_ENV: "test", LEASE_MS: "300", SWEEP_MS: "100" },
+    env: { ...process.env, PORT: "0", DB_PATH: join(dir, "museum.db"), NODE_ENV: "test", CLAIM_MS: "300", SWEEP_MS: "100" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   app.stdout!.setEncoding("utf8").on("data", (s: string) => (out += s));
@@ -71,21 +71,23 @@ describe("the server log", { concurrent: false }, () => {
     expect((await lines("rename"))[0]).toMatch(new RegExp(`^rename who=${tag(MIA.pid)} from="[A-Z][a-z]+ [A-Z][a-z]+" to="Mia"$`));
   });
 
-  it("logs a start, an edit and a refused edit naming the holder", async () => {
+  it("logs a grab that took a sphere, a gesture, and a refused throw naming the holder", async () => {
     await act(KAI, "/me", { name: "Kai" });
-    expect((await act(MIA, "/draft/start", { recipe: "loop" })).status).toBe(200);
-    expect((await act(MIA, "/draft/edit", { part: "ribbon", values: { turns: 3 } })).status).toBe(200);
-    expect((await act(KAI, "/draft/edit", { part: "ribbon", values: { turns: 4 } })).status).toBe(409);
-    expect((await lines("draft.start"))[0]).toBe(`draft.start who=${tag(MIA.pid)} recipe=loop draft=1`);
-    expect((await lines("edit"))[0]).toBe(`edit who=${tag(MIA.pid)} part=ribbon values={"turns":3} rev=2`);
-    expect((await lines("edit.refused"))[0]).toMatch(
-      new RegExp(`^edit\\.refused who=${tag(KAI.pid)} status=409 error=lease-held holder=${tag(MIA.pid)}:"Mia" message=".+"$`),
+    expect((await act(MIA, "/stage/grab", { object: "teal" })).status).toBe(200);
+    expect((await act(KAI, "/stage/grab", { object: "teal" })).status).toBe(200);
+    expect((await act(MIA, "/stage/gesture", { gesture: { kind: "throw", object: "teal", at: 1, from: [0, 0.4, 0], v: [0, 1, 0] } })).status).toBe(409);
+    expect((await act(MIA, "/stage/gesture", { gesture: { kind: "tap", object: "bell", at: 2.5 } })).status).toBe(200);
+    expect((await lines("grab"))[0]).toBe(`grab who=${tag(MIA.pid)} object=teal`);
+    expect((await lines("grab"))[1]).toBe(`grab who=${tag(KAI.pid)} object=teal from=${tag(MIA.pid)}:"Mia"`);
+    expect((await lines("gesture"))[0]).toBe(`gesture who=${tag(MIA.pid)} kind=tap object=bell at=2.5 rev=2`);
+    expect((await lines("gesture.refused"))[0]).toMatch(
+      new RegExp(`^gesture\\.refused who=${tag(MIA.pid)} status=409 error=taken holder=${tag(KAI.pid)}:"Kai" message=".+"$`),
     );
   });
 
-  it("logs a lease running out on the sweep", async () => {
+  it("logs a claim running out on the sweep", async () => {
     await sleep(600);
-    expect((await lines("lease.expire"))[0]).toMatch(new RegExp(`^lease\\.expire who=${tag(MIA.pid)} part=ribbon at="[^"]+"$`));
+    expect((await lines("claim.expire"))[0]).toMatch(new RegExp(`^claim\\.expire who=${tag(KAI.pid)} part=teal at="[^"]+"$`));
   });
 
   it("logs a publish and a refused one, with the title quoted", async () => {
@@ -97,7 +99,7 @@ describe("the server log", { concurrent: false }, () => {
     const taken = await act(KAI, "/publish", { title: "Mine", slot: 1 });
     expect(taken.status).toBe(409);
     const [pub] = await lines("publish");
-    expect(pub).toBe(`publish who=${tag(MIA.pid)} title="Moon \\"1\\" \\u202e" exhibit=4 n=1 slot=4`);
+    expect(pub).toBe(`publish who=${tag(MIA.pid)} title="Moon \\"1\\" \\u202e" exhibit=7 n=1 slot=4`);
     expect(out).not.toContain("\nfake=line");
     expect((await lines("publish.refused")).map((l) => l.split(" message=")[0])).toEqual([
       `publish.refused who=${tag(MIA.pid)} status=400 error=bad-request`,
@@ -106,37 +108,39 @@ describe("the server log", { concurrent: false }, () => {
   });
 
   it("logs restore, store and display", async () => {
-    expect((await act(KAI, "/exhibits/2/restore", { versionId: 2 })).status).toBe(200);
-    expect((await act(KAI, "/exhibits/4/store")).status).toBe(200);
-    expect((await act(KAI, "/exhibits/4/display", { slot: 5 })).status).toBe(200);
-    expect((await lines("restore"))[0]).toBe(`restore who=${tag(KAI.pid)} exhibit=2 from=1 n=2`);
-    expect((await lines("store"))[0]).toBe(`store who=${tag(KAI.pid)} exhibit=4 slot=4`);
-    expect((await lines("display"))[0]).toBe(`display who=${tag(KAI.pid)} exhibit=4 slot=5`);
+    expect((await act(KAI, "/exhibits/5/restore", { versionId: 5 })).status).toBe(200);
+    expect((await act(KAI, "/exhibits/7/store")).status).toBe(200);
+    expect((await act(KAI, "/exhibits/7/display", { slot: 5 })).status).toBe(200);
+    expect((await lines("restore"))[0]).toBe(`restore who=${tag(KAI.pid)} exhibit=5 from=1 n=2`);
+    expect((await lines("store"))[0]).toBe(`store who=${tag(KAI.pid)} exhibit=7 slot=4`);
+    expect((await lines("display"))[0]).toBe(`display who=${tag(KAI.pid)} exhibit=7 slot=5`);
   });
 
-  it("logs a remix that archived the draft, and a clear", async () => {
-    expect((await act(KAI, "/draft/remix", { versionId: 3, replace: true })).status).toBe(200);
-    expect((await act(KAI, "/draft/clear")).status).toBe(200);
-    expect((await lines("draft.remix"))[0]).toBe(`draft.remix who=${tag(KAI.pid)} version=3 draft=2 archived=1`);
-    expect((await lines("draft.clear"))[0]).toBe(`draft.clear who=${tag(KAI.pid)} archived=2`);
+  it("logs a join that archived the loop, an undo, and a start-over", async () => {
+    expect((await act(KAI, "/stage/join", { versionId: 6, replace: true })).status).toBe(200);
+    expect((await act(KAI, "/stage/gesture", { gesture: { kind: "pluck", object: "ribbon", at: 3, u: 0.5 } })).status).toBe(200);
+    expect((await act(KAI, "/stage/undo")).status).toBe(200);
+    expect((await act(KAI, "/stage/clear")).status).toBe(200);
+    expect((await lines("stage.join"))[0]).toBe(`stage.join who=${tag(KAI.pid)} version=6 draft=2 archived=1`);
+    expect((await lines("undo"))[0]).toBe(`undo who=${tag(KAI.pid)} kind=pluck object=ribbon at=3`);
+    expect((await lines("stage.clear"))[0]).toBe(`stage.clear who=${tag(KAI.pid)} archived=2`);
   });
 
-  it("logs a cross-site POST, and a stream opening and closing with the leases it released", async () => {
+  it("logs a cross-site POST, and a stream opening and closing with the spheres it dropped", async () => {
     expect((await act(ZED, "/me", { name: "x" }, { origin: "https://evil.example" })).status).toBe(403);
     expect((await lines("rename.refused")).at(-1)).toBe(`rename.refused who=${tag(ZED.pid)} status=403 error=cross-origin`);
 
-    await act(ZED, "/draft/start", { recipe: "bloom" });
     const s = await open(ZED, base);
     await s.first();
-    await act(ZED, "/draft/lease", { part: "stem" });
+    await act(ZED, "/stage/grab", { object: "gold" });
     s.close();
     await sleep(200);
     expect((await lines("stream.open")).at(-1)).toMatch(new RegExp(`^stream\\.open who=${tag(ZED.pid)} open=1$`));
-    expect((await lines("stream.close")).at(-1)).toMatch(new RegExp(`^stream\\.close who=${tag(ZED.pid)} open=0 secs=\\d+ released=stem$`));
+    expect((await lines("stream.close")).at(-1)).toMatch(new RegExp(`^stream\\.close who=${tag(ZED.pid)} open=0 secs=\\d+ released=gold$`));
   });
 
   it("never prints a pid, only tags, once every path above has logged", async () => {
-    for (const event of ["start", "visitor.new", "rename", "page", "draft.start", "edit", "edit.refused", "lease", "lease.expire", "publish", "restore", "draft.clear", "stream.open", "stream.close"]) {
+    for (const event of ["start", "visitor.new", "rename", "page", "grab", "gesture", "gesture.refused", "claim.expire", "undo", "publish", "restore", "stage.join", "stage.clear", "stream.open", "stream.close"]) {
       if (event === "page") {
         await fetch(base, { headers: { cookie: MIA.cookie } });
       }

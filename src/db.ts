@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { checkEdit, checkSculpture, defaultParts, RECIPES } from "../public/recipes.js";
-import type { ArchivedDraftView, Credit, DraftView, ExhibitHistory, ExhibitView, Parts, VersionView, VisitorView } from "./types.ts";
+import { checkGesture, checkPerformance, emptyPerformance, keepNewest, SPHERES } from "../public/stage.js";
+import type { ArchivedDraftView, Credit, DraftView, ExhibitHistory, ExhibitView, Gesture, Performance, VersionView, VisitorView } from "./types.ts";
 
 // The museum's store: one SQLite file, every write one BEGIN IMMEDIATE
 // transaction, every time-dependent function given `now` so tests can run
@@ -13,8 +13,8 @@ import type { ArchivedDraftView, Credit, DraftView, ExhibitHistory, ExhibitView,
 // server. Everything this module hands out for display is a VisitorView:
 // tag, name, colour.
 
-/** A lease lasts this long, renewed by every accepted edit (CLAUDE.md). */
-export const LEASE_MS = 15_000;
+/** A sphere claim lasts this long (CLAUDE.md, "Grabbing takes it"). */
+export const CLAIM_MS = 10_000;
 export const SLOTS = 6;
 /** How many archived drafts the state event lists, newest first. */
 export const ARCHIVE_LIST = 12;
@@ -25,7 +25,8 @@ export const tagOf = (pid: string): string => createHash("sha256").update(pid).d
 // defaults with a few numbers moved so the three plinths don't look like
 // one recipe at rest. Written out as data, not computed at migration time,
 // so a later change to a default can't change what migration 2 meant.
-const STARTERS: { slot: number; title: string; recipe: string; parts: Parts }[] = [
+// Migration 2's data, kept as it was: a committed migration never changes.
+const STARTERS: { slot: number; title: string; recipe: string; parts: Record<string, Record<string, number>> }[] = [
   {
     slot: 1,
     title: "Loop & Lantern",
@@ -56,6 +57,190 @@ const STARTERS: { slot: number; title: string; recipe: string; parts: Parts }[] 
       motes: { lift: 0, turn: 0, scale: 1, count: 14, spread: 1.3, colour: 7, drift: 0.5 },
     },
   },
+];
+
+// The starter performances (CLAUDE.md, "Three starter performances"), by
+// the museum (tag 000000), each tuned against public/stage.js so something
+// is set off in every loop. Written out as data, like migration 2's.
+const STAGE_STARTERS: { slot: number; title: string; parts: Performance }[] = [
+  {
+    slot: 1,
+    title: "Bell Panic",
+    parts: {
+      "set": "orbit",
+      "gestures": [
+        {
+          "kind": "tap",
+          "object": "bell",
+          "at": 1,
+          "by": "000000"
+        },
+        {
+          "kind": "throw",
+          "object": "chrome",
+          "at": 3,
+          "from": [
+            0.62,
+            0.95,
+            0
+          ],
+          "v": [
+            0.9,
+            0,
+            0
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "tap",
+          "object": "bell",
+          "at": 5.5,
+          "by": "000000"
+        },
+        {
+          "kind": "pluck",
+          "object": "ribbon",
+          "at": 8,
+          "u": 0.25,
+          "by": "000000"
+        }
+      ]
+    }
+  },
+  {
+    slot: 2,
+    title: "Ribbon Rodeo",
+    parts: {
+      "set": "orbit",
+      "gestures": [
+        {
+          "kind": "throw",
+          "object": "teal",
+          "at": 0.5,
+          "from": [
+            -0.62,
+            0.95,
+            0
+          ],
+          "v": [
+            -0.9,
+            0,
+            0
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "throw",
+          "object": "gold",
+          "at": 2,
+          "from": [
+            0,
+            0.95,
+            0.62
+          ],
+          "v": [
+            0,
+            0,
+            0.9
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "pluck",
+          "object": "ribbon",
+          "at": 6,
+          "u": 0.5,
+          "by": "000000"
+        },
+        {
+          "kind": "throw",
+          "object": "dusk",
+          "at": 7.5,
+          "from": [
+            0,
+            0.95,
+            -0.62
+          ],
+          "v": [
+            0,
+            0,
+            -0.9
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "pluck",
+          "object": "ribbon",
+          "at": 10,
+          "u": 0,
+          "by": "000000"
+        }
+      ]
+    }
+  },
+  {
+    slot: 3,
+    title: "Upside-Down Pool",
+    parts: {
+      "set": "orbit",
+      "gestures": [
+        {
+          "kind": "throw",
+          "object": "gold",
+          "at": 1,
+          "from": [
+            -0.6,
+            0.3,
+            -0.2
+          ],
+          "v": [
+            2.2,
+            0.2,
+            0.1
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "throw",
+          "object": "dusk",
+          "at": 4,
+          "from": [
+            0,
+            0.15,
+            0
+          ],
+          "v": [
+            0,
+            1.8,
+            0
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "throw",
+          "object": "chrome",
+          "at": 6.5,
+          "from": [
+            1.2,
+            0.3,
+            0.6
+          ],
+          "v": [
+            -2,
+            0.3,
+            -0.6
+          ],
+          "by": "000000"
+        },
+        {
+          "kind": "tap",
+          "object": "bell",
+          "at": 9,
+          "by": "000000"
+        }
+      ]
+    }
+  }
 ];
 
 const sq = (s: string): string => `'${s.replace(/'/g, "''")}'`;
@@ -149,6 +334,24 @@ export const MIGRATIONS: string[] = [
        INSERT INTO versions (id, exhibit_id, n, title, recipe, parts, published_at)
          VALUES (${i + 1}, ${i + 1}, 1, ${sq(s.title)}, ${sq(s.recipe)}, ${sq(JSON.stringify(s.parts))}, '2026-10-21T00:00:00.000Z');`,
   ).join("\n"),
+
+  // 3. The Loop Stage (docs/adr/0016). A sculpture left on the workbench is
+  // archived, recoverable; exhibits made with the old recipes go to the
+  // storeroom with every version; three starter performances take plinths
+  // 1-3; and the stage starts with a silent loop. Claims reuse the leases
+  // table, keyed by sphere.
+  [
+    `UPDATE drafts SET archived_at = '2026-11-02T00:00:00.000Z', archive_reason = 'replaced' WHERE archived_at IS NULL;`,
+    `DELETE FROM leases;`,
+    `UPDATE exhibits SET slot = NULL;`,
+    ...STAGE_STARTERS.map(
+      (s) =>
+        `INSERT INTO exhibits (slot, created_at) VALUES (${s.slot}, '2026-11-02T00:00:00.000Z');
+         INSERT INTO versions (exhibit_id, n, title, recipe, parts, published_at)
+           VALUES (last_insert_rowid(), 1, ${sq(s.title)}, 'stage', ${sq(JSON.stringify(s.parts))}, '2026-11-02T00:00:00.000Z');`,
+    ),
+    `INSERT INTO drafts (recipe, parts, created_at) VALUES ('stage', ${sq(JSON.stringify(emptyPerformance("orbit")))}, '2026-11-02T00:00:00.000Z');`,
+  ].join("\n"),
 ];
 
 export function migrate(db: DatabaseSync, migrations = MIGRATIONS): void {
@@ -171,13 +374,13 @@ export function migrate(db: DatabaseSync, migrations = MIGRATIONS): void {
 
 export type Visitor = { pid: string; name: string; colour: number };
 
-/** A lease as the server sees it: the holder's pid stays server-side. */
-export type Lease = { part: string; pid: string; holder: VisitorView; expiresAt: string };
+/** A claim as the server sees it: the holder's pid stays server-side. */
+export type Claim = { part: string; pid: string; holder: VisitorView; expiresAt: string };
 
 /** The museum minus anything that depends on who's asking. */
 export type Snapshot = {
   draft: DraftView;
-  leases: Lease[];
+  claims: Claim[];
   slots: { slot: number; exhibit: ExhibitView | null }[];
   storeroom: ExhibitView[];
   archivedDrafts: ArchivedDraftView[];
@@ -187,9 +390,11 @@ export type Snapshot = {
 type Refusal<E extends string> = { ok: false; error: E; message: string };
 const refuse = <E extends string>(error: E, message: string): Refusal<E> => ({ ok: false, error, message });
 
-export type HeldRefusal = Refusal<"lease-held"> & { holder: VisitorView; expiresAt: string };
+export type TakenRefusal = Refusal<"taken"> & { holder?: VisitorView };
 
 export type PublishInput = { title: string; slot?: number; exhibitId?: number; replace?: boolean };
+
+type Placed = { ok: true; draftId: number; archivedId: number | null };
 
 export type Store = {
   /** The visitor for a pid, created with this name and colour if new. */
@@ -199,44 +404,31 @@ export type Store = {
   view(pid: string): VisitorView;
 
   snapshot(now: Date): Snapshot;
-  /** The next ARCHIVE_LIST archived drafts older than `before` (an archived
-   * draft's id), newest first; null starts at the newest. */
+  /** The next ARCHIVE_LIST archived loops older than `before`, newest first. */
   archive(before: number | null): { drafts: ArchivedDraftView[]; more: boolean };
-  /** Unexpired leases only: an expired lease is free on every read. */
-  leases(now: Date): Lease[];
+  /** Unexpired claims only: an expired claim is free on every read. */
+  claims(now: Date): Claim[];
   history(exhibitId: number): ExhibitHistory | null;
 
-  start(pid: string, recipe: string, now: Date): { ok: true; draftId: number } | Refusal<"draft-not-empty" | "bad-request">;
-  remix(
-    pid: string,
-    versionId: number,
-    replace: boolean,
-    now: Date,
-  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty" | "not-found">;
-  restoreArchived(
-    pid: string,
-    archivedId: number,
-    replace: boolean,
-    now: Date,
-  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty" | "not-found">;
-  lease(pid: string, part: string, now: Date): { ok: true; taken: boolean; expiresAt: string } | HeldRefusal | Refusal<"draft-empty" | "bad-request">;
-  release(pid: string, part: string, now: Date): { ok: true; released: boolean };
-  /** Releases every lease a visitor holds (their last stream closed). */
+  /** Claim a sphere, taking it from whoever held it. */
+  grab(pid: string, sphere: string, now: Date): { ok: true; from: VisitorView | null; expiresAt: string } | Refusal<"bad-request">;
+  /** Let go of a sphere without throwing it. */
+  drop(pid: string, sphere: string): { ok: true; dropped: boolean };
+  /** Releases every claim a visitor holds (their last stream closed). */
   releaseAll(pid: string): string[];
-  edit(
-    pid: string,
-    part: string,
-    values: unknown,
-    now: Date,
-  ): { ok: true; revision: number; values: Record<string, number>; taken: boolean } | HeldRefusal | Refusal<"draft-empty" | "bad-request">;
-  clear(pid: string, now: Date): { ok: true; archivedId: number } | HeldRefusal | Refusal<"draft-empty">;
+  /** Add one gesture to the loop; a throw needs the claim and ends it. */
+  gesture(pid: string, g: unknown, now: Date): { ok: true; gesture: Gesture; revision: number } | TakenRefusal | Refusal<"bad-request">;
+  undo(pid: string, now: Date): { ok: true; removed: Gesture } | Refusal<"nothing-to-undo">;
+  clear(pid: string, now: Date): { ok: true; archivedId: number } | Refusal<"stage-empty">;
+  join(pid: string, versionId: number, replace: boolean, now: Date): Placed | Refusal<"stage-busy" | "not-found" | "bad-request">;
+  restoreArchived(pid: string, archivedId: number, replace: boolean, now: Date): Placed | Refusal<"stage-busy" | "not-found" | "bad-request">;
   publish(
     pid: string,
     input: PublishInput,
     now: Date,
   ):
     | { ok: true; exhibitId: number; versionId: number; n: number; stored: number | null }
-    | Refusal<"draft-empty" | "not-found" | "bad-request">
+    | Refusal<"stage-empty" | "not-found" | "bad-request">
     | (Refusal<"slot-taken"> & { exhibit: ExhibitView });
   restoreVersion(pid: string, exhibitId: number, versionId: number, now: Date): { ok: true; versionId: number; n: number; from: number } | Refusal<"not-found">;
   display(
@@ -245,8 +437,8 @@ export type Store = {
     replace: boolean,
   ): { ok: true; stored: number | null } | Refusal<"not-found" | "bad-request"> | (Refusal<"slot-taken"> & { exhibit: ExhibitView });
   storeAway(exhibitId: number): { ok: true; slot: number } | Refusal<"not-found" | "slot-empty">;
-  /** Deletes leases that ran out by `now`, and returns them. */
-  expire(now: Date): Lease[];
+  /** Deletes claims that ran out by `now`, and returns them. */
+  expire(now: Date): Claim[];
   close(): void;
 };
 
@@ -255,7 +447,6 @@ type DraftRow = {
   recipe: string;
   parts: string;
   revision: number;
-  part_authors: string;
   based_on: number | null;
   archived_at: string | null;
   archived_by: string | null;
@@ -277,9 +468,10 @@ type VersionRow = {
 };
 type ExhibitRow = { id: number; slot: number | null };
 type CreditRow = { pid: string; name: string; colour: number; edits: number };
+type ClaimRow = { part: string; pid: string; expires_at: string };
 
-// `leaseMs` is for a test that watches a lease run out; the museum's is LEASE_MS.
-export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: number } = {}): Store {
+// `claimMs` is for a test that watches a claim run out; the museum's is CLAIM_MS.
+export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: number } = {}): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL");
@@ -304,9 +496,9 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     rename: db.prepare("UPDATE visitors SET name = ? WHERE pid = ?"),
     live: db.prepare("SELECT * FROM drafts WHERE archived_at IS NULL"),
     draft: db.prepare("SELECT * FROM drafts WHERE id = ?"),
-    insertDraft: db.prepare("INSERT INTO drafts (recipe, parts, part_authors, based_on, created_at) VALUES (?, ?, ?, ?, ?)"),
+    insertDraft: db.prepare("INSERT INTO drafts (recipe, parts, based_on, created_at) VALUES ('stage', ?, ?, ?)"),
     archive: db.prepare("UPDATE drafts SET archived_at = ?, archived_by = ?, archive_reason = ? WHERE id = ? AND archived_at IS NULL"),
-    setParts: db.prepare("UPDATE drafts SET parts = ?, part_authors = ?, revision = revision + 1 WHERE id = ?"),
+    setParts: db.prepare("UPDATE drafts SET parts = ?, revision = revision + 1 WHERE id = ?"),
     archived: db.prepare("SELECT * FROM drafts WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC LIMIT ?"),
     // keyset paging in the same order: everything after the given row
     archivedBefore: db.prepare(
@@ -314,22 +506,27 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
          AND (d.archived_at, d.id) < (b.archived_at, b.id) ORDER BY d.archived_at DESC, d.id DESC LIMIT ?`,
     ),
     archivedCount: db.prepare("SELECT COUNT(*) AS n FROM drafts WHERE archived_at IS NOT NULL"),
-    draftCredits: db.prepare("SELECT pid, name, colour, edits FROM draft_credits WHERE draft_id = ? ORDER BY first_at, rowid"),
+    draftCredits: db.prepare("SELECT pid, name, colour, edits FROM draft_credits WHERE draft_id = ? AND edits > 0 ORDER BY first_at, rowid"),
+    // a credit row per visitor who ever played this loop: name and colour
+    // as they were, and how many of their gestures are in it now
     credit: db.prepare(
-      `INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) VALUES (?, ?, ?, ?, 1, ?)
-       ON CONFLICT (draft_id, pid) DO UPDATE SET edits = edits + 1, name = excluded.name, colour = excluded.colour`,
+      `INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) VALUES (?, ?, ?, ?, 0, ?)
+       ON CONFLICT (draft_id, pid) DO UPDATE SET name = excluded.name, colour = excluded.colour`,
     ),
+    creditsOf: db.prepare("SELECT pid FROM draft_credits WHERE draft_id = ?"),
+    setEdits: db.prepare("UPDATE draft_credits SET edits = ? WHERE draft_id = ? AND pid = ?"),
     copyCredits: db.prepare(
       "INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) SELECT ?, pid, name, colour, edits, first_at FROM draft_credits WHERE draft_id = ?",
     ),
-    leases: db.prepare("SELECT part, pid, expires_at FROM leases WHERE expires_at > ? ORDER BY part"),
-    lease: db.prepare("SELECT part, pid, expires_at FROM leases WHERE part = ? AND expires_at > ?"),
-    setLease: db.prepare(
+    claims: db.prepare("SELECT part, pid, expires_at FROM leases WHERE expires_at > ? ORDER BY part"),
+    claim: db.prepare("SELECT part, pid, expires_at FROM leases WHERE part = ? AND expires_at > ?"),
+    setClaim: db.prepare(
       "INSERT INTO leases (part, draft_id, pid, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (part) DO UPDATE SET draft_id = excluded.draft_id, pid = excluded.pid, expires_at = excluded.expires_at",
     ),
-    dropLease: db.prepare("DELETE FROM leases WHERE part = ? AND pid = ?"),
-    dropLeasesOf: db.prepare("DELETE FROM leases WHERE pid = ? RETURNING part"),
-    dropAllLeases: db.prepare("DELETE FROM leases"),
+    dropClaim: db.prepare("DELETE FROM leases WHERE part = ? AND pid = ?"),
+    dropAnyClaim: db.prepare("DELETE FROM leases WHERE part = ?"),
+    dropClaimsOf: db.prepare("DELETE FROM leases WHERE pid = ? RETURNING part"),
+    dropAllClaims: db.prepare("DELETE FROM leases"),
     expired: db.prepare("DELETE FROM leases WHERE expires_at <= ? RETURNING part, pid, expires_at"),
     exhibit: db.prepare("SELECT id, slot FROM exhibits WHERE id = ?"),
     inSlot: db.prepare("SELECT id, slot FROM exhibits WHERE slot = ?"),
@@ -373,7 +570,7 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
       n: v.n,
       title: v.title,
       recipe: v.recipe,
-      parts: JSON.parse(v.parts) as Parts,
+      parts: JSON.parse(v.parts) as Performance,
       contributors: credits(q.versionCredits.all(v.id) as CreditRow[]),
       publishedBy: v.published_by === null ? null : { tag: tagOf(v.published_by), name: v.publisher_name ?? "", colour: v.publisher_colour ?? 0 },
       publishedAt: v.published_at,
@@ -388,62 +585,68 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     return { id: e.id, slot: e.slot, latest: versionView(latest), versionCount: c };
   }
 
-  const EMPTY: DraftView = { id: 0, recipe: null, parts: null, revision: 0, partAuthors: {}, contributors: [], basedOn: null };
+  const EMPTY: DraftView = { id: 0, recipe: null, parts: null, revision: 0, contributors: [], basedOn: null };
 
   function draftView(d: DraftRow | null): DraftView {
     if (!d) return EMPTY;
     return {
       id: d.id,
       recipe: d.recipe,
-      parts: JSON.parse(d.parts) as Parts,
+      parts: JSON.parse(d.parts) as Performance,
       revision: d.revision,
-      partAuthors: JSON.parse(d.part_authors) as Record<string, VisitorView>,
       contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
       basedOn: basedOn(d.based_on),
     };
   }
 
-  function leaseView(row: { part: string; pid: string; expires_at: string }): Lease {
-    return { part: row.part, pid: row.pid, holder: viewOf(row.pid), expiresAt: row.expires_at };
-  }
-  const heldBy = (part: string, now: Date): Lease | null => {
-    const row = q.lease.get(part, now.toISOString()) as { part: string; pid: string; expires_at: string } | undefined;
-    return row ? leaseView(row) : null;
+  const claimView = (row: ClaimRow): Claim => ({ part: row.part, pid: row.pid, holder: viewOf(row.pid), expiresAt: row.expires_at });
+  const heldBy = (part: string, now: Date): Claim | null => {
+    const row = q.claim.get(part, now.toISOString()) as ClaimRow | undefined;
+    return row ? claimView(row) : null;
   };
-  const held = (l: Lease): HeldRefusal => ({
-    ok: false,
-    error: "lease-held",
-    message: `${l.holder.name} is shaping this part`,
-    holder: l.holder,
-    expiresAt: l.expiresAt,
-  });
+  const claimsAt = (now: Date): Claim[] => (q.claims.all(now.toISOString()) as ClaimRow[]).map(claimView);
 
-  // Archive the live draft (if any) and drop its leases. Inside a caller's
-  // transaction: replacing archives first, in the same transaction.
+  // The live loop: there's always one once migration 3 has run, but a
+  // store opened on an older shape makes one rather than failing.
+  function stage(now: Date): DraftRow {
+    const d = liveDraft();
+    if (d) return d;
+    const id = Number(q.insertDraft.run(JSON.stringify(emptyPerformance("orbit")), null, now.toISOString()).lastInsertRowid);
+    return q.draft.get(id) as DraftRow;
+  }
+
+  // Write the loop, and make the credits count what's in it now: each
+  // player's gestures still in the loop. Who's been dropped by the cap or
+  // their own undo stops being credited.
+  function setLoop(d: DraftRow, p: Performance): number {
+    q.setParts.run(JSON.stringify(p), d.id);
+    const count = new Map<string, number>();
+    for (const g of p.gestures) count.set(g.by, (count.get(g.by) ?? 0) + 1);
+    for (const { pid } of q.creditsOf.all(d.id) as { pid: string }[]) q.setEdits.run(count.get(tagOf(pid)) ?? 0, d.id, pid);
+    return d.revision + 1;
+  }
+
+  // Archive the live loop and drop every claim, then start a new loop.
+  // Inside a caller's transaction: replacing archives first, together.
   function archiveLive(pid: string, reason: "replaced" | "cleared", now: Date): number | null {
     const d = liveDraft();
     if (!d) return null;
     q.archive.run(now.toISOString(), pid, reason, d.id);
-    q.dropAllLeases.run();
+    q.dropAllClaims.run();
     return d.id;
   }
 
-  // Put a new live draft on the bench, archiving the old one first when
-  // `replace` says so.
-  function bench(
-    pid: string,
-    replace: boolean,
-    now: Date,
-    make: () => number,
-  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty"> {
-    if (liveDraft() && !replace) return refuse("draft-not-empty", "The workbench already holds a sculpture");
+  const hasGestures = (d: DraftRow | null): boolean => !!d && (JSON.parse(d.parts) as Performance).gestures.length > 0;
+
+  // Put a performance on the stage. A silent loop is simply replaced (it's
+  // archived all the same, so nothing is ever thrown away); one with
+  // gestures needs `replace`.
+  function place(pid: string, replace: boolean, now: Date, make: () => number): Placed | Refusal<"stage-busy"> {
+    if (hasGestures(liveDraft()) && !replace) return refuse("stage-busy", "Someone's playing on the stage");
     const archivedId = archiveLive(pid, "replaced", now);
     return { ok: true, draftId: make(), archivedId };
   }
 
-  const partOf = (recipe: string, part: string): boolean => Object.hasOwn(RECIPES[recipe]?.parts ?? {}, part);
-
-  // Who holds a slot, for a slot-taken refusal.
   function slotTaken(slot: number): (Refusal<"slot-taken"> & { exhibit: ExhibitView }) | null {
     const there = q.inSlot.get(slot) as ExhibitRow | undefined;
     if (!there) return null;
@@ -461,26 +664,11 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     const { c } = q.countOf.get(exhibitId) as { c: number };
     const n = c + 1;
     const me = viewOf(pid);
-    const { lastInsertRowid } = q.insertVersion.run(
-      exhibitId,
-      n,
-      v.title,
-      v.recipe,
-      v.parts,
-      pid,
-      me.name,
-      me.colour,
-      now.toISOString(),
-      v.restoredFrom,
-      v.basedOn,
-    );
+    const { lastInsertRowid } = q.insertVersion.run(exhibitId, n, v.title, v.recipe, v.parts, pid, me.name, me.colour, now.toISOString(), v.restoredFrom, v.basedOn);
     const versionId = Number(lastInsertRowid);
     creditRows.forEach((r, i) => q.insertVersionCredit.run(versionId, r.pid, r.name, r.colour, r.edits, i));
     return { versionId, n };
   }
-
-  const leasesAt = (now: Date): Lease[] =>
-    (q.leases.all(now.toISOString()) as { part: string; pid: string; expires_at: string }[]).map(leaseView);
 
   const archivedView = (d: DraftRow): ArchivedDraftView => ({
     id: d.id,
@@ -490,6 +678,8 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     archivedBy: d.archived_by === null ? null : viewOf(d.archived_by),
     contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
   });
+
+  const isSphere = (s: string): boolean => SPHERES.includes(s);
 
   return {
     ensureVisitor(pid, name, colour, now) {
@@ -510,13 +700,13 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     },
     view: viewOf,
 
-    leases: leasesAt,
+    claims: claimsAt,
 
     snapshot(now) {
       const shown = new Map((q.onDisplay.all() as ExhibitRow[]).map((e) => [e.slot!, e]));
       return {
         draft: draftView(liveDraft()),
-        leases: leasesAt(now),
+        claims: claimsAt(now),
         slots: Array.from({ length: SLOTS }, (_, i) => {
           const e = shown.get(i + 1);
           return { slot: i + 1, exhibit: e ? exhibitView(e) : null };
@@ -528,7 +718,6 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     },
 
     archive(before) {
-      // one extra row says whether there's another page
       const rows = (before === null ? q.archived.all(ARCHIVE_LIST + 1) : q.archivedBefore.all(before, ARCHIVE_LIST + 1)) as DraftRow[];
       return { drafts: rows.slice(0, ARCHIVE_LIST).map(archivedView), more: rows.length > ARCHIVE_LIST };
     },
@@ -539,96 +728,110 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
       return { exhibit: exhibitView(e), versions: (q.versionsOf.all(exhibitId) as VersionRow[]).map(versionView) };
     },
 
-    start(pid, recipe, now) {
-      if (!Object.hasOwn(RECIPES, recipe)) return refuse("bad-request", "No such recipe");
+    grab(pid, sphere, now) {
+      if (!isSphere(sphere)) return refuse("bad-request", "Only a sphere can be picked up");
       return tx(() => {
-        const out = bench(pid, false, now, () =>
-          Number(q.insertDraft.run(recipe, JSON.stringify(defaultParts(recipe)), "{}", null, now.toISOString()).lastInsertRowid),
-        );
-        return out.ok ? { ok: true as const, draftId: out.draftId } : out;
+        const d = stage(now);
+        const was = heldBy(sphere, now);
+        const expiresAt = new Date(now.getTime() + claimMs).toISOString();
+        q.setClaim.run(sphere, d.id, pid, expiresAt);
+        return { ok: true as const, from: was && was.pid !== pid ? was.holder : null, expiresAt };
       });
     },
 
-    remix(pid, versionId, replace, now) {
+    drop(pid, sphere) {
+      return tx(() => ({ ok: true as const, dropped: Number(q.dropClaim.run(sphere, pid).changes) > 0 }));
+    },
+
+    releaseAll(pid) {
+      return tx(() => (q.dropClaimsOf.all(pid) as { part: string }[]).map((r) => r.part));
+    },
+
+    gesture(pid, g, now) {
+      return tx(() => {
+        const d = stage(now);
+        const p = JSON.parse(d.parts) as Performance;
+        const checked = checkGesture(p.set, g);
+        if (!checked.ok) return refuse("bad-request", checked.reason);
+        const gesture = { ...checked.gesture, by: tagOf(pid) } as Gesture;
+        if (gesture.kind === "throw") {
+          const holder = heldBy(gesture.object, now);
+          if (!holder || holder.pid !== pid) {
+            const r: TakenRefusal = { ok: false, error: "taken", message: holder ? `${holder.holder.name} has it` : "Pick it up first" };
+            if (holder) r.holder = holder.holder;
+            return r;
+          }
+          q.dropAnyClaim.run(gesture.object);
+        }
+        const next = { set: p.set, gestures: keepNewest([...p.gestures, gesture]) };
+        // belt and braces: what's stored is always something every page can play
+        const whole = checkPerformance(next);
+        if (!whole.ok) return refuse("bad-request", whole.reason);
+        const me = viewOf(pid);
+        q.credit.run(d.id, pid, me.name, me.colour, now.toISOString());
+        return { ok: true as const, gesture, revision: setLoop(d, next) };
+      });
+    },
+
+    undo(pid, now) {
+      return tx(() => {
+        const d = stage(now);
+        const p = JSON.parse(d.parts) as Performance;
+        const tag = tagOf(pid);
+        const i = p.gestures.map((g) => g.by).lastIndexOf(tag);
+        if (i < 0) return refuse("nothing-to-undo", "Nothing of yours to undo");
+        const removed = p.gestures[i];
+        setLoop(d, { set: p.set, gestures: p.gestures.filter((_, k) => k !== i) });
+        return { ok: true as const, removed };
+      });
+    },
+
+    clear(pid, now) {
+      return tx(() => {
+        const d = liveDraft();
+        if (!hasGestures(d)) return refuse("stage-empty", "The stage is already quiet");
+        const archivedId = archiveLive(pid, "cleared", now)!;
+        q.insertDraft.run(JSON.stringify(emptyPerformance((JSON.parse(d!.parts) as Performance).set)), null, now.toISOString());
+        return { ok: true as const, archivedId };
+      });
+    },
+
+    join(pid, versionId, replace, now) {
       return tx(() => {
         const v = versionRow(versionId);
         if (!v) return refuse("not-found", "No such version");
-        return bench(pid, replace, now, () => Number(q.insertDraft.run(v.recipe, v.parts, "{}", v.id, now.toISOString()).lastInsertRowid));
+        if (v.recipe !== "stage" || !checkPerformance(JSON.parse(v.parts)).ok) return refuse("bad-request", "That's a sculpture, not a performance");
+        return place(pid, replace, now, () => {
+          const id = Number(q.insertDraft.run(v.parts, v.id, now.toISOString()).lastInsertRowid);
+          // the performers come with their performance
+          (q.versionCredits.all(v.id) as CreditRow[]).forEach((r, k) =>
+            q.credit.run(id, r.pid, r.name, r.colour, new Date(now.getTime() + k).toISOString()),
+          );
+          setLoop(q.draft.get(id) as DraftRow, JSON.parse(v.parts) as Performance);
+          return id;
+        });
       });
     },
 
     restoreArchived(pid, archivedId, replace, now) {
       return tx(() => {
         const old = q.draft.get(archivedId) as DraftRow | undefined;
-        if (!old || old.archived_at === null) return refuse("not-found", "No such archived draft");
-        return bench(pid, replace, now, () => {
-          const id = Number(q.insertDraft.run(old.recipe, old.parts, old.part_authors, old.based_on, now.toISOString()).lastInsertRowid);
+        if (!old || old.archived_at === null) return refuse("not-found", "No such archived loop");
+        if (old.recipe !== "stage") return refuse("bad-request", "That's a sculpture, not a performance");
+        return place(pid, replace, now, () => {
+          const id = Number(q.insertDraft.run(old.parts, old.based_on, now.toISOString()).lastInsertRowid);
           q.copyCredits.run(id, old.id);
           return id;
         });
       });
     },
 
-    lease(pid, part, now) {
-      return tx(() => {
-        const d = liveDraft();
-        if (!d) return refuse("draft-empty", "The workbench is empty");
-        if (!partOf(d.recipe, part)) return refuse("bad-request", "No such part on this sculpture");
-        const current = heldBy(part, now);
-        if (current && current.pid !== pid) return held(current);
-        const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
-        q.setLease.run(part, d.id, pid, expiresAt);
-        return { ok: true as const, taken: !current, expiresAt };
-      });
-    },
-
-    release(pid, part) {
-      return tx(() => ({ ok: true as const, released: Number(q.dropLease.run(part, pid).changes) > 0 }));
-    },
-
-    releaseAll(pid) {
-      return tx(() => (q.dropLeasesOf.all(pid) as { part: string }[]).map((r) => r.part));
-    },
-
-    edit(pid, part, values, now) {
-      return tx(() => {
-        const d = liveDraft();
-        if (!d) return refuse("draft-empty", "The workbench is empty");
-        if (!partOf(d.recipe, part)) return refuse("bad-request", "No such part on this sculpture");
-        const current = heldBy(part, now);
-        if (current && current.pid !== pid) return held(current);
-        const checked = checkEdit(d.recipe, part, values);
-        if (!checked.ok) return refuse("bad-request", checked.reason);
-        const parts = JSON.parse(d.parts) as Parts;
-        parts[part] = { ...parts[part], ...checked.values };
-        // belt and braces: what's stored is always something the page can draw
-        const whole = checkSculpture(d.recipe, parts);
-        if (!whole.ok) return refuse("bad-request", whole.reason);
-        const me = viewOf(pid);
-        const authors = JSON.parse(d.part_authors) as Record<string, VisitorView>;
-        authors[part] = me;
-        q.setParts.run(JSON.stringify(parts), JSON.stringify(authors), d.id);
-        q.credit.run(d.id, pid, me.name, me.colour, now.toISOString());
-        q.setLease.run(part, d.id, pid, new Date(now.getTime() + leaseMs).toISOString());
-        return { ok: true as const, revision: d.revision + 1, values: checked.values, taken: !current };
-      });
-    },
-
-    clear(pid, now) {
-      return tx(() => {
-        if (!liveDraft()) return refuse("draft-empty", "The workbench is already empty");
-        const other = leasesAt(now).find((l) => l.pid !== pid);
-        if (other) return held(other);
-        return { ok: true as const, archivedId: archiveLive(pid, "cleared", now)! };
-      });
-    },
-
     publish(pid, input, now) {
       return tx(() => {
         const d = liveDraft();
-        if (!d) return refuse("draft-empty", "The workbench is empty");
-        const creditRows = q.draftCredits.all(d.id) as CreditRow[];
-        const v = { title: input.title, recipe: d.recipe, parts: d.parts, restoredFrom: null, basedOn: d.based_on };
+        if (!hasGestures(d)) return refuse("stage-empty", "Nothing's been played yet");
+        const creditRows = q.draftCredits.all(d!.id) as CreditRow[];
+        const v = { title: input.title, recipe: d!.recipe, parts: d!.parts, restoredFrom: null, basedOn: d!.based_on };
         if (input.exhibitId !== undefined) {
           const e = q.exhibit.get(input.exhibitId) as ExhibitRow | undefined;
           if (!e) return refuse("not-found", "No such exhibit");
@@ -681,7 +884,7 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     },
 
     expire(now) {
-      return tx(() => (q.expired.all(now.toISOString()) as { part: string; pid: string; expires_at: string }[]).map(leaseView));
+      return tx(() => (q.expired.all(now.toISOString()) as ClaimRow[]).map(claimView));
     },
 
     close() {

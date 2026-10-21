@@ -3,8 +3,8 @@ import type { VisitorView } from "./types.ts";
 
 // Who did what, one line per event on stdout, for `flyctl logs` to show:
 //
-//   edit who=3fa1c2 part=ribbon values={"turns":3} rev=12
-//   publish who=3fa1c2 title="Cube Dream" exhibit=4 n=1 slot=4
+//   gesture who=3fa1c2 kind=tap object=bell at=2.5 rev=12
+//   publish who=3fa1c2 title="Bell Panic" exhibit=4 n=1 slot=4
 //
 // An event name, then key=value fields. A person is a tag: the first 6 hex
 // of a SHA-256 of their pid. The pid is the only proof of who anyone is and
@@ -36,10 +36,6 @@ export const quote = (s: string): string =>
 export const who = (pid: string): Raw => raw(tag(pid));
 /** A person as displayed: tag:"Name". */
 export const person = (v: VisitorView): Raw => raw(`${v.tag}:${quote(v.name)}`);
-/** Values checkEdit accepted, as compact JSON: its keys are recipes.js's own
- * parameter ids and its values are numbers, so nothing here was typed. Values
- * from a refused edit are untrusted; log those as a quoted string instead. */
-export const values = (v: Record<string, number>): Raw => raw(JSON.stringify(v));
 
 export function line(event: string, fields: Record<string, Value> = {}): string {
   const parts = [event];

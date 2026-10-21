@@ -16,26 +16,44 @@ export type VisitorView = {
  * when the work was done, so a later rename doesn't rewrite history. */
 export type Credit = VisitorView & { edits: number };
 
-/** Parameter values by part id, then parameter id (public/recipes.js). */
-export type Parts = Record<string, Record<string, number>>;
+/** One gesture in a loop (public/stage.js): when in the loop it happened,
+ * what was done to which object, and who did it (their tag). */
+export type Gesture = {
+  kind: "throw" | "pluck" | "tap";
+  object: string;
+  /** seconds into the loop, 0 to under LOOP */
+  at: number;
+  /** a throw: where the sphere was let go, and its speed */
+  from?: number[];
+  v?: number[];
+  /** a pluck: where round the ribbon, 0 to under 1 */
+  u?: number;
+  by: string;
+};
 
-export type LeaseView = {
+/** A performance: a set of objects and the loop of gestures played on it. */
+export type Performance = { set: string; gestures: Gesture[] };
+
+/** Someone holding a sphere (CLAUDE.md, "Grabbing takes it"). */
+export type ClaimView = {
+  /** the sphere's id */
   part: string;
   holder: VisitorView;
-  /** ISO time; the lease is free after it unless renewed */
+  /** ISO time; the claim ends then unless they throw or drop first */
   expiresAt: string;
   mine: boolean;
 };
 
+/** The live loop on the stage. Its name is from the workbench it replaced:
+ * one live row, archived when replaced or cleared. */
 export type DraftView = {
   id: number;
-  /** null when the workbench is empty */
+  /** "stage" for a performance; null only before the first migration ran */
   recipe: string | null;
-  parts: Parts | null;
-  /** bumps on every accepted change to this draft */
+  parts: Performance | null;
+  /** bumps on every accepted change to the loop */
   revision: number;
-  /** who last shaped each part, by part id */
-  partAuthors: Record<string, VisitorView>;
+  /** everyone with a gesture in the loop, counted per gesture */
   contributors: Credit[];
   /** the exhibit version this draft was remixed from, if any */
   basedOn: { exhibitId: number; versionId: number; title: string; n: number } | null;
@@ -47,8 +65,10 @@ export type VersionView = {
   /** 1, 2, 3... within its exhibit */
   n: number;
   title: string;
+  /** "stage", or an old sculpture recipe (kept in the storeroom) */
   recipe: string;
-  parts: Parts;
+  /** a Performance when recipe is "stage"; the old numbers otherwise */
+  parts: Performance;
   contributors: Credit[];
   publishedBy: VisitorView | null; // null: the museum's own starter
   publishedAt: string;
@@ -75,17 +95,17 @@ export type ArchivedDraftView = {
 };
 
 /** The whole museum, sent on connect and after every change. Each stream
- * gets its own copy because `you` and `lease.mine` depend on who's asking. */
+ * gets its own copy because `you` and `claim.mine` depend on who's asking. */
 export type StateEvent = {
   /** server clock at send, ISO; the page derives its animation time base */
   serverTime: string;
   /** bumps on every broadcast; seeded from the clock at boot */
   seq: number;
   you: VisitorView;
-  /** visitors with at least one open stream, you included */
-  present: (VisitorView & { editing: string[] })[];
+  /** visitors with at least one open stream, you included, and what each holds */
+  present: (VisitorView & { holding: string[] })[];
   draft: DraftView;
-  leases: LeaseView[];
+  claims: ClaimView[];
   /** always six entries, slot 1..6 in order */
   slots: { slot: number; exhibit: ExhibitView | null }[];
   storeroom: ExhibitView[];
@@ -106,8 +126,8 @@ export type ExhibitHistory = { exhibit: ExhibitView; versions: VersionView[] };
  * route adds (e.g. publish's `exhibitId`, `versionId`, `n`). */
 export type ActionOk = { ok: true; state: StateEvent } & Record<string, unknown>;
 
-/** Every refusal. `lease-held` also names the holder and when the lease
- * ends; `slot-taken` also carries what's in the slot, so the page can ask. */
+/** Every refusal. `taken` also names who holds the sphere now;
+ * `slot-taken` also carries what's in the slot, so the page can ask. */
 export type Refusal = {
   error: ErrorCode;
   message: string;
@@ -121,9 +141,9 @@ export type ErrorCode =
   | "bad-request"
   | "cross-origin"
   | "not-found"
-  | "lease-held"
-  | "no-lease"
-  | "draft-not-empty"
-  | "draft-empty"
+  | "taken"
+  | "nothing-to-undo"
+  | "stage-busy"
+  | "stage-empty"
   | "slot-taken"
   | "slot-empty";

@@ -69,7 +69,7 @@ describe("every POST", () => {
     expect(r.status).toBe(403);
     expect(r.body).toEqual({ error: "cross-origin", message: expect.any(String) });
     expect((await stateOf(a)).you.name).toBe(before);
-    for (const path of ["/draft/start", "/draft/edit", "/draft/clear", "/publish", "/exhibits/1/store", "/exhibits/1/restore"]) {
+    for (const path of ["/stage/gesture", "/stage/grab", "/stage/clear", "/publish", "/exhibits/1/store", "/exhibits/1/restore"]) {
       const res = await post(a, path, {}, { origin: "https://evil.example" });
       expect(res.status, path).toBe(403);
       expect(res.body.error, path).toBe("cross-origin");
@@ -94,7 +94,7 @@ describe("every POST", () => {
   });
 
   it("answers an unknown action with 404 not-found as JSON", async () => {
-    const r = await post(visitor(), "/draft/explode", {});
+    const r = await post(visitor(), "/stage/explode", {});
     expect(r.status).toBe(404);
     expect(r.body).toEqual({ error: "not-found", message: expect.any(String) });
   });
@@ -144,7 +144,7 @@ describe("the state event", () => {
 });
 
 describe("the archive", () => {
-  it("pages back through archived drafts, the state's newest few first", async () => {
+  it("pages back through archived loops, the state's newest few first", async () => {
     const a = visitor();
     const s = await stateOf(a);
     expect(typeof s.archivedTotal).toBe("number");

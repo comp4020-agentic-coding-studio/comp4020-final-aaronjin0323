@@ -62,7 +62,12 @@ const T = {
   hopUp: 0.6,
   /** the bell can't ring twice from collisions within this long */
   ringGap: 0.25,
+  /** a sphere hitting the bell slides off it sideways at this speed */
+  slide: 0.9,
 };
+// which way a sphere slides off when it hits the bell dead centre: fixed
+// per sphere, so it's the same on every screen
+const SIDE = { chrome: [1, 0], teal: [0, 1], gold: [-1, 0], dusk: [0, -1] };
 
 /** The bell: where it hangs, how big it is, and how far its ring reaches. */
 export const BELL = { pos: [0, 0.75, 0], r: 0.16, reach: 0.7 };
@@ -153,6 +158,11 @@ export function emptyPerformance(set) {
 
 // ---- checking what arrives
 
+/** @param {string} reason @returns {{ ok: false, reason: string }} */
+const no = (reason) => ({ ok: false, reason });
+/** @type {{ ok: true }} */
+const YES = { ok: true };
+
 const snap = (v, step) => Number((Math.round(v / step) * step).toFixed(4));
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const vec = (v, lo, hi) => Array.isArray(v) && v.length === 3 && v.every((x, i) => finite(x) && x >= lo[i] && x <= hi[i]);
@@ -175,28 +185,29 @@ const V_MAX = 6;
  */
 /** @param {string} set @param {any} g */
 export function checkGesture(set, g) {
-  if (!Object.hasOwn(SETS, set)) return { ok: false, reason: "unknown set" };
-  if (typeof g !== "object" || g === null || Array.isArray(g)) return { ok: false, reason: "a gesture must be an object" };
+  if (!Object.hasOwn(SETS, set)) return no("unknown set");
+  if (typeof g !== "object" || g === null || Array.isArray(g)) return no("a gesture must be an object");
   const shape = Object.hasOwn(SHAPES, g.kind) ? SHAPES[g.kind] : null;
-  if (!shape) return { ok: false, reason: "unknown gesture" };
+  if (!shape) return no("unknown gesture");
   const keys = Object.keys(g);
   const extra = keys.filter((k) => !shape.keys.includes(k));
-  if (extra.length) return { ok: false, reason: `unexpected ${extra.join(", ")}` };
-  if (shape.keys.some((k) => !Object.hasOwn(g, k))) return { ok: false, reason: "missing a field" };
-  if (!shape.objects.includes(g.object) || !SETS[set].objects.includes(g.object)) return { ok: false, reason: `can't ${g.kind} that` };
-  if (!finite(g.at) || g.at < 0 || g.at >= LOOP) return { ok: false, reason: `at must be from 0 to under ${LOOP}` };
+  if (extra.length) return no(`unexpected ${extra.join(", ")}`);
+  if (shape.keys.some((k) => !Object.hasOwn(g, k))) return no("missing a field");
+  if (!shape.objects.includes(g.object) || !SETS[set].objects.includes(g.object)) return no(`can't ${g.kind} that`);
+  if (!finite(g.at) || g.at < 0 || g.at >= LOOP) return no(`at must be from 0 to under ${LOOP}`);
+  /** @type {Gesture} */
   const out = { kind: g.kind, object: g.object, at: Math.min(snap(g.at, 0.001), LOOP - 0.001) };
   if (g.kind === "throw") {
-    if (!vec(g.from, FROM_LO, FROM_HI)) return { ok: false, reason: "from must be a point on the stage" };
-    if (!vec(g.v, [-V_MAX, -V_MAX, -V_MAX], [V_MAX, V_MAX, V_MAX])) return { ok: false, reason: `v must be three speeds up to ${V_MAX}` };
+    if (!vec(g.from, FROM_LO, FROM_HI)) return no("from must be a point on the stage");
+    if (!vec(g.v, [-V_MAX, -V_MAX, -V_MAX], [V_MAX, V_MAX, V_MAX])) return no(`v must be three speeds up to ${V_MAX}`);
     out.from = g.from.map((x) => snap(x, 0.001));
     out.v = g.v.map((x) => snap(x, 0.001));
   }
   if (g.kind === "pluck") {
-    if (!finite(g.u) || g.u < 0 || g.u >= 1) return { ok: false, reason: "u must be from 0 to under 1" };
+    if (!finite(g.u) || g.u < 0 || g.u >= 1) return no("u must be from 0 to under 1");
     out.u = Math.min(snap(g.u, 0.001), 0.999);
   }
-  return { ok: true, gesture: out };
+  return { ok: /** @type {const} */ (true), gesture: /** @type {Gesture} */ (out) };
 }
 
 const TAG = /^[0-9a-f]{6}$/;
@@ -209,21 +220,21 @@ const TAG = /^[0-9a-f]{6}$/;
  */
 /** @param {any} p */
 export function checkPerformance(p) {
-  if (typeof p !== "object" || p === null || Array.isArray(p)) return { ok: false, reason: "a performance must be an object" };
-  if (!Object.hasOwn(SETS, p.set)) return { ok: false, reason: "unknown set" };
-  if (Object.keys(p).length !== 2 || !Array.isArray(p.gestures)) return { ok: false, reason: "a performance is a set and gestures" };
-  if (p.gestures.length > CAP) return { ok: false, reason: `at most ${CAP} gestures` };
+  if (typeof p !== "object" || p === null || Array.isArray(p)) return no("a performance must be an object");
+  if (!Object.hasOwn(SETS, p.set)) return no("unknown set");
+  if (Object.keys(p).length !== 2 || !Array.isArray(p.gestures)) return no("a performance is a set and gestures");
+  if (p.gestures.length > CAP) return no(`at most ${CAP} gestures`);
   const each = new Map();
   for (const g of p.gestures) {
-    if (typeof g !== "object" || g === null || !TAG.test(g.by)) return { ok: false, reason: "every gesture says who made it" };
+    if (typeof g !== "object" || g === null || !TAG.test(g.by)) return no("every gesture says who made it");
     const { by, ...rest } = g;
     const r = checkGesture(p.set, rest);
     if (!r.ok) return r;
-    if (JSON.stringify(r.gesture) !== JSON.stringify(rest)) return { ok: false, reason: "a gesture isn't snapped" };
+    if (JSON.stringify(r.gesture) !== JSON.stringify(rest)) return no("a gesture isn't snapped");
     each.set(by, (each.get(by) ?? 0) + 1);
-    if (each.get(by) > CAP_EACH) return { ok: false, reason: `at most ${CAP_EACH} gestures from anyone` };
+    if (each.get(by) > CAP_EACH) return no(`at most ${CAP_EACH} gestures from anyone`);
   }
-  return { ok: true };
+  return YES;
 }
 
 /**
@@ -350,6 +361,12 @@ function tick(st, set, emit) {
       s.pos = [BELL.pos[0] + nn[0] * touch, BELL.pos[1] + nn[1] * touch, BELL.pos[2] + nn[2] * touch];
       const vn = dot(s.v, nn);
       if (vn < 0) s.v = [s.v[0] - 1.8 * vn * nn[0], s.v[1] - 1.8 * vn * nn[1], s.v[2] - 1.8 * vn * nn[2]];
+      // and sideways off the bell's dome, so a sphere rising straight under
+      // it slides off instead of being held there ringing forever
+      const side = Math.sqrt(nn[0] * nn[0] + nn[2] * nn[2]);
+      const kick = side > 0.05 ? [nn[0] / side, nn[2] / side] : SIDE[id];
+      s.v[0] += kick[0] * T.slide;
+      s.v[2] += kick[1] * T.slide;
       if (st.lastRing === null || t - st.lastRing > T.ringGap) ring(st, t, id, emit);
     }
     // the ribbon catches a sphere that passes close, unless just flung off

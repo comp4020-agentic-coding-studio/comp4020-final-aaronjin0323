@@ -13,8 +13,7 @@ describe("the server-rendered listing", () => {
     const t0 = new Date("2026-11-01T00:00:00Z");
     const pid = "00000000-0000-4000-8000-000000000001";
     store.ensureVisitor(pid, `<img src=x onerror="alert(1)">`, 0, t0);
-    store.start(pid, "loop", t0);
-    store.edit(pid, "cube", { size: 1 }, t0);
+    store.gesture(pid, { kind: "tap", object: "bell", at: 1 }, t0);
     store.publish(pid, { title: `<script>alert("t")</script> & 'q'`, slot: 4 }, t0);
     const html = renderMuseum(store.snapshot(t0));
     const doc = new JSDOM(html).window.document;
@@ -24,7 +23,8 @@ describe("the server-rendered listing", () => {
     expect(slot.querySelector(".slot-by")!.textContent).toBe(`by <img src=x onerror="alert(1)">`);
     expect(doc.querySelector('[data-slot="5"] .slot-title')!.textContent).toBe("Empty");
     expect(doc.querySelector('[data-slot="1"] .slot-by')!.textContent).toBe("by the museum");
-    expect(doc.querySelector(".bench-now")!.textContent).toBe("On the workbench: Loop & Lantern");
+    expect(slot.querySelector(".slot-recipe")!.textContent).toBe("a performance of 1 gesture");
+    expect(doc.querySelector(".bench-now")!.textContent).toBe("On the stage: 1 gesture, playing");
   });
 
   it("escapes the five characters that matter", () => {

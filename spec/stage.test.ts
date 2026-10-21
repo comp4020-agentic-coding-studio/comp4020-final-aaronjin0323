@@ -195,6 +195,12 @@ describe("the objects set each other off", () => {
     expect(events(p, 1, 2.5).some((e) => e.kind === "ring" && e.by === "dusk")).toBe(true);
   });
 
+  it("a sphere under the bell is knocked aside, not trapped ringing it", () => {
+    const from = [BELL.pos[0], 0.2, BELL.pos[2]];
+    const p = perf([throwAt("dusk", 1, from, [0, 1.6, 0])]);
+    expect(events(p, 1, LOOP).filter((e) => e.kind === "ring").length).toBeLessThanOrEqual(2);
+  });
+
   it("spheres knock into each other", () => {
     const target = SETS.orbit.rest.teal;
     const from = [target[0] - 0.6, target[1], target[2]];
