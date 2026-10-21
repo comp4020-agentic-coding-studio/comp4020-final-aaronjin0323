@@ -62,7 +62,13 @@ async function freshBench(page: Page): Promise<void> {
   const r = await post(page, "/draft/start", { recipe: "loop" });
   if (r.status !== 200) throw new Error(`couldn't start a draft: ${r.status} ${JSON.stringify(r.json)}`);
   await page.click('[data-go="bench"]');
-  await page.waitForSelector('[data-parts] .part[data-part="ribbon"]');
+  await openEditor(page);
+}
+
+/** Into create mode the way a visitor goes: "Shape it" (ADR 14). */
+async function openEditor(page: Page): Promise<void> {
+  if (await page.locator("[data-shape]").isVisible()) await page.click("[data-shape]");
+  await page.waitForSelector('[data-parts] .part[data-part="ribbon"]', { state: "visible" });
 }
 
 const twoFrames = (page: Page): Promise<unknown> => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
@@ -146,7 +152,7 @@ async function realtime(browser: Browser): Promise<void> {
   const b = await visitor(browser);
   await freshBench(a);
   await b.click('[data-go="bench"]');
-  await b.waitForSelector('[data-parts] .part[data-part="spheres"]');
+  await openEditor(b);
   const before = (await b.textContent("#spheres-count + output")) ?? "";
   // open the part, then move its slider by keyboard: a real input event
   await a.click('[data-toggle="spheres"]');
@@ -352,6 +358,8 @@ async function keyboard(browser: Browser): Promise<void> {
   // a swatch by keyboard
   await page.focus('[data-go="bench"]');
   await page.keyboard.press("Enter");
+  await page.focus("[data-shape]");
+  await page.keyboard.press("Enter");
   const swatch = page.locator('input[type="radio"][data-part="ribbon"][data-key="colour"]').first();
   await swatch.focus();
   await page.keyboard.press("ArrowRight");
@@ -503,8 +511,12 @@ async function words(browser: Browser): Promise<void> {
   console.log("\n— words on the first screen (ADR 13) —");
   for (const [name, opts, budget] of [["desktop", DESKTOP, 40], ["phone", PHONE, 30]] as const) {
     const page = await visitor(browser, opts);
-    for (const sel of ["bench", "slot:1"]) {
-      await page.click(`[data-go="${sel}"]`);
+    // the bench card, a plinth, and the bench editor once it's opened
+    for (const sel of ["bench", "slot:1", "create"]) {
+      if (sel === "create") {
+        await page.click('[data-go="bench"]');
+        await page.click("[data-shape]");
+      } else await page.click(`[data-go="${sel}"]`);
       await page.waitForTimeout(800);
       const seen = await page.evaluate(() => {
         const out: string[] = [];
@@ -701,8 +713,70 @@ async function focus(browser: Browser): Promise<void> {
   }
 }
 
+// Explore first, then create (ADR 14), at both sizes: the first screen is a
+// compact card with no editing control showing; "Shape it", by keyboard,
+// opens the editor with focus on its heading; Done, Gallery and Escape each
+// come back to the card with focus on "Shape it"; a plinth never opens it.
+async function explore(browser: Browser): Promise<void> {
+  console.log("\n— explore first, then create —");
+  const setup = await visitor(browser);
+  await post(setup, "/draft/clear");
+  await post(setup, "/draft/start", { recipe: "loop" });
+  await setup.context().close();
+  const EDIT = '[data-view="bench"] input[data-part], [data-publish-open], [data-clear]';
+  const visibleEditing = (page: Page) => page.locator(EDIT).evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length);
+  const focusedIs = (page: Page, sel: string) => page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, sel);
+  for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    await page.waitForSelector("[data-shape]", { state: "attached", timeout: 3000 }).catch(() => null);
+    const card = page.locator("[data-card]").filter({ visible: true }).first();
+    const cardShown = (await card.count()) > 0 && (await card.isVisible());
+    const cardH = cardShown ? ((await card.boundingBox())?.height ?? 999) : 999;
+    const editingAtStart = await visibleEditing(page);
+    check(cardShown && editingAtStart === 0, `${label}: it opens on a selection card, no editing controls`, `card ${cardShown}, ${editingAtStart} controls showing`);
+    check(cardH <= (label === "phone" ? 240 : 280), `${label}: and the card is compact`, `${Math.round(cardH)}px`);
+    // the tab order has no hidden editor in it
+    const tabbable = await page.locator(EDIT).evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility() && (e as HTMLElement).tabIndex >= 0).length);
+    check(tabbable === 0, `${label}: nothing from the editor is in the tab order`, String(tabbable));
+    // into create, by keyboard
+    await page.focus("[data-shape]", { timeout: 1500 }).catch(() => null);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(300);
+    const editing = await visibleEditing(page);
+    check(editing >= 10 && (await focusedIs(page, "#bench-h")), `${label}: "Shape it" opens the editor, focus on its heading`, `${editing} controls`);
+    // every way out comes back to the card, focus on what opened it
+    const ways: Array<[string, () => Promise<void>]> = [
+      ["Done", () => page.click("[data-done]", { timeout: 1500 })],
+      ["Gallery", () => page.click("[data-home]", { timeout: 1500 })],
+      ["Escape", async () => {
+        await page.focus('[data-view="bench"] input[type="range"]', { timeout: 1500 });
+        await page.keyboard.press("Escape");
+      }],
+    ];
+    for (const [name, leave] of ways) {
+      await page.click("[data-shape]", { timeout: 1500 }).catch(() => null);
+      await page.waitForTimeout(150);
+      await leave().catch(() => null);
+      await page.waitForTimeout(250);
+      const back = (await visibleEditing(page)) === 0 && (await card.isVisible().catch(() => false)) && (await focusedIs(page, "[data-shape]"));
+      check(back, `${label}: ${name} goes back to the card, focus on "Shape it"`);
+    }
+    // a plinth is looked at, never edited
+    await page.click("[data-shape]", { timeout: 1500 }).catch(() => null);
+    await page.click('[data-go="slot:1"]');
+    await page.waitForTimeout(200);
+    check((await visibleEditing(page)) === 0 && (await card.isVisible().catch(() => false)), `${label}: choosing a plinth shows its card, not the editor`);
+    await page.click('[data-go="bench"]');
+    await page.waitForTimeout(200);
+    check((await visibleEditing(page)) === 0, `${label}: and coming back to the bench is explore too`);
+    await page.screenshot({ path: `.shots/explore-${label}.png` });
+    await page.context().close();
+  }
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
+  explore,
   opening,
   focus,
   noScript,

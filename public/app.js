@@ -88,6 +88,8 @@ let selected = /** @type {{kind: "bench"} | {kind: "slot", slot: number} | {kind
 const historyCache = new Map();
 let scene = null;
 let cameraMoved = false; // the visitor turned, dragged or zoomed the camera
+/** create mode: the workbench editor is open (ADR 14); explore otherwise */
+let creating = false;
 
 const serverNow = () => Date.now() + offset;
 const editable = () => canEdit(conn);
@@ -205,7 +207,9 @@ function render() {
   renderDrawers();
   renderConnection();
   renderHome();
-  scene?.update(state, selected, currentDraftParts(), [...sending.values()].some((x) => x.held));
+  // the panel's size follows the mode; the scene re-composes for it
+  document.body.dataset.mode = creating ? "create" : "explore";
+  scene?.update(state, { ...selected, mode: creating ? "create" : "explore" }, currentDraftParts(), [...sending.values()].some((x) => x.held));
 }
 
 function renderConnection() {
@@ -271,8 +275,9 @@ function renderNav() {
   if (focused) $(`[data-go="${focused}"]`)?.focus();
 }
 
-function select(next, { focusHeading = false } = {}) {
+function select(next, { focusHeading = false, create = false } = {}) {
   selected = next;
+  creating = create && next.kind === "bench";
   closePublish();
   render();
   if (focusHeading) $(selected.kind === "bench" ? "#bench-h" : "#exhibit-h")?.focus({ preventScroll: true });
@@ -284,20 +289,24 @@ function select(next, { focusHeading = false } = {}) {
 
 // Back to the gallery: shown whenever the view isn't the opening one.
 function renderHome() {
-  $("[data-home]").hidden = !scene || (selected.kind === "bench" && !cameraMoved);
+  $("[data-home]").hidden = !creating && (!scene || (selected.kind === "bench" && !cameraMoved));
 }
 function goHome() {
+  const wasCreating = creating;
   const wasBench = selected.kind === "bench";
   select({ kind: "bench" });
   if (wasBench) scene?.home();
-  $("[data-scene]").focus({ preventScroll: true });
+  // out of the editor, back to the button that opened it
+  if (wasCreating && !$("[data-shape]").hidden) $("[data-shape]").focus();
+  else $("[data-scene]").focus({ preventScroll: true });
 }
 $("[data-home]").addEventListener("click", goHome);
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || e.defaultPrevented || $("[data-ask]").open) return;
-  if (e.target.closest?.("input:not([type=range]), select, textarea, form")) return;
-  if ($("[data-home]").hidden) return;
+  if (e.target.closest?.("input:not([type=range]):not([type=radio]), select, textarea, form")) return;
   e.preventDefault();
+  if (creating) return leaveEditor();
+  if ($("[data-home]").hidden) return;
   goHome();
 });
 
@@ -317,6 +326,12 @@ function renderBench() {
   const empty = d.recipe === null;
   $("[data-bench-empty]").hidden = !empty;
   $("[data-bench-full]").hidden = empty;
+  // explore shows the card; create shows the editor under it (ADR 14)
+  view.dataset.mode = creating ? "create" : "explore";
+  $("[data-editor]").hidden = !creating;
+  $("[data-shape]").hidden = empty || creating;
+  $("[data-done]").hidden = !creating;
+  $("[data-bench-thumb]").replaceChildren(swatchOf(d.recipe, d.parts));
   if (empty) {
     $("[data-bench-title]").textContent = "Workbench";
     $("[data-bench-credits]").replaceChildren();
@@ -347,10 +362,30 @@ function renderStarters() {
   if (list.childElementCount) return;
   list.replaceChildren(
     ...Object.entries(RECIPES).map(([id, r]) =>
-      el("li", {}, el("button", { type: "button", class: "starter", "data-edit": true, title: r.blurb, "aria-label": `Start ${/^[AEIOU]/.test(r.name) ? "an" : "a"} ${r.name}: ${r.blurb}`, onclick: () => act("/draft/start", { recipe: id }) }, swatchOf(id, defaultParts(id)), el("span", { class: "starter-name", "aria-hidden": "true" }, r.name))),
+      el("li", {}, el("button", { type: "button", class: "starter", "data-edit": true, title: r.blurb, "aria-label": `Start ${/^[AEIOU]/.test(r.name) ? "an" : "a"} ${r.name}: ${r.blurb}`, onclick: () => startDraft(id) }, swatchOf(id, defaultParts(id)), el("span", { class: "starter-name", "aria-hidden": "true" }, r.name))),
     ),
   );
 }
+
+// ---- create mode: in on a creative action, out by Done, Gallery or Escape
+
+function openEditor() {
+  select({ kind: "bench" }, { create: true });
+  $("#bench-h").focus({ preventScroll: true });
+}
+function leaveEditor() {
+  if (!creating) return;
+  creating = false;
+  closePublish();
+  render();
+  $("[data-shape]").focus();
+}
+async function startDraft(recipe) {
+  const r = await act("/draft/start", { recipe });
+  if (r?.ok) openEditor();
+}
+$("[data-shape]").addEventListener("click", openEditor);
+$("[data-done]").addEventListener("click", leaveEditor);
 
 const TRANSFORM = new Set(["lift", "turn", "scale"]);
 const openParts = new Set();
@@ -637,7 +672,7 @@ function closePublish() {
 
 function openPublish(preferred) {
   if (!state.draft.recipe) return;
-  select({ kind: "bench" });
+  select({ kind: "bench" }, { create: true });
   const form = $("[data-publish]");
   form.hidden = false;
   $("[data-publish-open]").hidden = true;
@@ -792,7 +827,7 @@ async function remixVersion(v) {
     if (!(await ask(`Replace the workbench? The ${now}${who} moves to Archived drafts, and "${v.title}" version ${v.n} takes its place.`, "Replace the workbench"))) return;
   }
   const r = await act("/draft/remix", { versionId: v.id, replace: action.replace }, "On the bench");
-  if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
+  if (r?.ok) openEditor();
 }
 
 function renderDisplay(e) {
@@ -961,7 +996,7 @@ async function restoreArchived(a) {
   const action = benchAction(state.draft);
   if (action.replace && !(await ask(`Replace the workbench? The ${RECIPES[state.draft.recipe].name} on it now moves to Archived drafts, and this ${RECIPES[a.recipe]?.name ?? "draft"} comes back.`, "Replace the workbench"))) return;
   const r = await act("/draft/restore-archived", { archivedId: a.id, replace: action.replace }, "Back on the bench");
-  if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
+  if (r?.ok) openEditor();
 }
 
 // ---------------------------------------------------------------- rename

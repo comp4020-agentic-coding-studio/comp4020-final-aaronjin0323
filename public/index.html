@@ -74,15 +74,21 @@
     </section>
 
     <section class="view" data-view="bench" hidden aria-labelledby="bench-h">
-      <div class="view-head">
-        <h2 id="bench-h" tabindex="-1"><span class="sr-only">The workbench: </span><span data-bench-title>Workbench</span></h2>
-        <ul class="dots" data-bench-credits aria-label="Shaped by"></ul>
+      <div class="view-head" data-card>
+        <span class="card-thumb" data-bench-thumb></span>
+        <div class="card-text">
+          <h2 id="bench-h" tabindex="-1"><span class="sr-only">The workbench: </span><span data-bench-title>Workbench</span></h2>
+          <ul class="dots" data-bench-credits aria-label="Shaped by"></ul>
+        </div>
+        <button type="button" class="primary shape" data-shape hidden aria-label="Shape it: open the editor for the workbench sculpture">Shape it</button>
+        <button type="button" class="quiet done" data-done hidden aria-label="Done shaping: back to exploring">Done</button>
       </div>
       <div data-bench-empty hidden>
         <ul class="starters" data-starters aria-label="Start a sculpture"></ul>
       </div>
       <div data-bench-full hidden>
         <p class="sr-only"><span data-bench-recipe></span><span data-bench-based></span></p>
+        <div class="editor" data-editor hidden>
         <div class="parts" data-parts></div>
         <div class="bench-actions">
           <button type="button" class="primary" data-publish-open data-edit>Exhibit</button>
@@ -103,11 +109,12 @@
             <button type="button" class="quiet" data-publish-cancel>Cancel</button>
           </div>
         </form>
+        </div>
       </div>
     </section>
 
     <section class="view" data-view="exhibit" hidden aria-labelledby="exhibit-h">
-      <div class="view-head">
+      <div class="view-head" data-card>
         <span class="slot-n" data-ex-where></span>
         <h2 id="exhibit-h" tabindex="-1" data-ex-title></h2>
         <ul class="dots" data-ex-credits aria-label="Shaped by"></ul>

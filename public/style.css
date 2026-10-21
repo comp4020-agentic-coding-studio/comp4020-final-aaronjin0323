@@ -380,9 +380,47 @@ select {
 .panel > * {
   flex: none;
 }
+/* explore (ADR 14): the panel is only as tall as its card */
+body[data-mode="explore"] .panel {
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+body[data-mode="explore"] .foot {
+  margin-top: 12px;
+}
 
 .view-head {
   margin-bottom: 8px;
+}
+/* the bench's selection card (ADR 14): swatch, title and credits, and the
+   one door into the editor */
+[data-view="bench"] .view-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.card-thumb .thumb {
+  width: 52px;
+  height: 52px;
+}
+.card-text {
+  min-width: 0;
+}
+.card-text h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shape,
+.done {
+  min-height: 44px;
+  padding: 0 18px;
+  white-space: nowrap;
+}
+[data-view="bench"][data-mode="create"] .card-thumb .thumb {
+  width: 36px;
+  height: 36px;
 }
 .eyebrow {
   margin: 0 0 2px;
@@ -946,6 +984,10 @@ body.no-gl .scene {
   :root {
     --panel-w: 100%;
     --stage-h: 38svh;
+  }
+  /* exploring, the room gets the room; shaping, the controls do */
+  body[data-mode="explore"] {
+    --stage-h: 50svh;
   }
   /* A fixed shell that never scrolls: top bar, the live scene, the plinth
      row, then the panel, which scrolls on its own (CLAUDE.md, "Phone and

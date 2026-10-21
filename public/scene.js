@@ -407,9 +407,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const f = frameHeight(lo, box.max.y, clearFov(), aspect, tight ? 1.2 : 1.45, tight ? 2.5 : 3.8);
     const tanH = clearTan().h;
     const dist = Math.max(f.dist, (w * (tight ? 1.15 : 1.4)) / 2 / tanH + w / 2);
-    // on a desktop, aim a little above the middle: the sculpture sits
-    // lower, the glass falls behind the plinth row, the arches rise above
-    const focusY = tight ? f.focusY : f.focusY + (box.max.y - lo) * 0.12;
+    const focusY = f.focusY;
     // never back out through the arches
     return { focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
   }
@@ -556,7 +554,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const coarse = [];
     for (let k = 0; k < 24; k++) {
       const yaw = (k / 24) * TAU;
-      for (const pitch of [0.12, 0.24, 0.38, 0.52]) {
+      for (const pitch of [0.12, 0.24, 0.38, 0.52, 0.66]) {
         // the nearest distance that keeps it clear of the panels
         for (const f of [0.8, 0.9, 1, 1.1, 1.22, 1.36, 1.52, 1.7, 1.9]) {
           const c = posed(probeCam, focus, yaw, pitch, d0 * f);
@@ -578,7 +576,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     };
     for (const q of coarse) q.score = score(q, 3);
     coarse.sort((x, y) => x.score - y.score);
-    const best = coarse.slice(0, 8).map((q) => ({ ...q, score: score(q, 5) })).sort((x, y) => x.score - y.score)[0];
+    const best = coarse.slice(0, 8).map((q) => ({ ...q, score: score(q, 7) })).sort((x, y) => x.score - y.score)[0];
     // nothing fits inside (a huge exhibit): the old view, from the centre side
     return { focus, ...(best ?? { yaw: front, pitch: 0.24, dist: d0 }) };
   }
