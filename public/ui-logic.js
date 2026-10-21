@@ -195,9 +195,9 @@ export const CLOSE_UP = 5.4;
  * off. On a portrait screen the narrower horizontal view decides instead.
  * @returns {{ focusY: number, dist: number }}
  */
-export function frameHeight(lo, hi, fovDeg, aspect, margin = 1.25) {
+export function frameHeight(lo, hi, fovDeg, aspect, margin = 1.25, nearest = CLOSE_UP) {
   const half = (Math.max(hi - lo, 0.5) * margin) / 2;
   const tanV = Math.tan((fovDeg * Math.PI) / 360);
   const tan = Math.min(tanV, tanV * aspect);
-  return { focusY: (lo + hi) / 2, dist: Math.max(CLOSE_UP, half / tan) };
+  return { focusY: (lo + hi) / 2, dist: Math.max(nearest, half / tan) };
 }

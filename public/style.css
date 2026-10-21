@@ -915,7 +915,22 @@ body.no-gl .scene {
 @media (max-width: 860px) {
   :root {
     --panel-w: 100%;
-    --stage-h: 46svh;
+    --stage-h: 38svh;
+  }
+  /* A fixed shell that never scrolls: top bar, the live scene, the plinth
+     row, then the panel, which scrolls on its own (CLAUDE.md, "Phone and
+     keyboard"). The sculpture is always above the control moving it. */
+  html,
+  body {
+    height: 100svh;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+  body > * {
+    flex: none;
   }
   .stage {
     position: relative;
@@ -926,9 +941,9 @@ body.no-gl .scene {
   }
   .top {
     position: static;
-    padding: 12px 16px 10px;
-    flex-direction: column;
-    align-items: stretch;
+    padding: 6px 12px 6px 16px;
+    flex-direction: row;
+    align-items: center;
     gap: 8px;
     background: var(--night);
   }
@@ -939,16 +954,41 @@ body.no-gl .scene {
     backdrop-filter: none;
   }
   .brand h1 {
-    font-size: 1.3rem;
+    font-size: 1.1rem;
+    color: var(--ivory-hi);
   }
+  /* the room is the invitation on a phone; the tagline would push it down */
   .lede {
-    font-size: 0.98rem;
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
   .people {
     max-width: none;
-    align-items: stretch;
-    padding: 6px 10px;
-    gap: 4px;
+    margin-left: auto;
+    padding: 2px 4px 2px 10px;
+    gap: 6px;
+    min-width: 0;
+    flex-wrap: nowrap;
+    border-radius: 999px;
+    box-shadow: none;
+  }
+  .you,
+  .here {
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+  .brand h1 {
+    white-space: nowrap;
+  }
+  .you .chip-name {
+    max-width: 9ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .you,
   .here {
@@ -958,7 +998,7 @@ body.no-gl .scene {
     gap: 2px 10px;
   }
   .plinths {
-    position: sticky;
+    position: relative;
     top: 0;
     left: auto;
     right: auto;
@@ -978,18 +1018,29 @@ body.no-gl .scene {
   .plinth-list li {
     flex: none;
   }
+  .plinths {
+    padding: 6px 0 6px 12px;
+  }
   .plinth-btn {
     box-shadow: none;
-    padding: 4px 10px 4px 4px;
-    gap: 6px;
+    padding: 3px 9px 3px 3px;
+    gap: 5px;
+    min-height: 44px;
+  }
+  .plinth-btn .thumb {
+    width: 26px;
+    height: 26px;
   }
   .panel {
     position: static;
+    flex: 1 1 0;
+    min-height: 0;
     width: auto;
     margin: 0;
     border-radius: 0;
-    overflow: visible;
-    padding: 16px 16px 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   }
   .status {
     top: 8px;

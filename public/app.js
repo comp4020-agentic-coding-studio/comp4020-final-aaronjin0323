@@ -203,7 +203,7 @@ function render() {
   renderExhibit();
   renderDrawers();
   renderConnection();
-  scene?.update(state, selected, currentDraftParts());
+  scene?.update(state, selected, currentDraftParts(), [...sending.values()].some((x) => x.held));
 }
 
 function renderConnection() {

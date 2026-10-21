@@ -366,6 +366,22 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
     return frameHeight(lo, hi, camera.fov, camera.aspect);
   }
 
+  // On a phone the bench view is a close-up of the bench sculpture as it
+  // is now. It re-fits only when the shared draft changes (a release, or
+  // someone else's edit), never from the local preview mid-drag, so the
+  // camera doesn't chase a slider while it moves.
+  function benchFit() {
+    box.makeEmpty();
+    if (wb.holder.children.length) box.setFromObject(wb.holder);
+    if (box.isEmpty()) return { focusY: 1.6, dist: 7 };
+    // the sculpture itself, with only a sliver of glass under it
+    const lo = Math.max(box.min.y, 0.45);
+    const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+    const f = frameHeight(lo, box.max.y, camera.fov, camera.aspect, 1.2, 2.5);
+    const tanH = Math.tan((camera.fov * Math.PI) / 360) * camera.aspect;
+    return { focusY: f.focusY, dist: Math.max(f.dist, (w * 1.15) / 2 / tanH + w / 2) };
+  }
+
   function aimAt(selected) {
     if (selected.kind === "slot") {
       const a = slotAngle(selected.slot);
@@ -377,6 +393,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       goal.yaw = nearestYaw(a + Math.PI + 0.35);
       goal.pitch = 0.24;
       goal.dist = f.dist;
+    } else if (selected.kind === "bench" && innerWidth < 600 && last?.draft.recipe) {
+      const f = benchFit();
+      goal.focus.set(0, f.focusY, 0);
+      goal.dist = f.dist;
+      goal.pitch = 0.16;
     } else if (selected.kind === "bench") {
       // the whole floating floor, with sky and clouds round it, the bench
       // in the middle
@@ -561,7 +582,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
   wake();
 
   return {
-    update(state, sel, draftParts) {
+    update(state, sel, draftParts, holding = false) {
       const changed = JSON.stringify(sel) !== JSON.stringify(selected);
       last = state;
       selected = sel;
@@ -569,8 +590,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick }) {
       sync();
       // after sync, so the framing measures the sculpture now on the plinth;
       // re-aimed when the selected exhibit itself changes shape
-      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : null;
-      if (changed || !aimed || shape !== aimedShape) {
+      const shape = sel.kind === "slot" ? shown.get(`slot:${sel.slot}`)?.sig : sel.kind === "bench" && innerWidth < 600 ? `bench:${state.draft.id}:${state.draft.revision}` : null;
+      // while a slider is held the framing waits for the release
+      if (changed || !aimed || (shape !== aimedShape && !holding)) {
         aimAt(sel);
         aimed = true;
         aimedShape = shape;

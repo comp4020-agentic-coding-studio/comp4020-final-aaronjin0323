@@ -135,6 +135,9 @@ describe("framing a plinth close-up", () => {
     expect(fits(1.2, 6.5, 1.6)).toBe(true);
     expect(ui.frameHeight(1.2, 6.5, fov, 1.6).dist).toBeGreaterThan(5.4);
   });
+  test("a nearer floor lets a small sculpture fill a phone's close-up", () => {
+    expect(ui.frameHeight(1, 2, fov, 1.2, 1.25, 2).dist).toBeLessThan(5.4);
+  });
   test("on a portrait screen the width decides too", () => {
     expect(fits(1.2, 3.5, 0.5)).toBe(true);
   });

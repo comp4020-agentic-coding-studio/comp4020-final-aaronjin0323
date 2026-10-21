@@ -528,6 +528,53 @@ async function words(browser: Browser): Promise<void> {
   }
 }
 
+// On the phone the sculpture stays in sight while every control on the bench
+// is worked (CLAUDE.md, "Phone and keyboard"): the scene is pinned above a
+// panel that scrolls on its own, and the page never scrolls.
+async function phoneEdit(browser: Browser): Promise<void> {
+  console.log("\n— phone: the sculpture stays in sight while you edit —");
+  const page = await visitor(browser, PHONE);
+  await freshBench(page);
+  // open every part, so every control is reachable
+  for (const t of await page.locator("[data-toggle]").all()) if ((await t.getAttribute("aria-expanded")) === "false") await t.click();
+  const controls = await page.locator('[data-view="bench"] input[data-part], [data-publish-open], [data-clear]').all();
+  const misses: string[] = [];
+  for (const c of controls) {
+    await c.scrollIntoViewIfNeeded();
+    await c.focus();
+    await twoFrames(page);
+    const r = await page.evaluate((el) => {
+      const vh = innerHeight;
+      const vw = innerWidth;
+      const scene = document.querySelector("[data-scene]")!.getBoundingClientRect();
+      const box = (el as Element).getBoundingClientRect();
+      // a radio swatch is visually its label
+      const shown = (el as HTMLInputElement).type === "radio" ? (el as Element).closest("label")!.getBoundingClientRect() : box;
+      return {
+        id: (el as Element).id || (el as HTMLInputElement).name + ":" + (el as HTMLInputElement).value || (el as Element).textContent?.trim(),
+        sceneIn: scene.top >= -1 && scene.bottom <= vh + 1 && scene.height >= vh * 0.3 && scene.left >= -1 && scene.right <= vw + 1,
+        controlIn: shown.top >= scene.bottom - 1 && shown.bottom <= vh + 1,
+        pageScroll: scrollY,
+      };
+    }, await c.elementHandle());
+    if (!r.sceneIn || !r.controlIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
+  }
+  check(controls.length >= 30 && misses.length === 0, "every bench control is worked with the sculpture on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
+  // and a slider's change shows in the scene while it's on screen: the
+  // canvas pixels differ before and after moving the last part's Scale
+  const scale = page.locator('[data-view="bench"] input[data-key="scale"]').last();
+  await scale.scrollIntoViewIfNeeded();
+  const sceneBox = (await page.locator("[data-scene]").boundingBox())!;
+  const before = await page.screenshot({ clip: sceneBox });
+  await scale.focus();
+  for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(400);
+  const after = await page.screenshot({ clip: sceneBox });
+  check(!before.equals(after), "and the sculpture changes in view as a slider moves");
+  await page.screenshot({ path: ".shots/phone-edit.png" });
+  await page.context().close();
+}
+
 async function names(browser: Browser): Promise<void> {
   console.log("\n— a name is text, never markup —");
   const page = await visitor(browser);
@@ -554,6 +601,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   viewports,
   contrast,
   words,
+  "phone-edit": phoneEdit,
   names,
 };
 
