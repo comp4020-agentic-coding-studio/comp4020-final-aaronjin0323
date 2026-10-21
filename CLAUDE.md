@@ -172,11 +172,13 @@ carry the meaning and the words are labels. Read
 
 A reversible prototype. Read `docs/adr/0015-orbit-play.md`.
 
-- **A connection is a rule in `public/orbit.js`, never a stored link.** A
-  placed sphere within `CATCH` of the ribbon's path rides it. The rule
-  reads the ribbon's saved numbers at draw time, so anyone's ribbon edit
-  moves every caught sphere on every screen with no write from the sphere's
-  owner. Held by `spec/orbit.test.ts`.
+- **The catch is a rule in `public/orbit.js`, applied at the drop.** A
+  sphere dropped within `CATCH` of the ribbon's path is saved as riding it
+  (`ride`, and the point it holds, `along`). A caught sphere is drawn at
+  that point of the ribbon as the ribbon's saved numbers make it now. So
+  anyone's ribbon edit moves every caught sphere on every screen with no
+  write from the sphere's owner, and a bend never knocks one off. Held by
+  `spec/orbit.test.ts`.
 - **Cause and effect are visible.** A caught sphere glows and is joined to
   the ribbon by a line, and so does a sphere being dragged the moment it
   would catch.

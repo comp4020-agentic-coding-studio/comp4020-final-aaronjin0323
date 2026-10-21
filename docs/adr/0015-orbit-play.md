@@ -29,15 +29,22 @@ per part, credit per part, publishing as an exhibit version.
 - **Five parts:** a ribbon (loops, twist, reach, colour, tilt) and four
   spheres. Each sphere has `placed` (0 on the shelf, 1 on the sculpture),
   where it was dropped (`angle`, `height`, `distance` from the ribbon's
-  centre), a size and a colour.
-- **A connection is a rule, not a stored link.** `public/orbit.js` is the
-  one copy. A placed sphere within `CATCH` of the ribbon's path is
-  **caught**: it rides the path from the point nearest where it was
-  dropped. A placed sphere further away rests where it was dropped.
-  Because the rule reads the ribbon's numbers at draw time, a change to the
+  centre), whether it rides the ribbon (`ride`), the point of the ribbon
+  it holds (`along`, 0 to 1 round the path), a size and a colour.
+- **The catch is decided once, at the drop, by a rule.** `public/orbit.js`
+  is the one copy (`dropOn`). A sphere dropped within `CATCH` of the
+  ribbon's path is **caught**: it's saved with `ride: 1` and the `along`
+  of the nearest point. A sphere dropped further away rests where it was
+  dropped (`ride: 0`).
+- **A caught sphere holds its point of the ribbon, wherever the ribbon
+  goes.** It's drawn at `along` plus the shared clock times `RIDE`, on the
+  ribbon's path as the ribbon's numbers make it now. So a change to the
   ribbon by anyone moves every caught sphere on every screen, with no
-  write from the sphere's owner. Animation stays derived from saved
-  numbers and the shared clock.
+  write from the sphere's owner, and a bend never knocks a sphere off.
+  (The first build re-tested the catch at draw time. The browser check
+  showed a second visitor's bend dropping the first visitor's sphere off
+  the ribbon, the opposite of the point.) Animation stays derived from
+  saved numbers and the shared clock.
 - **Visible cause and effect.** A caught sphere glows in its colour, a
   short line joins it to the ribbon, and the stretch of ribbon it rides
   lights up. A sphere being dragged shows the same glow the moment it
@@ -81,8 +88,8 @@ per part, credit per part, publishing as an exhibit version.
   `public/orbit.js`, and the Play button. Exhibits already published as
   Orbit would then draw as empty groups (the builder's rule for unknown
   recipes) but stay in the database with their history.
-- Checked by `spec/orbit.test.ts` (the catch rule, and a ribbon change
-  moving a caught sphere) and the browser check's `orbit` section: a drag
+- Checked by `spec/orbit.test.ts` (the catch rule at the drop, and a
+  ribbon change moving a caught sphere and never dropping it) and the browser check's `orbit` section: a drag
   places a sphere; a second visitor's ribbon change moves it on the first
   visitor's screen; Undo; the keyboard path; sliders, history and drawers
   are out of sight.
