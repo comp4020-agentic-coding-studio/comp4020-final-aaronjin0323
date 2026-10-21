@@ -1,5 +1,5 @@
-// The gallery in 3D: a round floor suspended above dusk clouds, open
-// arches, six plinths in a ring and the workbench at the centre. It only
+// The gallery in 3D: a round floor floating above sunset clouds, stone
+// arches on pillars, six plinths in a ring and the workbench at the centre. It only
 // draws; every control lives in the DOM (app.js). Loaded with a dynamic
 // import, so if WebGL or the CDN is missing the page carries on without it.
 import * as THREE from "three";
@@ -28,65 +28,196 @@ const C = {
 const slotAngle = (slot) => ((slot - 1) / 6) * TAU + Math.PI / 6;
 const slotPos = (slot) => new THREE.Vector3(Math.sin(slotAngle(slot)) * PLINTH_R, 0, Math.cos(slotAngle(slot)) * PLINTH_R);
 
+// The low sun, off to the side of the opening view: it sets the sky's glow,
+// the warm key light and the long shadows together.
+const SUN_DIR = new THREE.Vector3(-0.9, 0.42, -0.2).normalize();
+
+/** A soft sunset: peach at the horizon, rose, then lavender overhead. */
 function skyDome() {
   const geo = new THREE.SphereGeometry(400, 48, 24);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
-      top: { value: new THREE.Color("#2c2a5c") },
-      mid: { value: new THREE.Color("#8a6aa6") },
-      low: { value: new THREE.Color("#f5a785") },
-      glow: { value: new THREE.Color("#ffd9b0") },
-      sun: { value: new THREE.Vector3(-0.55, 0.08, -0.83).normalize() },
+      top: { value: new THREE.Color("#a99cd0") },
+      mid: { value: new THREE.Color("#d8b8d2") },
+      low: { value: new THREE.Color("#f8d0b8") },
+      glow: { value: new THREE.Color("#fff0dc") },
+      sun: { value: SUN_DIR.clone().setY(0.1).normalize() },
     },
     vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    // colours arrive in linear space; the include encodes them for the
+    // screen, or the sunset comes out dark and oversaturated
     fragmentShader: `
       uniform vec3 top; uniform vec3 mid; uniform vec3 low; uniform vec3 glow; uniform vec3 sun;
       varying vec3 vDir;
       void main(){
         float h = vDir.y;
-        vec3 c = mix(low, mid, smoothstep(-0.05, 0.28, h));
-        c = mix(c, top, smoothstep(0.25, 0.85, h));
-        c = mix(c, vec3(0.98,0.80,0.72), smoothstep(0.0, -0.35, h) * 0.6);
+        vec3 c = mix(low, mid, smoothstep(-0.02, 0.22, h));
+        c = mix(c, top, smoothstep(0.2, 0.75, h));
+        c = mix(c, low, smoothstep(0.0, -0.3, h));
         float s = max(dot(normalize(vDir), sun), 0.0);
-        c += glow * pow(s, 18.0) * 0.55 + glow * pow(s, 3.0) * 0.12;
+        c = mix(c, glow, pow(s, 12.0) * 0.6 + pow(s, 3.0) * 0.12);
         gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
       }`,
   });
   return new THREE.Mesh(geo, mat);
 }
 
-/** A sea of soft cloud puffs below the floor, lit warm from the low sun. */
+/** Three layers of cloud below the floor, each further, lower, flatter and
+ * hazier than the last: lilac in shadow, peach where the low sun meets them. */
 function clouds() {
   const group = new THREE.Group();
   const puff = new THREE.IcosahedronGeometry(1, 3);
-  // lilac in shadow, peach where the low sun catches them: distinct from the
-  // ivory floor, so the gallery reads as floating above them
-  const mat = new THREE.MeshStandardMaterial({ color: "#f3c9c4", roughness: 1, metalness: 0, emissive: "#5d4a8a", emissiveIntensity: 0.32 });
-  const count = 220;
-  const inst = new THREE.InstancedMesh(puff, mat, count);
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
   let seed = 7;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < count; i++) {
-    const a = rnd() * TAU;
-    const r = 14 + Math.pow(rnd(), 0.8) * 140;
-    const s = 3 + rnd() * 6 + r * 0.05;
-    const y = -16 - rnd() * 6 - r * 0.05;
-    m.compose(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r), q, new THREE.Vector3(s * 1.6, s * 0.55, s * 1.3));
-    inst.setMatrixAt(i, m);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const layers = [
+    { count: 70, r: [13, 48], y: -7, size: [3, 6], flat: 0.5, color: "#fff0e6", shade: "#8f7cbc", haze: 0.12 },
+    { count: 110, r: [46, 150], y: -14, size: [7, 13], flat: 0.42, color: "#fde3da", shade: "#9a8ac6", haze: 0.18 },
+    { count: 100, r: [150, 320], y: -26, size: [14, 26], flat: 0.34, color: "#f4dbe2", shade: "#a99ad2", haze: 0.26 },
+  ];
+  for (const L of layers) {
+    const mat = new THREE.MeshStandardMaterial({ color: L.color, roughness: 1, metalness: 0, emissive: L.shade, emissiveIntensity: L.haze });
+    // each cloud a heap of puffs: a big one in the middle, smaller ones
+    // round and on top, so they read as billows, not flat discs
+    const per = 5;
+    const inst = new THREE.InstancedMesh(puff, mat, L.count * per);
+    let k = 0;
+    for (let i = 0; i < L.count; i++) {
+      const a = rnd() * TAU;
+      const r = L.r[0] + Math.pow(rnd(), 0.8) * (L.r[1] - L.r[0]);
+      const sz = L.size[0] + rnd() * (L.size[1] - L.size[0]);
+      const cx = Math.cos(a) * r, cz = Math.sin(a) * r, cy = L.y - rnd() * sz * 0.4;
+      for (let j = 0; j < per; j++) {
+        const t = j === 0 ? 1 : 0.45 + rnd() * 0.4;
+        const ang = rnd() * TAU;
+        const off = j === 0 ? 0 : sz * (0.6 + rnd() * 0.5);
+        const lift = j === 0 ? 0 : sz * (0.1 + rnd() * 0.35) * L.flat * 2;
+        m.compose(
+          new THREE.Vector3(cx + Math.cos(ang) * off, cy + lift, cz + Math.sin(ang) * off),
+          q,
+          new THREE.Vector3(sz * t * 1.2, sz * t * L.flat * 1.3, sz * t * 1.1),
+        );
+        inst.setMatrixAt(k++, m);
+      }
+    }
+    inst.userData.cloudLayer = L.y;
+    group.add(inst);
   }
-  inst.receiveShadow = false;
-  group.add(inst);
   return group;
+}
+
+/** The far horizon: a band of warm haze where the cloud sea meets the sky. */
+function horizon() {
+  const c = document.createElement("canvas");
+  c.width = 4;
+  c.height = 128;
+  const x = c.getContext("2d");
+  const g = x.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, "rgba(250,214,196,0)");
+  g.addColorStop(0.55, "rgba(250,214,196,0.85)");
+  g.addColorStop(1, "rgba(236,204,220,1)");
+  x.fillStyle = g;
+  x.fillRect(0, 0, 4, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const band = new THREE.Mesh(
+    new THREE.CylinderGeometry(370, 370, 90, 64, 1, true),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true, side: THREE.BackSide, depthWrite: false, fog: false }),
+  );
+  band.position.y = -52;
+  band.userData.horizon = true;
+  return band;
+}
+
+/** A few small islands drifting in the distance, each a faceted rock with a
+ * mossy top and a cypress or a tiny ivory folly. */
+function islands() {
+  const group = new THREE.Group();
+  const rock = new THREE.MeshStandardMaterial({ color: "#dcb6a0", roughness: 0.95, flatShading: true });
+  const moss = new THREE.MeshStandardMaterial({ color: "#b4c49a", roughness: 0.9 });
+  const cypress = new THREE.MeshStandardMaterial({ color: "#6f9a7e", roughness: 0.8 });
+  const stone = new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.85 });
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const spots = [
+    { p: [-12, 9, -70], s: 3.2, folly: true },
+    { p: [34, 7, -78], s: 4.2, folly: false },
+    { p: [-70, -2, 18], s: 5, folly: true },
+    { p: [58, 1.5, 34], s: 2.4, folly: false },
+  ];
+  for (const { p, s, folly } of spots) {
+    const g = new THREE.Group();
+    const cone = new THREE.ConeGeometry(1, 2.2, 7, 2);
+    const pos = cone.attributes.position;
+    for (let i = 0; i < pos.count; i++) if (pos.getY(i) < 1.09) pos.setXYZ(i, pos.getX(i) * (0.85 + rnd() * 0.3), pos.getY(i), pos.getZ(i) * (0.85 + rnd() * 0.3));
+    cone.computeVertexNormals();
+    const body = new THREE.Mesh(cone, rock);
+    body.rotation.x = Math.PI;
+    body.position.y = -1.1;
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1, 0.22, 24), moss);
+    top.position.y = 0.11;
+    g.add(body, top);
+    if (folly) {
+      for (const x of [-0.32, 0.32]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.6, 10), stone);
+        col.position.set(x, 0.52, 0);
+        g.add(col);
+      }
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.07, 8, 20, Math.PI), stone);
+      arc.position.y = 0.82;
+      g.add(arc);
+    } else {
+      for (const [x, z, h] of [[-0.3, 0.1, 0.9], [0.1, -0.2, 1.2], [0.4, 0.25, 0.7]]) {
+        const tree = new THREE.Mesh(new THREE.ConeGeometry(0.14, h, 10), cypress);
+        tree.position.set(x, 0.22 + h / 2, z);
+        g.add(tree);
+      }
+    }
+    g.scale.setScalar(s);
+    g.position.set(...p);
+    g.rotation.y = rnd() * TAU;
+    g.userData.island = p[1];
+    group.add(g);
+  }
+  return group;
+}
+
+/** A soft round shadow laid on the floor under something standing on it. */
+const contactTexture = (() => {
+  let t = null;
+  return () => {
+    if (t) return t;
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const x = c.getContext("2d");
+    const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "rgba(90,60,70,0.55)");
+    g.addColorStop(0.55, "rgba(90,60,70,0.28)");
+    g.addColorStop(1, "rgba(90,60,70,0)");
+    x.fillStyle = g;
+    x.fillRect(0, 0, 128, 128);
+    t = new THREE.CanvasTexture(c);
+    return t;
+  };
+})();
+function contactShadow(radius, mat = new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false })) {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.006;
+  m.renderOrder = 1;
+  m.userData.contact = true;
+  m.userData.flat = true;
+  return m;
 }
 
 function floor() {
   const g = new THREE.Group();
   // the floating platform: a rounded slab that tapers to a point underneath
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(FLOOR_R, FLOOR_R, 0.35, 96), new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.62 }));
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(FLOOR_R, FLOOR_R, 0.35, 96), new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.8 }));
   top.position.y = -0.175;
   top.receiveShadow = true;
   g.add(top);
@@ -113,58 +244,93 @@ function floor() {
   return g;
 }
 
-/** Open arches round the rim, one bay per twelfth. Each bay has its own
- * materials so the bays between the camera and the centre can fade out
- * instead of walling off the view (fadeBays). */
+/** Sixteen stone pillars round the rim, each pair carrying a solid arch
+ * that spans between them along the ring. Each bay (a pillar and the arch
+ * to its neighbour) has its own materials, so the bays between the camera
+ * and the centre can fade out instead of walling off the view (fadeBays). */
+const ARCH_THICK = 0.36;
 function arches() {
   const g = new THREE.Group();
-  const n = 12;
+  const n = 16;
   const R = FLOOR_R - 0.45;
-  const H = 3.4;
-  const span = (TAU * R) / n;
+  const H = 2.4; // the pillar, base to the top of its capital
+  const half = R * Math.sin(Math.PI / n); // half the span between pillar centres
+  const inset = R * Math.cos(Math.PI / n);
+  // the arch's face: a half ring, extruded into a deep stone band
+  const face = new THREE.Shape();
+  const ro = half + ARCH_THICK / 2;
+  const ri = half - ARCH_THICK / 2;
+  face.absarc(0, 0, ro, 0, Math.PI, false);
+  face.lineTo(-ri, 0);
+  face.absarc(0, 0, ri, Math.PI, 0, true);
+  face.lineTo(ro, 0);
+  const archGeo = new THREE.ExtrudeGeometry(face, { depth: 0.5, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 2, curveSegments: 40 });
+  archGeo.translate(0, 0, -0.25);
+  const shaftGeo = new THREE.CylinderGeometry(0.3, 0.34, H - 0.5, 24);
+  const baseGeo = new THREE.BoxGeometry(0.86, 0.26, 0.86);
+  const capGeo = new THREE.BoxGeometry(0.8, 0.24, 0.8);
   const bays = [];
   for (let i = 0; i < n; i++) {
     const a = (i / n) * TAU;
-    const mat = new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.55, transparent: true });
-    const trim = new THREE.MeshStandardMaterial({ color: C.peach, roughness: 0.5, transparent: true });
+    const mat = new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.82, transparent: true });
+    const trim = new THREE.MeshStandardMaterial({ color: C.ivoryDeep, roughness: 0.85, transparent: true });
+    const shade = new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false });
     const bay = new THREE.Group();
-    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, H, 20), mat);
-    pillar.position.set(Math.sin(a) * R, H / 2, Math.cos(a) * R);
-    pillar.castShadow = true;
-    pillar.receiveShadow = true;
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.22, 0.14, 20), trim);
-    cap.position.set(pillar.position.x, H + 0.07, pillar.position.z);
+    const px = Math.sin(a) * R, pz = Math.cos(a) * R;
+    const base = new THREE.Mesh(baseGeo, trim);
+    base.position.set(px, 0.13, pz);
+    const shaft = new THREE.Mesh(shaftGeo, mat);
+    shaft.position.set(px, 0.26 + (H - 0.5) / 2, pz);
+    const cap = new THREE.Mesh(capGeo, trim);
+    cap.position.set(px, H - 0.12, pz);
+    for (const m of [base, shaft, cap]) {
+      m.rotation.y = a;
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+    const foot = contactShadow(0.85, shade);
+    foot.position.set(px, 0.006, pz);
+    // the arch to the next pillar, tangent to the ring, its feet on the
+    // two capitals
     const mid = a + Math.PI / n;
-    const arc = new THREE.Mesh(new THREE.TorusGeometry(span / 2 - 0.05, 0.14, 12, 40, Math.PI), mat);
-    arc.position.set(Math.sin(mid) * R * Math.cos(Math.PI / n), H + 0.07, Math.cos(mid) * R * Math.cos(Math.PI / n));
-    arc.rotation.y = mid + Math.PI / 2;
+    const arc = new THREE.Mesh(archGeo, mat);
+    arc.position.set(Math.sin(mid) * inset, H, Math.cos(mid) * inset);
+    arc.rotation.y = mid;
     arc.castShadow = true;
-    bay.add(pillar, cap, arc);
+    arc.receiveShadow = true;
+    bay.add(base, shaft, cap, foot, arc);
     // points along the curve, for telling when a frame cuts through it
     arc.updateMatrix();
-    const r = span / 2 - 0.05;
-    const curve = [...Array(9)].map((_, k) => new THREE.Vector3(Math.cos((k / 8) * Math.PI) * r, Math.sin((k / 8) * Math.PI) * r, 0).applyMatrix4(arc.matrix));
-    bay.userData = { angle: mid, mats: [mat, trim], curve };
+    const curve = [...Array(9)].map((_, k) => new THREE.Vector3(Math.cos((k / 8) * Math.PI) * half, Math.sin((k / 8) * Math.PI) * half, 0).applyMatrix4(arc.matrix));
+    const feet = [curve[0], curve[8]];
+    const top = new THREE.Vector3(px, H, pz);
+    bay.userData = { angle: mid, mid: arc.position.clone(), mats: [mat, trim], shades: [shade], curve, feet, top };
     bays.push(bay);
     g.add(bay);
   }
   g.userData.bays = bays;
+  g.userData.R = R;
+  g.userData.H = H;
+  g.userData.thick = ARCH_THICK;
   return g;
 }
 
-/** Fades the bays on the camera's side of the room, so the arches frame the
- * gallery from behind rather than block it from in front. */
-function bayOpacity(angle, camYaw) {
-  const d = Math.abs(((((angle - camYaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI);
-  return 0.04 + 0.96 * THREE.MathUtils.smoothstep(d, 0.9, 1.6);
+/** Fades the bays near the camera, so the arches frame the gallery from
+ * behind rather than block it from in front. By distance, not by side of
+ * the room: a close-up from near the centre keeps the arches behind the
+ * exhibit it looks at. */
+function bayOpacity(bay, cam) {
+  const d = Math.hypot(bay.mid.x - cam.x, bay.mid.z - cam.z);
+  return 0.04 + 0.96 * THREE.MathUtils.smoothstep(d, 2.6, 4.6);
 }
-function fadeBays(bays, camYaw) {
+function fadeBays(bays, cam) {
   for (const bay of bays) {
-    const o = bayOpacity(bay.userData.angle, camYaw);
+    const o = bayOpacity(bay.userData, cam);
     for (const m of bay.userData.mats) {
       m.opacity = o;
       m.depthWrite = o > 0.95;
     }
+    for (const m of bay.userData.shades) m.opacity = o;
     bay.visible = o > 0.06;
   }
 }
@@ -172,7 +338,7 @@ function fadeBays(bays, camYaw) {
 function plinth(slot) {
   const g = new THREE.Group();
   g.position.copy(slotPos(slot));
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.78, 0.9, PLINTH_H, 48), new THREE.MeshStandardMaterial({ color: "#f8f0e2", roughness: 0.5 }));
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.78, 0.9, PLINTH_H, 48), new THREE.MeshStandardMaterial({ color: "#f8f0e2", roughness: 0.78 }));
   body.position.y = PLINTH_H / 2;
   body.castShadow = true;
   body.receiveShadow = true;
@@ -188,7 +354,7 @@ function plinth(slot) {
   plate.position.set(inward.x, 0.01, inward.z);
   plate.rotation.z = Math.atan2(inward.x, inward.z) + Math.PI;
   plate.userData.flat = true;
-  g.add(body, band, top, plate);
+  g.add(body, band, top, plate, contactShadow(1.35));
   g.userData.pick = `slot:${slot}`;
   for (const m of [body, band, top]) m.userData.pick = `slot:${slot}`;
   const holder = new THREE.Group();
@@ -223,7 +389,7 @@ function numberTexture(n) {
 
 function bench() {
   const g = new THREE.Group();
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.45, 0.55, 64), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.5 }));
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.45, 0.55, 64), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.78 }));
   base.position.y = 0.275;
   base.castShadow = true;
   base.receiveShadow = true;
@@ -236,7 +402,7 @@ function bench() {
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.65;
   for (const m of [base, glassTop, ring]) m.userData.pick = "bench";
-  g.add(base, glassTop, ring);
+  g.add(base, glassTop, ring, contactShadow(2.1));
   const holder = new THREE.Group();
   holder.position.y = 0.66;
   g.add(holder);
@@ -257,7 +423,9 @@ function plants() {
   const potAlt = new THREE.MeshStandardMaterial({ color: C.deepTeal, roughness: 0.45 });
   const leaf = new THREE.MeshStandardMaterial({ color: "#5d9c7f", roughness: 0.55 });
   const leafWarm = new THREE.MeshStandardMaterial({ color: "#86b07a", roughness: 0.55 });
-  const spots = [0, 2, 4].map((k) => (k / 6) * TAU + Math.PI / 6 + Math.PI / 6);
+  // between plinths, and never straight behind the bench from the opening
+  // view (yaw 0), where a plant would read as part of the sculpture
+  const spots = [1, 5, 2].map((k) => (k / 6) * TAU);
   spots.forEach((a, i) => {
     const p = new THREE.Group();
     const r = PLINTH_R + 1.6;
@@ -317,30 +485,33 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog("#c99bb0", 45, 190);
+  scene.fog = new THREE.Fog("#efcfcf", 90, 420);
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environmentIntensity = 0.55;
 
   const rim = arches();
   // the sky, the clouds and the floor are the backdrop: never in the way
-  const backdrop = [skyDome(), clouds(), floor()];
+  const sky = skyDome();
+  const backdrop = [sky, horizon(), clouds(), islands(), floor()];
   for (const b of backdrop) b.userData.backdrop = true;
   scene.add(...backdrop, rim, plants());
 
-  scene.add(new THREE.HemisphereLight("#ffe2c8", "#7a6aa8", 1.1));
-  const sun = new THREE.DirectionalLight("#ffc79a", 2.4);
-  sun.position.set(-9, 11, -12);
+  // a cool lavender fill from the sky, warm bounce from the floor and clouds
+  const ambientFill = new THREE.HemisphereLight("#c9c6f2", "#f2cdb8", 1.05);
+  scene.add(ambientFill);
+  // the warm low sun, from the side of the opening view: long soft shadows,
+  // a bright edge on stone, highlights on chrome, light through the glass
+  const sun = new THREE.DirectionalLight("#ffc896", 2.8);
+  sun.position.copy(SUN_DIR).multiplyScalar(22);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10, near: 1, far: 40 });
+  Object.assign(sun.shadow.camera, { left: -11, right: 11, top: 11, bottom: -11, near: 1, far: 50 });
   sun.shadow.bias = -0.0004;
-  sun.shadow.radius = 4;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.radius = 6;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight("#c9b8ff", 0.5);
-  fill.position.set(8, 6, 10);
-  scene.add(fill);
-  const benchGlow = new THREE.PointLight("#ffd0a8", 6, 6, 1.8);
+  const benchGlow = new THREE.PointLight("#ffd0a8", 5, 6, 1.8);
   benchGlow.position.set(0, 3.2, 0);
   scene.add(benchGlow);
 
@@ -393,23 +564,24 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   // someone else's edit), never from the local preview mid-drag, so the
   // camera doesn't chase a slider while it moves.
   const INSIDE_R = FLOOR_R - 1.0;
+  // a visitor's eye, standing in the gallery
+  const EYE = 1.62;
   function benchFit(tight) {
-    // low, near eye height: the glass top reads as a thin lens, not a disc
-    const pitch = tight ? 0.16 : 0.1;
     box.makeEmpty();
     if (wb.holder.children.length) box.setFromObject(wb.holder);
-    if (box.isEmpty()) return { focusY: 1.2, dist: 6.6, pitch: 0.24 };
+    if (box.isEmpty()) return { focusY: 1.2, dist: 6.6, pitch: Math.asin((EYE - 1.2) / 6.6) };
     // the sculpture itself, with only a sliver of glass under it
     const lo = Math.max(box.min.y, 0.45);
     const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
     // fitted to the clear rectangle, not the whole canvas
     const aspect = clear.w / clear.h;
-    const f = frameHeight(lo, box.max.y, clearFov(), aspect, tight ? 1.2 : 1.45, tight ? 2.5 : 3.8);
+    const f = frameHeight(lo, box.max.y, clearFov(), aspect, tight ? 1.2 : 1.3, tight ? 2.5 : 3.2);
     const tanH = clearTan().h;
-    const dist = Math.max(f.dist, (w * (tight ? 1.15 : 1.4)) / 2 / tanH + w / 2);
-    const focusY = f.focusY;
-    // never back out through the arches
-    return { focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
+    const dist = Math.min(Math.max(f.dist, (w * (tight ? 1.15 : 1.25)) / 2 / tanH + w / 2), INSIDE_R);
+    // standing, not hovering: the camera at eye height, so the glass top
+    // reads as a thin lens and the arches rise round the sculpture
+    const pitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp((EYE - f.focusY) / dist, -1, 1)), -0.08, 0.3);
+    return { focusY: f.focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
   }
 
   // ---- composing a close-up: measure what a pose would show
@@ -436,9 +608,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     return out;
   };
   // a faded bay is see-through from this camera, so it's never in the way
-  const solid = (o, camYaw) => {
+  const solid = (o, cam) => {
     const bay = o.parent?.userData.mats ? o.parent.userData : null;
-    return !bay || bayOpacity(bay.angle, camYaw) >= 0.5;
+    return !bay || bayOpacity(bay, cam) >= 0.5;
   };
   // the target of a close-up: what to keep clear, what to fit
   function targetOf(t) {
@@ -477,7 +649,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
    * of rays to it that hit something else first, the share of the clear
    * view taken by something near the lens, and arches the top edge cuts. */
   function measure(c, target, obs, grid = 5) {
-    const camYaw = Math.atan2(c.position.x, c.position.z);
+    const cam = c.position;
     const rect = screenRect(c, target.box);
     if (!rect) return null;
     const all = [...target.meshes, ...obs];
@@ -486,7 +658,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     for (let i = 0; i < grid; i++) {
       for (let j = 0; j < grid; j++) {
         castAt(c, rect.x + ((i + 0.5) / grid) * rect.w, rect.y + ((j + 0.5) / grid) * rect.h);
-        const hits = ray.intersectObjects(all, false).filter((hh) => solid(hh.object, camYaw));
+        const hits = ray.intersectObjects(all, false).filter((hh) => solid(hh.object, cam));
         const first = hits.findIndex((hh) => mine.has(hh.object));
         if (first === 0) vis++;
         else if (first > 0) occ++;
@@ -498,7 +670,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       for (let j = 0; j < gy; j++) {
         castAt(c, clear.x + ((i + 0.5) / gx) * clear.w, clear.y + ((j + 0.5) / gy) * clear.h);
         rays++;
-        const hit = ray.intersectObjects(obs, false).find((hh) => solid(hh.object, camYaw));
+        const hit = ray.intersectObjects(obs, false).find((hh) => solid(hh.object, cam));
         if (hit && hit.distance < NEAR) near++;
       }
     }
@@ -508,7 +680,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     for (const bay of rim.userData.bays) {
-      if (bayOpacity(bay.userData.angle, camYaw) < 0.3) continue;
+      if (bayOpacity(bay.userData, cam) < 0.3) continue;
       let shown = 0, gone = 0;
       for (const p of bay.userData.curve) {
         if (v3.copy(p).applyMatrix4(c.matrixWorldInverse).z > -0.1) { gone++; continue; }
@@ -779,7 +951,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     // the camera's angle, for the browser check to read
     const yaw = view.yaw.toFixed(3);
     if (canvas.dataset.yaw !== yaw) canvas.dataset.yaw = yaw;
-    fadeBays(rim.userData.bays, Math.atan2(camera.position.x, camera.position.z));
+    fadeBays(rim.userData.bays, camera.position);
     for (const { group } of shown.values()) animate(group, t);
     wb.ghost.rotation.z = t * 0.3;
     renderer.render(scene, camera);
@@ -799,15 +971,77 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       camY: camera.position.y,
       yaw: view.yaw,
       archR: FLOOR_R - 0.45,
-      archTop: 3.4,
+      archTop: rim.userData.H,
       view: { ...clear },
       box: m?.rect ?? { x: 0, y: 0, w: 0, h: 0 },
       occluded: m?.occluded ?? 1,
       near: m?.near ?? 1,
       cuts: m?.cuts ?? 99,
       moved,
+      look: lookOf(),
     };
   };
+
+  // For the browser check's `look` section: the arches' build, the depth
+  // behind the room, the lights, and where on the canvas the bare sky is.
+  function lookOf() {
+    const bays = rim.userData.bays;
+    const tops = bays.map((b) => b.userData.top);
+    let archGap = 0, archAlong = 0;
+    for (const b of bays) {
+      for (const f of b.userData.feet) {
+        archGap = Math.max(archGap, Math.min(...tops.map((t) => t.distanceTo(f))));
+        archAlong = Math.max(archAlong, Math.abs(Math.hypot(f.x, f.z) - rim.userData.R));
+      }
+    }
+    const tagged = (key) => {
+      const out = [];
+      scene.traverse((o) => o.userData[key] !== undefined && out.push(o));
+      return out;
+    };
+    const islands = tagged("island");
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const onScreen = (p) => {
+      if (v3.copy(p).applyMatrix4(camera.matrixWorldInverse).z > 0) return false;
+      v3.copy(p).project(camera);
+      const x = ((v3.x + 1) / 2) * w, y = ((1 - v3.y) / 2) * h;
+      return x >= clear.x && x <= clear.x + clear.w && y >= clear.y && y <= clear.y + clear.h;
+    };
+    // the horizon: straight ahead, far off, at eye level
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd).setY(0).normalize();
+    v3.copy(camera.position).addScaledVector(fwd, 380).setY(camera.position.y).project(camera);
+    const horizonY = ((1 - v3.y) / 2) * h;
+    // the bare sky: rays that hit nothing but the dome
+    const things = [];
+    scene.traverse((o) => o.isMesh && o !== sky && o.visible && things.push(o));
+    const skyPx = [];
+    for (let i = 0; i < 24; i++) {
+      for (let j = 0; j < 16; j++) {
+        const x = clear.x + ((i + 0.5) / 24) * clear.w, y = clear.y + ((j + 0.5) / 16) * clear.h;
+        if (y > horizonY) continue;
+        castAt(camera, x, y);
+        if (!ray.intersectObjects(things, false).length) skyPx.push([Math.round(x), Math.round(y)]);
+      }
+    }
+    const sunDir = sun.position.clone().normalize();
+    const elev = Math.asin(sunDir.y);
+    const side = Math.acos(Math.abs(new THREE.Vector3(sunDir.x, 0, sunDir.z).normalize().dot(fwd)));
+    return {
+      archThick: rim.userData.thick,
+      archGap,
+      archAlong,
+      cloudLayers: tagged("cloudLayer").length,
+      horizon: tagged("horizon").length > 0,
+      horizonY,
+      islands: islands.length,
+      islandsInView: islands.filter((o) => onScreen(o.getWorldPosition(new THREE.Vector3()))).length,
+      warmSide: sun.color.r > sun.color.b * 1.15 && elev < 0.7 && side > 0.7 && side < Math.PI - 0.7,
+      coolFill: ambientFill.color.b > ambientFill.color.r,
+      contactShadows: tagged("contact").length,
+      skyPx,
+    };
+  }
 
   resize();
   wake();

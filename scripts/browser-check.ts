@@ -562,14 +562,21 @@ async function phoneEdit(browser: Browser): Promise<void> {
       const box = (el as Element).getBoundingClientRect();
       // a radio swatch is visually its label
       const shown = (el as HTMLInputElement).type === "radio" ? (el as Element).closest("label")!.getBoundingClientRect() : box;
+      // the sculpture itself, not just its canvas: inside the uncovered
+      // scene, unblocked, and big enough to see a change
+      const canvas = document.querySelector("[data-scene]") as any;
+      const p = canvas.probe();
+      const v = p.view, b = p.box;
+      const sculptureIn = b.x >= v.x - 1 && b.y >= v.y - 1 && b.x + b.w <= v.x + v.w + 1 && b.y + b.h <= v.y + v.h + 1 && p.occluded < 0.03 && b.w * b.h >= 0.2 * v.w * v.h;
       return {
+        sculptureIn,
         id: (el as Element).id || (el as HTMLInputElement).name + ":" + (el as HTMLInputElement).value || (el as Element).textContent?.trim(),
         sceneIn: scene.top >= -1 && scene.bottom <= vh + 1 && scene.height >= vh * 0.3 && scene.left >= -1 && scene.right <= vw + 1,
         controlIn: shown.top >= scene.bottom - 1 && shown.bottom <= vh + 1,
         pageScroll: scrollY,
       };
     }, await c.elementHandle());
-    if (!r.sceneIn || !r.controlIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
+    if (!r.sceneIn || !r.controlIn || !r.sculptureIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.sculptureIn ? "" : " sculpture-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
   }
   check(controls.length >= 30 && misses.length === 0, "every bench control is worked with the sculpture on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
   // scrolling the panel, for longer than the idle drift waits, leaves the
@@ -635,11 +642,60 @@ async function opening(browser: Browser): Promise<void> {
     const p = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
     const inside = p.camR < p.archR && p.camY < p.archTop;
     check(inside, `${label}: the camera stands inside the pavilion`, `r ${p.camR.toFixed(1)} of ${p.archR.toFixed(1)}, y ${p.camY.toFixed(1)}`);
+    check(p.camY >= 1.3 && p.camY <= 2.0, `${label}: at a visitor's eye height`, `y ${p.camY.toFixed(2)}`);
     const area = (p.box.w * p.box.h) / (p.view.w * p.view.h);
     const cx = (p.box.x + p.box.w / 2 - p.view.x) / p.view.w;
     const cy = (p.box.y + p.box.h / 2 - p.view.y) / p.view.h;
-    check(area >= 0.2 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the bench sculpture is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
+    check(area >= 0.25 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the bench sculpture is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
     await page.screenshot({ path: `.shots/opening-${label}.png` });
+    await page.context().close();
+  }
+}
+
+// The look of the opening view, at both sizes: a soft sunset sky, stone
+// arches standing on their pillars, depth behind the room, and light that
+// tells the materials apart (CLAUDE.md, "A warm, immersive gallery").
+async function look(browser: Browser): Promise<void> {
+  console.log("\n— the look —");
+  for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
+    await page.waitForTimeout(800);
+    const p = await page.evaluate(() => {
+      const c = document.querySelector("[data-scene]")!;
+      const r = c.getBoundingClientRect();
+      return { ...(c as any).probe(), top: r.top, left: r.left };
+    });
+    const L = p.look ?? {};
+    // the sky's pixels: the uncovered scene above the horizon, by the probe
+    const shot = (await page.screenshot()).toString("base64");
+    const sky = await page.evaluate(
+      async ([b64, p]) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const cv = new OffscreenCanvas(img.width, img.height);
+        const g = cv.getContext("2d")!;
+        g.drawImage(img, 0, 0);
+        const k = img.width / innerWidth;
+        const chroma: number[] = [], light: number[] = [];
+        for (const [x, y] of p.look?.skyPx ?? []) {
+          const d = g.getImageData(Math.round((p.left + x) * k), Math.round((p.top + y) * k), 1, 1).data;
+          const mx = Math.max(d[0], d[1], d[2]), mn = Math.min(d[0], d[1], d[2]);
+          chroma.push(mx - mn);
+          light.push((mx + mn) / 510);
+        }
+        chroma.sort((a, b) => a - b);
+        light.sort((a, b) => a - b);
+        return { n: chroma.length, p90: chroma[Math.floor(chroma.length * 0.9)] ?? 999, median: light[Math.floor(light.length / 2)] ?? 0 };
+      },
+      [shot, p] as const,
+    );
+    check(sky.n > 20 && sky.p90 < 100 && sky.median > 0.6, `${label}: a soft peach-to-lavender sky`, `${sky.n} px, chroma p90 ${sky.p90}, median lightness ${sky.median.toFixed(2)}`);
+    check(L.archThick >= 0.3 && L.archGap < 0.1 && L.archAlong < 0.05, `${label}: stone arches standing on their pillars`, `thick ${L.archThick?.toFixed(2)}, foot gap ${L.archGap?.toFixed(2)}, off the ring ${L.archAlong?.toFixed(2)}`);
+    check(L.cloudLayers >= 3 && L.horizon && L.islands >= 3 && L.islandsInView >= 1, `${label}: layered clouds, a horizon and floating islands`, `${L.cloudLayers} layers, horizon ${L.horizon}, ${L.islands} islands, ${L.islandsInView} in view`);
+    check(L.warmSide && L.coolFill && L.contactShadows >= 19, `${label}: warm side light, cool fill and contact shadows`, `warm side ${L.warmSide}, cool fill ${L.coolFill}, ${L.contactShadows} contact shadows`);
+    await page.screenshot({ path: `.shots/look-${label}.png` });
     await page.context().close();
   }
 }
@@ -778,6 +834,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
   opening,
+  look,
   focus,
   noScript,
   noWebGL,
