@@ -152,8 +152,9 @@ carry the meaning and the words are labels. Read
   the plinth row is a strip of small coloured thumbnails (each sculpture's
   main colour) with the title only as an accessible name and on hover/focus.
 - **Icons and colour over sentences.** Every action button is an icon with
-  an accessible name and a tooltip; only Exhibit, the one thing we want
-  people to reach for, keeps a word. Recipes are picked by a swatch of the
+  an accessible name and a tooltip; only the doors into making something
+  keep a word: Exhibit, "Shape it", Remix, Swap in, Gallery and Done
+  (ADR 14). Recipes are picked by a swatch of the
   sculpture, not a blurb. Who you are is your coloured dot; who's here is a
   row of dots. A part someone else is shaping wears their colour ring and
   their name only.
@@ -166,6 +167,28 @@ carry the meaning and the words are labels. Read
   in the editor's colour; a toast is at most four words.
 - **Nothing is lost for screen readers or keyboards.** Every hidden word
   still exists as an accessible name, and every action keeps a real button.
+
+### Explore, then create (ADR 14)
+
+Read `docs/adr/0014-explore-then-create.md`.
+
+- **Everyone starts in explore mode.** The panel is a compact selection
+  card for what's selected (the bench or a plinth): swatch, title, credits,
+  one or two actions, no sliders. Selecting anything, including the bench,
+  shows its card in explore mode.
+- **The editor opens only on an explicit creative action:** "Shape it" on
+  the bench card, a starter, Remix, Swap in, or bringing an archived draft
+  back. Focus moves to the editor's heading.
+- **Leaving is as plain:** "Done" at the top of the editor, the Gallery
+  button, or `Escape` return to explore, focus back on what opened it.
+- **Nothing is lost to the keyboard.** In explore the editor's controls are
+  `hidden`, not just covered, so they're out of the tab order; in create
+  every slider and swatch is a real `<input>` in tab order, as before.
+- Held by the browser check (`explore`), at both sizes: first load shows
+  the card and no visible editing control, and the card fits in a compact
+  height; "Shape it" (by keyboard) reveals every editing control with focus
+  on the editor heading; Done, Gallery and `Escape` each return to the
+  card with focus on "Shape it"; choosing a plinth never shows the editor.
 
 ### Phone and keyboard
 
