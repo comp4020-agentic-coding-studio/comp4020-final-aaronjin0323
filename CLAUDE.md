@@ -228,7 +228,7 @@ Read `docs/adr/0014-explore-then-create.md`.
     orange or dark purple: of the sky pixels above the horizon, the 90th
     percentile chroma (max minus min channel) is under 100 of 255 and the
     median lightness is over 0.6.
-  - **The arches are stone, standing on their pillars.** Twelve stone
+  - **The arches are stone, standing on their pillars.** Sixteen stone
     pillars round the rim; each neighbouring pair carries a solid arch at
     least 0.3 thick spanning between them along the ring (never sticking
     out from it), and both of an arch's feet rest on pillar tops (the
