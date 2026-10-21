@@ -43,8 +43,9 @@ objects. A performance is a loop of gestures that anyone can add to.**
   recorded at the moment in the loop it happened and plays again every
   cycle. You can answer something someone did three cycles ago, cut across
   it, or play along with it. Someone who arrives later sees the whole
-  exchange and adds to it. The loop keeps the newest 40 gestures; older
-  ones fade out, so a performance keeps changing.
+  exchange and adds to it. The loop keeps the newest 40 gestures, and at
+  most 12 from any one visitor (past that your own oldest drops), so a
+  performance keeps changing and nobody crowds the others out.
 - **Deterministic, so every screen agrees.** The state of the stage at any
   moment comes from the set, the gestures and the shared clock alone: a
   fixed 60 Hz step from the start of the loop, with no randomness. No frame

@@ -85,8 +85,10 @@ Settled; change them here first, then in the code.
   database before it's broadcast. The stage is never empty: "Start over"
   archives the loop and leaves a silent one.
 - **A gesture is the only write.** `POST /stage/gesture` adds one gesture
-  at the loop moment the page says it happened; the loop keeps the newest
-  40 and drops the oldest. Other viewers see it within about a second.
+  at the loop moment the page says it happened. The loop holds at most 40,
+  and at most 12 from any one visitor: past 12 your own oldest drops, past
+  40 the oldest of all. So nobody can crowd others out by mashing a button.
+  Other viewers see a gesture within about a second.
 - **Grabbing takes it.** Picking up a sphere claims it for 10 s
   (`POST /stage/grab`), shown to everyone as the holder's colour ring.
   Anyone may grab a sphere someone else holds: the claim moves to them and
