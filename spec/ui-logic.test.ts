@@ -63,7 +63,7 @@ describe("connection", () => {
     expect(ui.canEdit(c)).toBe(true);
     c = ui.connection(c, "error");
     expect(ui.canEdit(c)).toBe(false);
-    expect(ui.connectionMessage(c)).toMatch(/^Reconnecting\.\.\. you can look, but not edit/);
+    expect(ui.connectionMessage(c)).toMatch(/^Reconnecting/);
   });
   test("a reopened stream stays view-only until its own first state", () => {
     let c = ui.connection(ui.connection(ui.connection(ui.INITIAL_CONN, "state"), "error"), "open");

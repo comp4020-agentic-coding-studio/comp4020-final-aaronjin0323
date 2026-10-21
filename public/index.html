@@ -19,18 +19,27 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-clear" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-remix" viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3M15 7a5 5 0 0 1 5 5M9 17a5 5 0 0 1-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4v11H3V8zM8 19v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 5h16v4H4zM5 9v10h14V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  </svg>
   <a class="skip" href="#panel">Skip to the controls</a>
 
   <header class="top">
     <div class="brand">
       <h1>Impossible Museum</h1>
-      <p class="lede" data-lede>Pick a sculpture to remix, or shape the one on the bench.</p>
+      <p class="lede" data-lede>Touch a sculpture. Change it.</p>
     </div>
     <div class="people" data-people hidden>
       <div class="you">
-        <span class="you-label">You are</span>
+        <span class="sr-only">You are</span>
         <span class="chip" data-you></span>
-        <button type="button" class="link" data-rename-open data-edit>Rename</button>
+        <button type="button" class="icon" data-rename-open data-edit aria-label="Rename yourself" title="Rename yourself"><svg aria-hidden="true"><use href="#i-pencil"/></svg></button>
       </div>
       <form class="rename" data-rename hidden>
         <label for="rename-input">Your name</label>
@@ -39,8 +48,8 @@
         <button type="button" class="link" data-rename-cancel>Cancel</button>
         <p class="field-error" data-rename-error role="alert"></p>
       </form>
-      <div class="here" aria-label="Here now">
-        <span class="here-label">Here now</span>
+      <div class="here">
+        <span class="sr-only">Here now</span>
         <ul class="here-list" data-here></ul>
       </div>
     </div>
@@ -64,27 +73,21 @@
 
     <section class="view" data-view="bench" hidden aria-labelledby="bench-h">
       <div class="view-head">
-        <p class="eyebrow">At the centre</p>
-        <h2 id="bench-h" tabindex="-1">The workbench</h2>
+        <h2 id="bench-h" tabindex="-1"><span class="sr-only">The workbench: </span><span data-bench-title>Workbench</span></h2>
+        <ul class="dots" data-bench-credits aria-label="Shaped by"></ul>
       </div>
       <div data-bench-empty hidden>
-        <p class="invite">The bench is empty. Start a sculpture from scratch, or choose one on a plinth and remix it.</p>
-        <ul class="starters" data-starters></ul>
+        <ul class="starters" data-starters aria-label="Start a sculpture"></ul>
       </div>
       <div data-bench-full hidden>
-        <p class="bench-meta"><span data-bench-recipe></span><span data-bench-based></span></p>
-        <p class="hint" data-bench-hint>Move a slider to shape a part. A part you're shaping is yours for a few seconds; anyone can take the others.</p>
+        <p class="sr-only"><span data-bench-recipe></span><span data-bench-based></span></p>
         <div class="parts" data-parts></div>
-        <div class="credits-block">
-          <h3>Shaped by</h3>
-          <ul class="chips" data-bench-credits></ul>
-        </div>
         <div class="bench-actions">
-          <button type="button" class="primary" data-publish-open data-edit>Exhibit this…</button>
-          <button type="button" class="quiet" data-clear data-edit>Clear the bench</button>
+          <button type="button" class="primary" data-publish-open data-edit>Exhibit</button>
+          <button type="button" class="icon" data-clear data-edit aria-label="Clear the bench (it's archived)" title="Clear the bench (it's archived)"><svg aria-hidden="true"><use href="#i-clear"/></svg></button>
         </div>
         <form class="publish" data-publish hidden aria-labelledby="publish-h">
-          <h3 id="publish-h">Exhibit the workbench</h3>
+          <h3 id="publish-h" class="sr-only">Exhibit the workbench</h3>
           <label for="publish-title">Title</label>
           <input id="publish-title" name="title" maxlength="60" required data-edit>
           <fieldset class="targets">
@@ -103,46 +106,44 @@
 
     <section class="view" data-view="exhibit" hidden aria-labelledby="exhibit-h">
       <div class="view-head">
-        <p class="eyebrow" data-ex-where></p>
+        <span class="slot-n" data-ex-where></span>
         <h2 id="exhibit-h" tabindex="-1" data-ex-title></h2>
+        <ul class="dots" data-ex-credits aria-label="Shaped by"></ul>
       </div>
       <div data-ex-empty hidden>
-        <p class="invite" data-ex-empty-text></p>
-        <button type="button" class="primary" data-ex-publish-here data-edit>Exhibit the workbench here…</button>
+        <p class="sr-only" data-ex-empty-text></p>
+        <button type="button" class="primary" data-ex-publish-here data-edit>Exhibit here</button>
       </div>
       <div data-ex-full hidden>
-        <p class="ex-meta" data-ex-meta></p>
-        <ul class="chips" data-ex-credits></ul>
+        <p class="sr-only" data-ex-meta></p>
         <div class="row ex-actions">
-          <button type="button" class="primary" data-ex-remix data-edit>Remix onto the bench</button>
-          <button type="button" class="warn" data-ex-replace data-edit>Replace the workbench with this…</button>
-          <button type="button" class="quiet" data-ex-store data-edit>Move to the storeroom</button>
+          <button type="button" class="primary" data-ex-remix data-edit><svg aria-hidden="true"><use href="#i-remix"/></svg>Remix</button>
+          <button type="button" class="warn" data-ex-replace data-edit aria-label="Replace the workbench with this" title="Replace the workbench with this"><svg aria-hidden="true"><use href="#i-remix"/></svg>Swap in</button>
+          <button type="button" class="icon" data-ex-store data-edit aria-label="Move to the storeroom" title="Move to the storeroom"><svg aria-hidden="true"><use href="#i-store"/></svg></button>
         </div>
         <div class="row ex-display" data-ex-display hidden>
           <label for="display-slot">Put it on</label>
           <select id="display-slot" data-display-slot data-edit></select>
           <button type="button" data-display data-edit>Put on display</button>
         </div>
-        <h3>History</h3>
+        <h3 class="sr-only">History</h3>
         <ol class="history" data-history aria-live="polite"></ol>
       </div>
     </section>
 
     <section class="drawers" data-drawers hidden>
       <details class="drawer" data-storeroom-box>
-        <summary>Storeroom <span class="count" data-storeroom-count></span></summary>
-        <p class="hint">Exhibits taken off display, with every version. Nothing published is deleted.</p>
+        <summary title="Storeroom: exhibits off display, every version kept"><svg aria-hidden="true"><use href="#i-store"/></svg><span class="sr-only">Storeroom</span> <span class="count" data-storeroom-count></span></summary>
         <ul class="shelf" data-storeroom></ul>
       </details>
       <details class="drawer" data-archive-box>
-        <summary>Archived drafts <span class="count" data-archive-count></span></summary>
-        <p class="hint">Whenever the bench is cleared or replaced, what was on it is kept here.</p>
+        <summary title="Archived drafts: whatever left the bench"><svg aria-hidden="true"><use href="#i-archive"/></svg><span class="sr-only">Archived drafts</span> <span class="count" data-archive-count></span></summary>
         <ul class="shelf" data-archive></ul>
       </details>
     </section>
 
     <p class="toast" data-toast role="alert" hidden></p>
-    <footer class="foot"><a href="/readme/">About this museum</a></footer>
+    <footer class="foot"><a href="/readme/" aria-label="About this museum" title="About this museum"><svg aria-hidden="true"><use href="#i-info"/></svg></a></footer>
   </main>
 
   <dialog class="ask" data-ask aria-labelledby="ask-text">

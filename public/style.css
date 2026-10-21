@@ -978,21 +978,10 @@ body.no-gl .scene {
   .plinth-list li {
     flex: none;
   }
-  /* Sized to the title, up to two lines, so a name is read, not guessed
-     at; the row scrolls sideways instead. */
   .plinth-btn {
-    min-width: 96px;
-    width: max-content;
-    max-width: 180px;
     box-shadow: none;
-  }
-  .plinth-btn .plinth-sub {
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow-wrap: anywhere;
+    padding: 4px 10px 4px 4px;
+    gap: 6px;
   }
   .panel {
     position: static;
@@ -1022,5 +1011,304 @@ body.no-gl .scene {
     transition: none !important;
     animation: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------ show, don't tell (ADR 13) */
+
+/* Words that left the screen stay here, for screen readers. */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* an action as an icon: square, a comfortable tap, a tooltip from title */
+button.icon {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  color: var(--ink);
+}
+.ex-actions button.primary,
+.ex-actions button.warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A visitor is a coloured dot; you have a ring. */
+.who {
+  --who: var(--dusk);
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--who);
+  box-shadow: 0 0 0 2px var(--ivory-hi);
+}
+.who.is-you {
+  box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 4px var(--who);
+}
+.here-list li.is-editing .who {
+  box-shadow: 0 0 0 2px var(--ivory-hi), 0 0 0 4px var(--who);
+}
+.people {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+}
+.you button.icon {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border: none;
+  background: none;
+}
+.here-list {
+  gap: 6px;
+  align-items: center;
+}
+.dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+/* A sculpture's colours, as a swatch: on the plinth row, the starters and
+   the version strip. */
+.thumb {
+  display: inline-block;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--thumb, var(--ivory-lo));
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.6);
+  flex: none;
+}
+.thumb.is-empty {
+  background: none;
+  box-shadow: inset 0 0 0 2px var(--line);
+  border: 2px dashed var(--ivory-lo);
+}
+
+/* the plinth row: thumbnails with their number, the title on hover/focus
+   and as the accessible name */
+.plinth-list {
+  gap: 6px;
+}
+.plinth-btn,
+.plinth-btn.is-bench {
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+}
+.plinth-btn .plinth-label {
+  font-size: 0.95rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* the empty bench: three swatches to start from */
+.starters {
+  grid-template-columns: repeat(3, 1fr);
+}
+.starter {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 12px 6px;
+}
+.starter .thumb {
+  width: 52px;
+  height: 52px;
+}
+.starter-name {
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.view-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.view-head .dots {
+  margin: 0;
+  margin-left: auto;
+}
+.slot-n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--coral-ink);
+  color: #fff;
+  font-weight: 800;
+}
+.slot-n:empty {
+  display: none;
+}
+
+/* a part's last author and holder sit beside its name */
+.author {
+  margin: 0;
+}
+.part-head .author:empty {
+  display: none;
+}
+hr.placement-h {
+  border: 0;
+  border-top: 1px dashed var(--line);
+  margin: 10px 0 4px;
+}
+
+/* history: a strip of version chips */
+.history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+.version,
+.version.is-latest {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  display: contents;
+}
+.version-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  border: 2px solid var(--who);
+  background: #fff;
+  min-height: 40px;
+}
+.version.is-latest .version-chip {
+  background: var(--ivory-hi);
+  box-shadow: 0 0 0 3px rgba(31, 111, 120, 0.25);
+}
+.version.is-open .version-chip {
+  background: var(--ink);
+  color: var(--ivory-hi);
+}
+.version-chip .thumb {
+  width: 26px;
+  height: 26px;
+}
+.version-chip .version-n {
+  color: inherit;
+}
+.version-detail {
+  flex-basis: 100%;
+  order: 99;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.version-detail .dots {
+  margin: 0;
+  margin-right: auto;
+}
+
+/* drawers: an icon and a count */
+.drawers {
+  grid-template-columns: auto auto 1fr;
+  align-items: start;
+}
+.drawer[open] {
+  grid-column: 1 / -1;
+}
+.drawer summary {
+  list-style: none;
+}
+.drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.foot a {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+}
+
+/* drawer entries: a swatch and dots, the details in names and tooltips */
+.shelf-item {
+  grid-template-columns: 1fr auto;
+}
+.shelf-item .dots {
+  margin: 0;
+  grid-column: 1;
+}
+.shelf-item > button.icon {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  border: none;
+  background: none;
+}
+.shelf-open {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+}
+
+/* A slider's position is its value; the number shows only while it's
+   touched, or across your own part while you hold it. Without the 3D room
+   there's nothing else to show the value, so then it always shows. The
+   number stays in the DOM, and an output is announced either way. */
+.param-value {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.param:focus-within .param-value,
+.param:hover .param-value,
+.part[data-lease="mine"] .param-value,
+.no-gl .param-value {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .param-value {
+    transition: none;
   }
 }

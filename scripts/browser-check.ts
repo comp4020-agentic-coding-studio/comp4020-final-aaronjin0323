@@ -87,7 +87,7 @@ async function firstVisit(browser: Browser): Promise<void> {
   console.log("\n— first visit: what can I do? —");
   const page = await visitor(browser);
   const lede = (await page.textContent("[data-lede]")) ?? "";
-  check(/Pick a sculpture to remix/.test(lede), "the first line says what to do", lede);
+  check(lede.trim().split(/\s+/).length <= 6 && lede.trim().length > 0, "the first line invites, in a few words", lede);
   const box = await page.locator("[data-lede]").boundingBox();
   check(!!box && box.y + box.height < 200, "and sits at the top of the first screen", `${Math.round(box?.y ?? -1)}px`);
   const plinths = await page.locator("[data-go]").count();
@@ -173,7 +173,7 @@ async function realtime(browser: Browser): Promise<void> {
   await a.screenshot({ path: ".shots/lease-mine.png" });
 
   // A's presence is in B's here-now strip
-  const here = await b.locator("[data-here] li").allTextContents();
+  const here = await b.$$eval("[data-here] [aria-label]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
   check(here.some((t) => t.includes(aName)), "B's here-now strip lists A", here.join(" | "));
 
   // A leaves: B sees the part free again at once
@@ -245,12 +245,13 @@ async function publishing(browser: Browser): Promise<void> {
   check(versions >= 2, "its history lists every version", String(versions));
   // restore the oldest as a new version
   const n0 = versions;
-  const restore = page.locator('[data-history] button:has-text("Restore as version")').last();
+  await page.locator("[data-history] .version-chip").last().click();
+  const restore = page.locator('[data-history] button[aria-label^="Restore as version"]');
   await restore.click();
   await page.waitForFunction((n) => document.querySelectorAll("[data-history] .version").length === n + 1, n0, { timeout: 3000 }).catch(() => null);
   check((await page.locator("[data-history] .version").count()) === n0 + 1, "restore adds a version rather than changing one");
-  const top = (await page.locator("[data-history] .version").first().textContent()) ?? "";
-  check(/restored from version 1/.test(top), "and says where it came from", top.replace(/\s+/g, " ").slice(0, 90));
+  const top = (await page.locator("[data-history] .version-chip").first().getAttribute("aria-label")) ?? "";
+  check(/restored from version 1/.test(top), "and says where it came from", top.slice(0, 90));
   await page.screenshot({ path: ".shots/history.png" });
 
   // remix onto a full bench is only "Replace the workbench", confirmed
@@ -398,17 +399,10 @@ async function viewports(browser: Browser): Promise<void> {
       // the slider and the sculpture it changes: where they land
       const slider = await page.locator("#ribbon-turns").boundingBox();
       check(!!slider && slider.width >= 150, "phone: sliders are wide enough to drag", `${Math.round(slider?.width ?? 0)}px`);
-      // every plinth's title is read in full: none clipped, none past two lines
-      const clipped = await page.$$eval(".plinth-sub", (els) =>
-        els
-          .filter((e) => {
-            const lh = parseFloat(getComputedStyle(e).lineHeight) || 20;
-            return e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1 || e.clientHeight > lh * 2 + 2;
-          })
-          .map((e) => e.textContent),
-      );
-      const titles = await page.locator(".plinth-sub").count();
-      check(titles > 0 && clipped.length === 0, "phone: every plinth title is shown in full", clipped.join(", "));
+      // the row shows colours and numbers; each button names its exhibit
+      // in full for screen readers and on hover (ADR 13)
+      const named = await page.$$eval("[data-go]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+      check(named.length === 7 && named.every((n) => /^(Workbench|Plinth \d): .+/.test(n)), "phone: every plinth button names its exhibit", named.join(" | "));
       const small = await page.$$eval("button:not([hidden])", (els) => els.filter((e) => (e as HTMLElement).offsetParent && e.getBoundingClientRect().height < 32).map((e) => e.textContent?.trim()));
       check(small.length === 0, "phone: every visible button is a comfortable tap", small.join(", "));
     } else {
@@ -503,6 +497,37 @@ async function contrast(browser: Browser): Promise<void> {
   }
 }
 
+// The word budget (ADR 13): visible words on the first screen, counting
+// names, titles and numbers, on the bench view and on a plinth.
+async function words(browser: Browser): Promise<void> {
+  console.log("\n— words on the first screen (ADR 13) —");
+  for (const [name, opts, budget] of [["desktop", DESKTOP, 40], ["phone", PHONE, 30]] as const) {
+    const page = await visitor(browser, opts);
+    for (const sel of ["bench", "slot:1"]) {
+      await page.click(`[data-go="${sel}"]`);
+      await page.waitForTimeout(800);
+      const seen = await page.evaluate(() => {
+        const out: string[] = [];
+        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          const e = n.parentElement!;
+          const t = n.textContent!.trim();
+          // checkVisibility also sees a closed <details>, whose content keeps
+          // an offsetParent while it isn't rendered
+          if (!t || !e.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true }) || e.closest(".sr-only")) continue;
+          const r = e.getBoundingClientRect();
+          if (r.width < 2 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+          out.push(t);
+        }
+        return out;
+      });
+      const count = seen.join(" ").split(/\s+/).filter(Boolean).length;
+      check(count > 0 && count <= budget, `${name}, ${sel}: at most ${budget} words`, `${count}: ${seen.join(" | ")}`);
+    }
+    await page.context().close();
+  }
+}
+
 async function names(browser: Browser): Promise<void> {
   console.log("\n— a name is text, never markup —");
   const page = await visitor(browser);
@@ -528,6 +553,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   keyboard,
   viewports,
   contrast,
+  words,
   names,
 };
 

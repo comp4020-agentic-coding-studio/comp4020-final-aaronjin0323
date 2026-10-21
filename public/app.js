@@ -5,7 +5,7 @@
 // WebGL or the CDN isn't there. Names and titles only ever reach the page as
 // textContent. The decisions (throttle, lease display, publish flow,
 // connection) live in ui-logic.js, where a test can hold them.
-import { PALETTE, RECIPES, VISITOR_COLOURS } from "./recipes.js";
+import { PALETTE, RECIPES, VISITOR_COLOURS, defaultParts } from "./recipes.js";
 import {
   INITIAL_CONN,
   LOCAL_HOLD,
@@ -54,6 +54,22 @@ const colourOf = (v) => VISITOR_COLOURS[v.colour] ?? VISITOR_COLOURS[0];
 /** A visitor as a coloured chip: a dot and their name. */
 function chip(v, extra = "") {
   return el("span", { class: "chip", style: { "--who": colourOf(v) }, title: `#${v.tag}` }, el("span", { class: "dot", "aria-hidden": "true" }), el("span", { class: "chip-name" }, v.name), extra ? el("span", { class: "chip-extra" }, extra) : null);
+}
+
+/** A visitor as a coloured dot only: the name is its accessible name and
+ * tooltip (ADR 13). `ring` marks you. */
+function dot(v, { you = false, note = "" } = {}) {
+  const label = `${v.name}${you ? " (you)" : ""}${note ? `, ${note}` : ""}`;
+  return el("span", { class: `who${you ? " is-you" : ""}`, style: { "--who": colourOf(v) }, title: label, role: "img", "aria-label": label });
+}
+
+/** A sculpture's own colours (each part's colour), as a small conic swatch. */
+function swatchOf(recipe, parts) {
+  const r = RECIPES[recipe];
+  if (!r || !parts) return el("span", { class: "thumb is-empty", "aria-hidden": "true" });
+  const cols = Object.keys(r.parts).map((p) => PALETTE[parts[p]?.colour ?? 0]?.hex ?? PALETTE[0].hex);
+  const stops = cols.map((c, i) => `${c} ${Math.round((i / cols.length) * 360)}deg ${Math.round(((i + 1) / cols.length) * 360)}deg`).join(", ");
+  return el("span", { class: "thumb", style: { "--thumb": `conic-gradient(${stops})` }, "aria-hidden": "true" });
 }
 
 function when(iso) {
@@ -213,7 +229,8 @@ function renderPeople() {
   here.replaceChildren(
     ...state.present.map((p) => {
       const editing = p.editing.map((part) => partName(part)).filter(Boolean);
-      return el("li", {}, chip(p, p.tag === state.you.tag ? "(you)" : editing.length ? `· ${editing.join(", ")}` : ""));
+      const you = p.tag === state.you.tag;
+      return el("li", { class: editing.length ? "is-editing" : "" }, dot(p, { you, note: editing.length ? `shaping the ${editing.join(", ")}` : "" }));
     }),
   );
 }
@@ -225,10 +242,10 @@ function partName(part) {
 
 function renderNav() {
   const list = $("[data-plinths]");
-  const bench = state.draft.recipe ? RECIPES[state.draft.recipe].name : "Empty";
+  const bench = state.draft.recipe ? RECIPES[state.draft.recipe].name : "empty";
   const items = [
-    { key: "bench", label: "Workbench", sub: bench, pressed: selected.kind === "bench" },
-    ...state.slots.map((s) => ({ key: `slot:${s.slot}`, label: `Plinth ${s.slot}`, sub: s.exhibit ? s.exhibit.latest.title : "Empty", empty: !s.exhibit, pressed: selected.kind === "slot" && selected.slot === s.slot })),
+    { key: "bench", label: "★", name: `Workbench: ${bench}`, recipe: state.draft.recipe, parts: state.draft.parts, pressed: selected.kind === "bench" },
+    ...state.slots.map((s) => ({ key: `slot:${s.slot}`, label: String(s.slot), name: `Plinth ${s.slot}: ${s.exhibit ? s.exhibit.latest.title : "empty"}`, recipe: s.exhibit?.latest.recipe ?? null, parts: s.exhibit?.latest.parts ?? null, empty: !s.exhibit, pressed: selected.kind === "slot" && selected.slot === s.slot })),
   ];
   // Rebuild only when the labels change, so focus stays on the button.
   const sig = JSON.stringify(items);
@@ -242,9 +259,9 @@ function renderNav() {
         {},
         el(
           "button",
-          { type: "button", class: `plinth-btn${it.key === "bench" ? " is-bench" : ""}${it.empty ? " is-empty" : ""}`, "aria-pressed": String(it.pressed), dataset: { go: it.key } },
-          el("span", { class: "plinth-label" }, it.label),
-          el("span", { class: "plinth-sub" }, it.sub),
+          { type: "button", class: `plinth-btn${it.key === "bench" ? " is-bench" : ""}${it.empty ? " is-empty" : ""}`, "aria-pressed": String(it.pressed), "aria-label": it.name, title: it.name, dataset: { go: it.key } },
+          swatchOf(it.recipe, it.parts),
+          el("span", { class: "plinth-label", "aria-hidden": "true" }, it.label),
         ),
       ),
     ),
@@ -277,10 +294,11 @@ function renderBench() {
   view.hidden = selected.kind !== "bench";
   const d = state.draft;
   const empty = d.recipe === null;
-  $("[data-lede]").textContent = empty ? "Pick a sculpture to remix, or start one on the bench." : "Pick a sculpture to remix, or shape the one on the bench.";
   $("[data-bench-empty]").hidden = !empty;
   $("[data-bench-full]").hidden = empty;
   if (empty) {
+    $("[data-bench-title]").textContent = "Workbench";
+    $("[data-bench-credits]").replaceChildren();
     draftKey = null;
     local.clear();
     renderStarters();
@@ -288,9 +306,10 @@ function renderBench() {
     return;
   }
   const recipe = RECIPES[d.recipe];
+  $("[data-bench-title]").textContent = recipe.name;
   $("[data-bench-recipe]").textContent = recipe.name;
   const based = $("[data-bench-based]");
-  based.textContent = d.basedOn ? ` · remixed from "${d.basedOn.title}", version ${d.basedOn.n}` : " · started fresh";
+  based.textContent = d.basedOn ? `, remixed from "${d.basedOn.title}", version ${d.basedOn.n}` : "";
   const key = `${d.id}:${d.recipe}`;
   if (draftKey !== key) {
     draftKey = key;
@@ -298,8 +317,7 @@ function renderBench() {
     buildParts(d.recipe);
   }
   updateParts();
-  const credits = $("[data-bench-credits]");
-  credits.replaceChildren(...(d.contributors.length ? d.contributors.map((c) => el("li", {}, chip(c, `· ${plural(c.edits, "edit")}`))) : [el("li", { class: "hint" }, "Nobody yet. Move a slider and you're the first.")]));
+  $("[data-bench-credits]").replaceChildren(...d.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "edit") }))));
   if (!$("[data-publish]").hidden) renderTargets();
 }
 
@@ -308,7 +326,7 @@ function renderStarters() {
   if (list.childElementCount) return;
   list.replaceChildren(
     ...Object.entries(RECIPES).map(([id, r]) =>
-      el("li", {}, el("button", { type: "button", class: "starter", "data-edit": true, onclick: () => act("/draft/start", { recipe: id }) }, el("span", { class: "starter-name" }, `Start ${/^[AEIOU]/.test(r.name) ? "an" : "a"} ${r.name}`), el("span", { class: "starter-blurb" }, r.blurb))),
+      el("li", {}, el("button", { type: "button", class: "starter", "data-edit": true, title: r.blurb, "aria-label": `Start ${/^[AEIOU]/.test(r.name) ? "an" : "a"} ${r.name}: ${r.blurb}`, onclick: () => act("/draft/start", { recipe: id }) }, swatchOf(id, defaultParts(id)), el("span", { class: "starter-name", "aria-hidden": "true" }, r.name))),
     ),
   );
 }
@@ -337,13 +355,13 @@ function buildParts(recipeId) {
           { class: "part-head" },
           el("button", { type: "button", class: "part-toggle", "aria-expanded": String(openParts.has(partId)), "aria-controls": bodyId, dataset: { toggle: partId } }, el("span", { class: "part-name" }, part.name), el("span", { class: "chev", "aria-hidden": "true" })),
           el("span", { class: "lease", dataset: { leaseText: "" } }),
+          el("span", { class: "author", dataset: { author: "" } }),
         ),
         el(
           "div",
           { class: "part-body", id: bodyId, hidden: !openParts.has(partId) },
-          el("p", { class: "author", dataset: { author: "" } }),
           ...own.map(([k, p]) => control(partId, k, p)),
-          el("p", { class: "placement-h" }, "Placement"),
+          el("hr", { class: "placement-h", "aria-hidden": "true" }),
           ...place.map(([k, p]) => control(partId, k, p)),
         ),
       );
@@ -395,18 +413,19 @@ function updateParts() {
     const label = section.querySelector("[data-lease-text]");
     label.replaceChildren();
     section.style.removeProperty("--holder");
+    // a held part shows only its holder's dot and name; free and yours say
+    // nothing on screen (the ring in your colour is the sign)
     if (lease.kind === "mine") {
       section.style.setProperty("--holder", colourOf(state.you));
-      label.append(el("span", { class: "dot", "aria-hidden": "true" }), "You're shaping this");
+      label.append(el("span", { class: "sr-only" }, "You're shaping this"));
     } else if (lease.kind === "held") {
       section.style.setProperty("--holder", colourOf(lease.holder));
-      label.append(chip(lease.holder), " is shaping this");
+      label.append(chip(lease.holder), el("span", { class: "sr-only" }, " is shaping this"));
     } else {
-      label.append("Free");
+      label.append(el("span", { class: "sr-only" }, "Free"));
     }
     const author = d.partAuthors[partId];
-    const authorLine = section.querySelector("[data-author]");
-    authorLine.replaceChildren(...(author ? ["Last shaped by ", chip(author)] : ["Not shaped yet: still the recipe's starting shape."]));
+    section.querySelector("[data-author]").replaceChildren(...(author && lease.kind !== "held" ? [dot(author, { note: "shaped it last" })] : []));
     const values = shownValues(d.parts[partId], local.get(partId), now);
     const blocked = lease.kind === "held" || sending.get(partId)?.refused;
     for (const input of $$("input", section)) {
@@ -585,7 +604,7 @@ window.addEventListener("pagehide", () => {
 
 $("[data-clear]").addEventListener("click", async () => {
   const name = RECIPES[state.draft.recipe].name;
-  if (await ask(`Clear the ${name} off the bench? It's kept in Archived drafts, and anyone can bring it back.`, "Clear the bench")) act("/draft/clear", {}, "Cleared. It's in Archived drafts.");
+  if (await ask(`Clear the ${name} off the bench? It's kept in Archived drafts, and anyone can bring it back.`, "Clear the bench")) act("/draft/clear", {}, "Archived");
 });
 
 // ---- publishing
@@ -681,7 +700,7 @@ $("[data-publish]").addEventListener("submit", async (e) => {
   }
   $("#publish-title").value = "";
   closePublish();
-  toast(plan.kind === "add-version" ? "Published as a new version." : "Published. It's on display.", "ok");
+  toast(plan.kind === "add-version" ? "New version on show" : "On display", "ok");
   if ("slot" in target) select({ kind: "slot", slot: target.slot });
   else select({ kind: "exhibit", id: target.exhibitId });
 });
@@ -708,20 +727,21 @@ function renderExhibit() {
   $("[data-ex-empty]").hidden = !!e;
   $("[data-ex-full]").hidden = !e;
   if (!e) {
-    $("[data-ex-where]").textContent = `Plinth ${selected.slot}`;
-    $("[data-ex-title]").textContent = "An empty plinth";
-    $("[data-ex-empty-text]").textContent = benchEmpty ? "Nothing here yet. Start something on the workbench, then exhibit it here." : "Nothing here yet. Exhibit what's on the workbench here, and it's credited to everyone who shaped it.";
+    $("[data-ex-where]").textContent = String(selected.slot);
+    $("[data-ex-title]").textContent = "Empty";
+    $("[data-ex-credits]").replaceChildren();
+    $("[data-ex-empty-text]").textContent = benchEmpty ? "Nothing here yet. Start something on the workbench, then exhibit it here." : "Nothing here yet. Exhibit what's on the workbench here.";
     const btn = $("[data-ex-publish-here]");
     btn.hidden = benchEmpty;
     btn.onclick = () => openPublish(`slot:${selected.slot}`);
     return;
   }
   const v = e.latest;
-  $("[data-ex-where]").textContent = e.slot ? `Plinth ${e.slot}` : "In the storeroom";
+  $("[data-ex-where]").textContent = e.slot ? String(e.slot) : "";
   $("[data-ex-title]").textContent = v.title;
   const meta = $("[data-ex-meta]");
   meta.replaceChildren(`${RECIPES[v.recipe]?.name ?? v.recipe} · version ${v.n} of ${e.versionCount} · `, v.publishedBy ? el("span", {}, "published by ", chip(v.publishedBy)) : "one of the museum's starters", v.publishedAt ? ` · ${when(v.publishedAt)}` : "");
-  $("[data-ex-credits]").replaceChildren(...v.contributors.map((c) => el("li", {}, chip(c, `· ${plural(c.edits, "edit")}`))));
+  $("[data-ex-credits]").replaceChildren(...v.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "edit") }))));
   const action = benchAction(state.draft);
   const remix = $("[data-ex-remix]");
   const replace = $("[data-ex-replace]");
@@ -733,7 +753,7 @@ function renderExhibit() {
   store.hidden = e.slot === null;
   store.onclick = async () => {
     if (await ask(`Move "${v.title}" off plinth ${e.slot} into the storeroom? All ${plural(e.versionCount, "version")} go with it, and it can be put back later.`, "Move to the storeroom")) {
-      const r = await act(`/exhibits/${e.id}/store`, {}, "Moved to the storeroom.");
+      const r = await act(`/exhibits/${e.id}/store`, {}, "In the storeroom");
       if (r?.ok) select({ kind: "exhibit", id: e.id });
     }
   };
@@ -750,7 +770,7 @@ async function remixVersion(v) {
     const who = state.draft.contributors.length ? `, shaped by ${state.draft.contributors.map((c) => c.name).join(", ")},` : "";
     if (!(await ask(`Replace the workbench? The ${now}${who} moves to Archived drafts, and "${v.title}" version ${v.n} takes its place.`, "Replace the workbench"))) return;
   }
-  const r = await act("/draft/remix", { versionId: v.id, replace: action.replace }, `"${v.title}" is on the bench. Shape it!`);
+  const r = await act("/draft/remix", { versionId: v.id, replace: action.replace }, "On the bench");
   if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
 }
 
@@ -767,7 +787,7 @@ function renderDisplay(e) {
     const slot = Number(sel.value);
     const there = state.slots.find((s) => s.slot === slot)?.exhibit;
     if (there && !(await ask(`"${there.latest.title}" (${plural(there.versionCount, "version")}) moves to the storeroom, and "${e.latest.title}" goes on plinth ${slot}. Go ahead?`, "Swap them"))) return;
-    const r = await act(`/exhibits/${e.id}/display`, { slot, replace: !!there }, `On display on plinth ${slot}.`);
+    const r = await act(`/exhibits/${e.id}/display`, { slot, replace: !!there }, `On plinth ${slot}`);
     if (r?.ok) select({ kind: "slot", slot });
   };
 }
@@ -776,7 +796,7 @@ async function renderHistory(e) {
   const list = $("[data-history]");
   const cached = historyCache.get(e.id);
   if (cached && cached.count === e.versionCount) return drawHistory(list, e, cached.data);
-  if (!cached) list.replaceChildren(el("li", { class: "hint" }, "Loading its history…"));
+  if (!cached) list.replaceChildren(el("li", { class: "hint", "aria-label": "Loading its history" }, "…"));
   try {
     const r = await fetch(`/exhibits/${e.id}`);
     if (!r.ok) throw new Error(String(r.status));
@@ -785,12 +805,17 @@ async function renderHistory(e) {
     const still = selectedExhibit();
     if (still && still.id === e.id) drawHistory(list, still, data);
   } catch {
-    list.replaceChildren(el("li", { class: "hint" }, "Couldn't load its history. It'll try again on the next change."));
+    list.replaceChildren(el("li", { class: "hint" }, "History unavailable"));
   }
 }
 
+// History is a strip of version chips in each publisher's colour (ADR 13);
+// the open one shows its credits and its actions as icons. Every word that
+// left the screen is still in an accessible name.
+let openVersion = null;
 function drawHistory(list, e, data) {
   const latestN = Math.max(...data.versions.map((v) => v.n));
+  if (!data.versions.some((v) => v.id === openVersion)) openVersion = data.versions[0]?.id ?? null;
   list.replaceChildren(
     ...data.versions.map((v) => {
       const notes = [];
@@ -800,23 +825,42 @@ function drawHistory(list, e, data) {
       }
       if (v.basedOn && v.basedOn.exhibitId !== e.id) notes.push(`remixed from "${v.basedOn.title}" v${v.basedOn.n}`);
       else if (v.basedOn) notes.push(`remixed from v${v.basedOn.n}`);
+      const by = v.publishedBy ? `published by ${v.publishedBy.name}` : "the museum's starter";
+      const about = `Version ${v.n}, "${v.title}", ${by}, ${when(v.publishedAt)}${notes.length ? `, ${notes.join(", ")}` : ""}${v.n === latestN ? ", on show" : ""}`;
+      const open = v.id === openVersion;
+      const restore = `Restore as version ${latestN + 1}`;
       return el(
         "li",
-        { class: `version${v.n === latestN ? " is-latest" : ""}` },
-        el("div", { class: "version-head" }, el("span", { class: "version-n" }, `v${v.n}`), el("span", { class: "version-title" }, v.title), v.n === latestN ? el("span", { class: "badge" }, "on show") : null),
-        el("p", { class: "version-meta" }, v.publishedBy ? el("span", {}, chip(v.publishedBy), " published") : "The museum's starter", ` · ${when(v.publishedAt)}`, notes.length ? ` · ${notes.join(", ")}` : ""),
-        v.contributors.length ? el("ul", { class: "chips small" }, ...v.contributors.map((c) => el("li", {}, chip(c, `· ${c.edits}`)))) : null,
-        el(
-          "div",
-          { class: "row" },
-          v.n !== latestN
-            ? el("button", { type: "button", class: "small", "data-edit": true, onclick: () => act(`/exhibits/${e.id}/restore`, { versionId: v.id }, `Version ${v.n} restored as version ${latestN + 1}.`) }, `Restore as version ${latestN + 1}`)
-            : null,
-          el("button", { type: "button", class: "small quiet", "data-edit": true, onclick: () => remixVersion(v) }, state.draft.recipe ? "Replace the workbench with this…" : "Remix this version"),
-        ),
+        { class: `version${v.n === latestN ? " is-latest" : ""}${open ? " is-open" : ""}`, style: { "--who": v.publishedBy ? colourOf(v.publishedBy) : "var(--teal-ink)" } },
+        el("button", { type: "button", class: "version-chip", "aria-expanded": String(open), "aria-label": about, title: about, onclick: () => { openVersion = v.id; drawHistory(list, e, data); } }, swatchOf(v.recipe, v.parts), el("span", { class: "version-n" }, `v${v.n}`)),
+        // the latest version's remix is the button above; its box shows only
+        // when it has credits or it's an older version to restore
+        open && (v.n !== latestN || v.contributors.length)
+          ? el(
+              "div",
+              { class: "version-detail" },
+              el("p", { class: "sr-only" }, about),
+              v.contributors.length ? el("ul", { class: "dots" }, ...v.contributors.map((c) => el("li", {}, dot(c, { note: plural(c.edits, "edit") })))) : null,
+              v.n !== latestN
+                ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": restore, title: restore, onclick: () => act(`/exhibits/${e.id}/restore`, { versionId: v.id }, `Restored as v${latestN + 1}`) }, el("svg", { "aria-hidden": "true" }), )
+                : null,
+              v.n !== latestN
+                ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": state.draft.recipe ? "Replace the workbench with this version" : "Remix this version", title: state.draft.recipe ? "Replace the workbench with this version" : "Remix this version", onclick: () => remixVersion(v) }, el("svg", { "aria-hidden": "true" }))
+                : null,
+            )
+          : null,
       );
     }),
   );
+  // <use> inside an SVG made by createElement needs the SVG namespace
+  for (const b of list.querySelectorAll(".version-detail button.icon")) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", /^Restore/.test(b.getAttribute("aria-label")) ? "#i-restore" : "#i-remix");
+    svg.append(use);
+    b.replaceChildren(svg);
+  }
   applyEnabled();
 }
 
@@ -831,12 +875,15 @@ function renderDrawers() {
           el(
             "li",
             { class: "shelf-item" },
-            el("span", { class: "shelf-title" }, e.latest.title),
-            el("span", { class: "shelf-meta" }, `${RECIPES[e.latest.recipe]?.name ?? ""} · ${plural(e.versionCount, "version")}`),
-            el("button", { type: "button", class: "small", onclick: () => select({ kind: "exhibit", id: e.id }, { focusHeading: true }) }, "Open"),
+            el(
+              "button",
+              { type: "button", class: "shelf-open", "aria-label": `Open "${e.latest.title}", ${plural(e.versionCount, "version")}`, title: e.latest.title, onclick: () => select({ kind: "exhibit", id: e.id }, { focusHeading: true }) },
+              swatchOf(e.latest.recipe, e.latest.parts),
+              el("span", { class: "shelf-title" }, e.latest.title),
+            ),
           ),
         )
-      : [el("li", { class: "hint" }, "Empty. Exhibits land here when they're replaced or taken off display.")]),
+      : [el("li", { class: "hint" }, "Empty")]),
   );
   const archive = $("[data-archive]");
   $("[data-archive-count]").textContent = String(state.archivedTotal);
@@ -855,15 +902,19 @@ function renderDrawers() {
           el(
             "li",
             { class: "shelf-item" },
-            el("span", { class: "shelf-title" }, RECIPES[a.recipe]?.name ?? a.recipe),
-            el("span", { class: "shelf-meta" }, `${a.reason === "replaced" ? "replaced" : "cleared"} ${when(a.archivedAt)}`, a.archivedBy ? el("span", {}, " by ", chip(a.archivedBy)) : ""),
-            a.contributors.length ? el("ul", { class: "chips small" }, ...a.contributors.map((c) => el("li", {}, chip(c)))) : null,
-            el("button", { type: "button", class: "small", "data-edit": true, onclick: () => restoreArchived(a) }, state.draft.recipe ? "Replace the workbench with this…" : "Back to the bench"),
+            el("span", { class: "sr-only" }, `${RECIPES[a.recipe]?.name ?? a.recipe}, ${a.reason === "replaced" ? "replaced" : "cleared"} ${when(a.archivedAt)}${a.archivedBy ? ` by ${a.archivedBy.name}` : ""}`),
+            el("span", { class: "shelf-meta", "aria-hidden": "true", title: `${a.reason} ${when(a.archivedAt)}` }, `${a.reason} ${when(a.archivedAt)}`),
+            a.contributors.length ? el("ul", { class: "dots" }, ...a.contributors.map((c) => el("li", {}, dot(c)))) : null,
+            el(
+              "button",
+              { type: "button", class: "icon", "data-edit": true, "aria-label": state.draft.recipe ? "Replace the workbench with this draft" : "Bring this draft back to the bench", title: state.draft.recipe ? "Replace the workbench with this draft" : "Back to the bench", onclick: () => restoreArchived(a) },
+              swatchOf(a.recipe, defaultParts(a.recipe)),
+            ),
           ),
         )
-      : [el("li", { class: "hint" }, "Nothing archived yet.")]),
+      : [el("li", { class: "hint" }, "Empty")]),
     ...(olderMore && all.length
-      ? [el("li", { class: "shelf-more" }, el("button", { type: "button", class: "small", "data-archive-older": true, onclick: showOlder }, `Show older (${state.archivedTotal - all.length} more)`))]
+      ? [el("li", { class: "shelf-more" }, el("button", { type: "button", class: "small", "data-archive-older": true, "aria-label": `Show ${state.archivedTotal - all.length} older drafts`, onclick: showOlder }, `+${state.archivedTotal - all.length}`))]
       : []),
   );
   applyEnabled();
@@ -877,7 +928,7 @@ let olderFor = "";
 async function showOlder() {
   const last = [...state.archivedDrafts, ...older].at(-1);
   const res = await fetch(`/archive?before=${last.id}`).catch(() => null);
-  if (!res?.ok) return toast("Couldn't load older drafts. Try again in a moment.");
+  if (!res?.ok) return toast("Couldn't load those");
   const page = await res.json();
   older = [...older, ...page.drafts];
   olderMore = page.more;
@@ -888,7 +939,7 @@ async function showOlder() {
 async function restoreArchived(a) {
   const action = benchAction(state.draft);
   if (action.replace && !(await ask(`Replace the workbench? The ${RECIPES[state.draft.recipe].name} on it now moves to Archived drafts, and this ${RECIPES[a.recipe]?.name ?? "draft"} comes back.`, "Replace the workbench"))) return;
-  const r = await act("/draft/restore-archived", { archivedId: a.id, replace: action.replace }, "Back on the bench.");
+  const r = await act("/draft/restore-archived", { archivedId: a.id, replace: action.replace }, "Back on the bench");
   if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
 }
 

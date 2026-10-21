@@ -106,8 +106,8 @@ export const canEdit = (conn) => conn.status === "live" && conn.hasState;
 /** The line the page shows for a connection state, or "" when live. */
 export function connectionMessage(conn) {
   if (canEdit(conn)) return "";
-  if (conn.status === "reconnecting") return "Reconnecting... you can look, but not edit until we're back.";
-  return "Connecting to the museum...";
+  if (conn.status === "reconnecting") return "Reconnecting… look, don't touch";
+  return "Connecting…";
 }
 
 /**
