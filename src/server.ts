@@ -192,6 +192,7 @@ function stateFor(pid: string, snap: Snapshot, now: Date): StateEvent {
     slots: snap.slots,
     storeroom: snap.storeroom,
     archivedDrafts: snap.archivedDrafts,
+    archivedTotal: snap.archivedTotal,
   };
 }
 
@@ -549,6 +550,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (Object.hasOwn(POSTS, path)) return POSTS[path](req, res);
     if (exhibit?.[2]) return EXHIBIT_POSTS[exhibit[2]](req, res, [exhibit[1]]);
     return sendJson(res, 404, { error: "not-found", message: "No such action" });
+  }
+  if (path === "/archive" && reading) {
+    const before = url.searchParams.get("before");
+    if (before !== null && !/^[1-9]\d{0,8}$/.test(before)) return sendJson(res, 400, { error: "bad-request", message: "before must be an archived draft's id" });
+    return sendJson(res, 200, store.archive(before === null ? null : Number(before)));
   }
   if (exhibit && !exhibit[2] && reading) {
     const history = store.history(Number(exhibit[1]));

@@ -89,8 +89,13 @@ export type StateEvent = {
   /** always six entries, slot 1..6 in order */
   slots: { slot: number; exhibit: ExhibitView | null }[];
   storeroom: ExhibitView[];
+  /** the newest few; GET /archive pages back through the rest */
   archivedDrafts: ArchivedDraftView[];
+  archivedTotal: number;
 };
+
+/** GET /archive?before=<id> */
+export type ArchivePage = { drafts: ArchivedDraftView[]; more: boolean };
 
 /** GET /exhibits/:id */
 export type ExhibitHistory = { exhibit: ExhibitView; versions: VersionView[] };

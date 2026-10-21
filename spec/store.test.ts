@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
 import { checkSculpture, defaultParts } from "../public/recipes.js";
-import { LEASE_MS, migrate, MIGRATIONS, openStore, type Store, tagOf } from "../src/db.ts";
+import { ARCHIVE_LIST, LEASE_MS, migrate, MIGRATIONS, openStore, type Store, tagOf } from "../src/db.ts";
 
 // The store's rules over ":memory:" with an injected clock (CLAUDE.md, "The
 // checks"): leases, versions, archiving, slots and migrations. The HTTP
@@ -214,6 +214,23 @@ describe("the draft", () => {
     expect(store.restoreArchived(BO, archivedId, false, at(1000))).toMatchObject({ ok: false, error: "draft-not-empty" });
     expect(store.restoreArchived(BO, 9999, true, at(1000))).toMatchObject({ ok: false, error: "not-found" });
     expect(store.restoreArchived(BO, d.id, true, at(1000))).toMatchObject({ ok: false, error: "not-found" });
+  });
+
+  it("keeps every archived draft reachable past the state's newest few", () => {
+    const ids: number[] = [];
+    for (let i = 0; i < ARCHIVE_LIST + 5; i++) {
+      ok(store.start(ANA, "loop", at(i * 1000)));
+      ids.push(ok(store.clear(ANA, at(i * 1000))).archivedId);
+    }
+    const s = store.snapshot(at(60_000));
+    expect(s.archivedDrafts.length).toBe(ARCHIVE_LIST);
+    expect(s.archivedTotal).toBe(ARCHIVE_LIST + 5);
+    // paging back from the oldest one the state shows reaches the rest, in order
+    const older = store.archive(s.archivedDrafts.at(-1)!.id);
+    expect(older.drafts.map((d) => d.id)).toEqual(ids.slice(0, 5).reverse());
+    expect(older.more).toBe(false);
+    expect(store.archive(null).drafts.map((d) => d.id)).toEqual(s.archivedDrafts.map((d) => d.id));
+    expect(store.archive(null).more).toBe(true);
   });
 
   it("refuses clear while someone else holds a lease, and on an empty bench", () => {

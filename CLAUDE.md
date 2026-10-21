@@ -89,6 +89,10 @@ Settled; change them here first, then in the code.
   labelled action ("Replace the workbench"). Replacing **archives the
   current draft first**, in the same transaction. **Clearing** the workbench
   archives too. An archived draft can be brought back as a remix source.
+  **Every archived draft stays reachable.** The `state` event carries only the
+  newest 12 (so it stays small for a busy day) plus `archivedTotal`; the page
+  pages back through the rest with `GET /archive?before=<id>`. A cap that
+  hid older drafts would make "recoverable" untrue without anyone seeing it.
 - **Credit follows the work.** The draft records, per part, who last shaped
   it, and counts each contributor's accepted edits. A remix records the
   version it came from.
@@ -168,6 +172,7 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
 | `GET /` | | the museum page, server-rendered with the current exhibits so it reads without JS | |
 | `GET /events` | | SSE `state` events | |
 | `GET /exhibits/:id` | | `ExhibitHistory`: every version, newest first | `404` |
+| `GET /archive?before=<id>` | | `{ drafts: ArchivedDraftView[], more: boolean }`: the next 12 archived drafts older than `id` (newest first; no `before` starts at the newest) | `400` |
 | `POST /me` | `{ name }` | rename yourself | `400` |
 | `POST /draft/start` | `{ recipe }` | start a draft from defaults | `409 draft-not-empty`, `400` |
 | `POST /draft/remix` | `{ versionId, replace? }` | copy a version into the draft; with `replace`, archive the old draft first | `409 draft-not-empty`, `404`, `400` |

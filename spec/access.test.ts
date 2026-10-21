@@ -142,3 +142,27 @@ describe("the state event", () => {
     expect(Date.parse(s.serverTime)).not.toBeNaN();
   });
 });
+
+describe("the archive", () => {
+  it("pages back through archived drafts, the state's newest few first", async () => {
+    const a = visitor();
+    const s = await stateOf(a);
+    expect(typeof s.archivedTotal).toBe("number");
+    const first = await get(a, "/archive");
+    expect(first.status).toBe(200);
+    expect(first.body.drafts.map((d: { id: number }) => d.id)).toEqual(s.archivedDrafts.map((d) => d.id));
+    expect(first.body.more).toBe(s.archivedTotal > s.archivedDrafts.length);
+    if (first.body.drafts.length > 0) {
+      const last = first.body.drafts.at(-1).id;
+      const next = await get(a, `/archive?before=${last}`);
+      expect(next.status).toBe(200);
+      expect(next.body.drafts.every((d: { id: number }) => d.id !== last)).toBe(true);
+    }
+  });
+
+  it("refuses a before that isn't an id", async () => {
+    for (const bad of ["x", "-1", "1.5", "", "constructor"]) {
+      expect((await get(visitor(), `/archive?before=${bad}`)).status, bad).toBe(400);
+    }
+  });
+});

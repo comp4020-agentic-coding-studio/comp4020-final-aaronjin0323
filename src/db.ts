@@ -181,6 +181,7 @@ export type Snapshot = {
   slots: { slot: number; exhibit: ExhibitView | null }[];
   storeroom: ExhibitView[];
   archivedDrafts: ArchivedDraftView[];
+  archivedTotal: number;
 };
 
 type Refusal<E extends string> = { ok: false; error: E; message: string };
@@ -198,6 +199,9 @@ export type Store = {
   view(pid: string): VisitorView;
 
   snapshot(now: Date): Snapshot;
+  /** The next ARCHIVE_LIST archived drafts older than `before` (an archived
+   * draft's id), newest first; null starts at the newest. */
+  archive(before: number | null): { drafts: ArchivedDraftView[]; more: boolean };
   /** Unexpired leases only: an expired lease is free on every read. */
   leases(now: Date): Lease[];
   history(exhibitId: number): ExhibitHistory | null;
@@ -304,6 +308,12 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
     archive: db.prepare("UPDATE drafts SET archived_at = ?, archived_by = ?, archive_reason = ? WHERE id = ? AND archived_at IS NULL"),
     setParts: db.prepare("UPDATE drafts SET parts = ?, part_authors = ?, revision = revision + 1 WHERE id = ?"),
     archived: db.prepare("SELECT * FROM drafts WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC LIMIT ?"),
+    // keyset paging in the same order: everything after the given row
+    archivedBefore: db.prepare(
+      `SELECT d.* FROM drafts d, drafts b WHERE b.id = ? AND b.archived_at IS NOT NULL AND d.archived_at IS NOT NULL
+         AND (d.archived_at, d.id) < (b.archived_at, b.id) ORDER BY d.archived_at DESC, d.id DESC LIMIT ?`,
+    ),
+    archivedCount: db.prepare("SELECT COUNT(*) AS n FROM drafts WHERE archived_at IS NOT NULL"),
     draftCredits: db.prepare("SELECT pid, name, colour, edits FROM draft_credits WHERE draft_id = ? ORDER BY first_at, rowid"),
     credit: db.prepare(
       `INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) VALUES (?, ?, ?, ?, 1, ?)
@@ -472,6 +482,15 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
   const leasesAt = (now: Date): Lease[] =>
     (q.leases.all(now.toISOString()) as { part: string; pid: string; expires_at: string }[]).map(leaseView);
 
+  const archivedView = (d: DraftRow): ArchivedDraftView => ({
+    id: d.id,
+    recipe: d.recipe,
+    archivedAt: d.archived_at!,
+    reason: d.archive_reason!,
+    archivedBy: d.archived_by === null ? null : viewOf(d.archived_by),
+    contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
+  });
+
   return {
     ensureVisitor(pid, name, colour, now) {
       const existing = visitorOf(pid);
@@ -503,15 +522,15 @@ export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: numb
           return { slot: i + 1, exhibit: e ? exhibitView(e) : null };
         }),
         storeroom: (q.storeroom.all() as ExhibitRow[]).map(exhibitView),
-        archivedDrafts: (q.archived.all(ARCHIVE_LIST) as DraftRow[]).map((d) => ({
-          id: d.id,
-          recipe: d.recipe,
-          archivedAt: d.archived_at!,
-          reason: d.archive_reason!,
-          archivedBy: d.archived_by === null ? null : viewOf(d.archived_by),
-          contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
-        })),
+        archivedDrafts: (q.archived.all(ARCHIVE_LIST) as DraftRow[]).map(archivedView),
+        archivedTotal: (q.archivedCount.get() as { n: number }).n,
       };
+    },
+
+    archive(before) {
+      // one extra row says whether there's another page
+      const rows = (before === null ? q.archived.all(ARCHIVE_LIST + 1) : q.archivedBefore.all(before, ARCHIVE_LIST + 1)) as DraftRow[];
+      return { drafts: rows.slice(0, ARCHIVE_LIST).map(archivedView), more: rows.length > ARCHIVE_LIST };
     },
 
     history(exhibitId) {
