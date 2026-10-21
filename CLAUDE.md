@@ -136,6 +136,37 @@ Settled; change them here first, then in the code.
   clock), so two screens show the same sculpture at the same phase. No
   animation frame touches the server.
 
+### Show, don't tell (ADR 13)
+
+The first build spoke in paragraphs: 160 words on the first desktop screen.
+A visitor reads the room, not the page, so the sculpture and the controls
+carry the meaning and the words are labels. Read
+`docs/adr/0013-show-dont-tell.md`.
+
+- **A word budget, held by a check.** The first screen shows at most 40
+  visible words on desktop and 30 on the phone, on the bench view and on a
+  plinth (`scripts/browser-check.ts`, `words`). Names, titles and numbers
+  count. Explanations live in accessible names, `title` tooltips and
+  `/readme/`, not on the screen.
+- **The room is the menu.** Plinths and the bench are picked in the 3D room;
+  the plinth row is a strip of small coloured thumbnails (each sculpture's
+  main colour) with the title only as an accessible name and on hover/focus.
+- **Icons and colour over sentences.** Every action button is an icon with
+  an accessible name and a tooltip; only Exhibit, the one thing we want
+  people to reach for, keeps a word. Recipes are picked by a swatch of the
+  sculpture, not a blurb. Who you are is your coloured dot; who's here is a
+  row of dots. A part someone else is shaping wears their colour ring and
+  their name only.
+- **History is a strip of versions, not a list of sentences.** Each version
+  is a small chip (v1, v2...) in its publisher's colour; picking one shows
+  its credits and Restore/Remix as icons.
+- **The storeroom and archive are icon drawers**, closed by default, with a
+  count badge and no description.
+- **Feedback is motion, then a word.** An accepted change pulses the part
+  in the editor's colour; a toast is at most four words.
+- **Nothing is lost for screen readers or keyboards.** Every hidden word
+  still exists as an accessible name, and every action keeps a real button.
+
 ### Phone and keyboard
 
 - **Every action works from the keyboard and at 390x844.** Plinths and
