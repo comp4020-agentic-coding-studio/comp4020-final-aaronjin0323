@@ -150,8 +150,19 @@ describe("the archive", () => {
     expect(typeof s.archivedTotal).toBe("number");
     const first = await get(a, "/archive");
     expect(first.status).toBe(200);
-    expect(first.body.drafts.map((d: { id: number }) => d.id)).toEqual(s.archivedDrafts.map((d) => d.id));
-    expect(first.body.more).toBe(s.archivedTotal > s.archivedDrafts.length);
+    // Other spec files archive drafts in parallel, so newer drafts may land
+    // between the two reads. Nothing is ever removed, so the page is newest
+    // first, and once past the newcomers it is the state's list in order.
+    type D = { id: number; archivedAt: string };
+    const page: D[] = first.body.drafts;
+    const newestFirst = (x: D, y: D) => y.archivedAt.localeCompare(x.archivedAt) || y.id - x.id;
+    expect(page).toEqual([...page].sort(newestFirst));
+    const named = new Set(s.archivedDrafts.map((d) => d.id));
+    const start = page.findIndex((d) => named.has(d.id));
+    const after = start < 0 ? [] : page.slice(start).map((d) => d.id);
+    expect(after).toEqual(s.archivedDrafts.map((d) => d.id).slice(0, after.length));
+    expect(start >= 0 || s.archivedDrafts.length === 0 || page.length === 12).toBe(true);
+    if (s.archivedTotal > s.archivedDrafts.length) expect(first.body.more).toBe(true);
     if (first.body.drafts.length > 0) {
       const last = first.body.drafts.at(-1).id;
       const next = await get(a, `/archive?before=${last}`);
