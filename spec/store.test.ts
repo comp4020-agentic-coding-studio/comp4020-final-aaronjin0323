@@ -1,451 +1,348 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
-import { heights } from "../src/board.ts";
-import { isActive, type Landmark, N, openStore, TILES, type Store } from "../src/db.ts";
-import { LANDMARK_TIERS, LEASE_MS } from "../src/economy.ts";
+import { beforeEach, describe, expect, it } from "vitest";
+import { checkSculpture, defaultParts } from "../public/recipes.js";
+import { LEASE_MS, migrate, MIGRATIONS, openStore, type Store, tagOf } from "../src/db.ts";
 
-// The store on its own, with a clock the test controls: a lease needs a day
-// to end and the migration needs a crit-8 database, and neither can be
-// arranged over HTTP against a running app. The economy itself (income,
-// upgrades, moves, renewals, help, migration 4) is in economy.test.ts.
-const T0 = new Date("2026-10-01T10:00:00.000Z");
-const later = (ms: number): Date => new Date(T0.getTime() + ms);
-const HOUR = 60 * 60 * 1000;
+// The store's rules over ":memory:" with an injected clock (CLAUDE.md, "The
+// checks"): leases, versions, archiving, slots and migrations. The HTTP
+// tests hold the same rules through the routes.
 
-const ALICE = "alice-pid";
-const BOB = "bob-pid";
+const ANA = "00000000-0000-4000-8000-0000000000a1";
+const BO = "00000000-0000-4000-8000-0000000000b2";
+const T0 = new Date("2026-11-01T10:00:00.000Z");
+const at = (ms: number): Date => new Date(T0.getTime() + ms);
 
-const opened: Store[] = [];
-const memory = (): Store => {
-  const s = openStore(":memory:");
-  opened.push(s);
-  return s;
+let store: Store;
+beforeEach(() => {
+  store = openStore(":memory:");
+  store.ensureVisitor(ANA, "Coral Heron", 0, T0);
+  store.ensureVisitor(BO, "Teal Finch", 1, T0);
+});
+
+const ok = <T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> => {
+  expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
+  return r as Extract<T, { ok: true }>;
 };
-afterEach(() => {
-  for (const s of opened.splice(0)) s.close();
-});
 
-const holder = (s: Store, id: number): string | null => s.tiles()[id].claimerId;
-
-describe("migration from crit 8", () => {
-  it("upgrades a crit-8 database in place, keeping every claim", () => {
-    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
-    const path = join(dir, "app.db");
-    try {
-      // Exactly what crit 8 created: the table and index, no user_version.
-      const old = new DatabaseSync(path);
-      old.exec(`
-        CREATE TABLE cells (id INTEGER PRIMARY KEY, claimer_id TEXT, label TEXT, claimed_at TEXT);
-        CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id) WHERE claimer_id IS NOT NULL;
-      `);
-      const seed = old.prepare("INSERT INTO cells (id) VALUES (?)");
-      for (let id = 0; id < TILES; id++) seed.run(id);
-      old.prepare("UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ? WHERE id = ?").run(
-        ALICE,
-        "Alice",
-        T0.toISOString(),
-        42,
-      );
-      old.close();
-
-      const s = openStore(path);
-      opened.push(s);
-      const tiles = s.tiles();
-      expect(tiles).toHaveLength(TILES);
-      // kept, as a level-1 building on a fresh lease (migration 4)
-      expect(tiles[42]).toMatchObject({ claimerId: ALICE, label: "Alice", level: 1 });
-      expect(isActive(tiles[42], new Date())).toBe(true);
-      expect(tiles.filter((t) => t.claimerId !== null)).toHaveLength(1);
-      s.close();
-      opened.pop();
-
-      // Opening again runs nothing twice.
-      const again = openStore(path);
-      opened.push(again);
-      expect(again.tiles()[42].claimerId).toBe(ALICE);
-      const v = new DatabaseSync(path);
-      // every step since, too: crit 8 straight to the latest
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
-      v.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-// Replaced by ADR 5: the "dormancy" and "displacement" tests went with
-// dormant tiles. A lease ending on the clock is held in economy.test.ts
-// ("leases ending"), and here for claims:
-describe("a lease ending", () => {
-  it("keeps a plot for the whole lease, and frees it at the end for anyone", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    expect(s.claim(5, BOB, "Bob", later(LEASE_MS - 1))).toBe("taken");
-    expect(holder(s, 5)).toBe(ALICE);
-    expect(s.claim(5, BOB, "Bob", later(LEASE_MS))).toBe("claimed");
-    expect(holder(s, 5)).toBe(BOB);
-  });
-
-  it("leaves the old holder free to claim again, for nothing, with no cooldown", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    expect(s.claim(7, ALICE, "Alice", later(LEASE_MS + HOUR))).toBe("claimed");
-    expect(s.tiles().filter((t) => t.claimerId === ALICE).map((t) => t.id)).toEqual([7]);
-    expect(s.me(ALICE, later(LEASE_MS + HOUR)).coins).toBe(100);
-  });
-});
-
-describe("a lost claim changes nothing", () => {
-  it("keeps the loser's own tile when their move is refused", () => {
-    const s = memory();
-    s.claim(5, ALICE, "Alice", T0);
-    s.claim(9, BOB, "Bob", T0);
-    expect(s.claim(5, BOB, "Bob", later(HOUR))).toBe("taken");
-    expect(holder(s, 9)).toBe(BOB);
-  });
-});
-
-// docs/adr/0004, as ADR 5 counts it and ADR 6 tiers it: a building with all
-// 8 neighbours occupied earns gold, recorded once and kept (bronze at 3 and
-// silver at 5 are held below). A 3x3 block of nine people round an interior
-// centre.
-const cell = (r: number, c: number): number => r * N + c;
-const block = (r: number, c: number): number[] => {
-  const out: number[] = [];
-  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) out.push(cell(r + dr, c + dc));
-  return out;
-};
-const pidAt = (id: number): string => `p${id}`;
-const nameAt = (id: number): string => `N${id}`;
-// Claims each tile for its own person, then looks for landmarks, as the
-// server does after every change; returns the cells raised to gold along the
-// way (every tier: `tiersOf`).
-const golds = (ls: Landmark[]): Landmark[] => ls.filter((l) => l.tier === "gold");
-const fill = (s: Store, ids: number[], at: Date): number[] => {
-  const raised: number[] = [];
-  for (const id of ids) {
-    expect(s.claim(id, pidAt(id), nameAt(id), at)).toBe("claimed");
-    raised.push(...golds(s.raise(at)).map((l) => l.cellId));
-  }
-  return raised;
-};
-const tiersOf = (ls: Landmark[], id: number): string[] => ls.filter((l) => l.cellId === id).map((l) => l.tier);
-
-describe("landmarks", () => {
-  it("records exactly one when a building's 8th neighbour arrives, naming the holder first and the eight round it, by label", () => {
-    const s = memory();
-    const centre = cell(5, 5);
-    const ring = block(5, 5).filter((id) => id !== centre);
-    expect(fill(s, [centre, ...ring.slice(0, 7)], T0)).toEqual([]);
-    expect(golds(s.landmarks())).toEqual([]);
-
-    expect(s.claim(ring[7], pidAt(ring[7]), nameAt(ring[7]), later(1000))).toBe("claimed"); // the eighth neighbour
-    const expected = {
-      cellId: centre,
-      tier: "gold",
-      label: nameAt(centre),
-      raisers: [centre, ...ring].map(nameAt),
-      raisedAt: later(1000).toISOString(),
-    };
-    // returned once, for the server to announce, and kept
-    expect(golds(s.raise(later(1000)))).toEqual([expected]);
-    expect(s.raise(later(2000))).toEqual([]);
-    expect(golds(s.landmarks())).toEqual([expected]);
-    expect(JSON.stringify(s.landmarks())).not.toMatch(/"p\d+"/); // labels, never a pid
-  });
-
-  it("doesn't record a second when the same building loses a neighbour and fills again", () => {
-    const s = memory();
-    const centre = cell(5, 5);
-    expect(fill(s, block(5, 5), T0)).toEqual([centre]);
-    const corner = cell(4, 4);
-    const away = later(1000);
-    const back = later(31 * 60 * 1000); // past the 30-minute moving cooldown
-    expect(s.claim(cell(9, 9), pidAt(corner), nameAt(corner), away)).toBe("moved"); // 7 neighbours
-    expect(heights(s.tiles(), away)[centre]).toBe(1 + 7);
-    expect(s.raise(away)).toEqual([]);
-    expect(s.claim(corner, pidAt(corner), nameAt(corner), back)).toBe("moved"); // and back: 8
-    expect(heights(s.tiles(), back)[centre]).toBe(1 + 8);
-    expect(s.raise(back)).toEqual([]);
-    expect(golds(s.landmarks())).toHaveLength(1);
-    expect(golds(s.landmarks()).map((l) => l.raisedAt)).toEqual([T0.toISOString()]);
-  });
-
-  it("doesn't count a neighbour whose lease has ended, and records it once someone settles there", () => {
-    const s = memory();
-    const centre = cell(5, 5);
-    const gone = cell(4, 4);
-    fill(s, [gone], T0);
-    const now = later(LEASE_MS); // the first neighbour's lease has just ended
-    expect(fill(s, block(5, 5).filter((id) => id !== gone), now)).toEqual([]);
-    expect(heights(s.tiles(), now)[centre]).toBe(1 + 7);
-    expect(s.claim(gone, "newcomer", "New", later(LEASE_MS + 1000))).toBe("claimed");
-    expect(golds(s.raise(later(LEASE_MS + 1000))).map((l) => l.cellId)).toEqual([centre]);
-  });
-
-  it("doesn't raise a building whose own lease has ended, even with eight round it", () => {
-    const s = memory();
-    const centre = cell(5, 5);
-    fill(s, [centre], T0);
-    const now = later(LEASE_MS);
-    fill(s, block(5, 5).filter((id) => id !== centre), now);
-    expect(heights(s.tiles(), now)[centre]).toBe(0); // it's free now
-    expect(tiersOf(s.landmarks(), centre)).toEqual([]);
-  });
-
-  it("can never raise gold on an edge or a corner: they have 5 and 3 neighbours, so a full board raises only the 100 inside", () => {
-    const s = memory();
-    fill(s, Array.from({ length: TILES }, (_, i) => i), T0);
-    const raised = golds(s.landmarks()).map((l) => l.cellId).sort((a, b) => a - b);
-    const inside = Array.from({ length: TILES }, (_, i) => i).filter((i) => {
-      const r = Math.floor(i / N);
-      const c = i % N;
-      return r > 0 && r < N - 1 && c > 0 && c < N - 1;
-    });
-    expect(inside).toHaveLength(100);
-    expect(raised).toEqual(inside);
-    // and every cell has exactly the tiers its room allows: a corner bronze,
-    // an edge bronze and silver, the inside all three
-    const all = s.landmarks();
-    expect(tiersOf(all, 0)).toEqual(["bronze"]);
-    expect(tiersOf(all, cell(0, 5))).toEqual(["bronze", "silver"]);
-    expect(tiersOf(all, cell(5, 5))).toEqual(["bronze", "silver", "gold"]);
-    expect(all).toHaveLength(4 * 1 + 40 * 2 + 100 * 3);
-  });
-});
-
-// docs/adr/0006: bronze at 3 occupied neighbours, silver at 5, gold at 8,
-// each (cell, tier) once, lower tiers with a higher one.
-describe("landmark tiers", () => {
-  const centre = cell(5, 5);
-  const ring = block(5, 5).filter((id) => id !== centre);
-  const claimAll = (s: Store, ids: number[], at: Date): void => {
-    for (const id of ids) expect(s.claim(id, pidAt(id), nameAt(id), at)).toBe("claimed");
-  };
-
-  it("records bronze at the 3rd neighbour and silver at the 5th, each once, naming who was there", () => {
-    const s = memory();
-    claimAll(s, [centre, ring[0], ring[1]], T0);
-    expect(tiersOf(s.raise(T0), centre)).toEqual([]);
-    claimAll(s, [ring[2]], later(1000));
-    const bronze = s.raise(later(1000)).filter((l) => l.cellId === centre);
-    expect(bronze).toEqual([
-      { cellId: centre, tier: "bronze", label: nameAt(centre), raisers: [centre, ...ring.slice(0, 3)].map(nameAt), raisedAt: later(1000).toISOString() },
+describe("migrations", () => {
+  it("seeds the three starters in slots 1-3, version 1, published by the museum", () => {
+    const s = store.snapshot(T0);
+    expect(s.slots.map((x) => x.slot)).toEqual([1, 2, 3, 4, 5, 6]);
+    const starters = s.slots.slice(0, 3).map((x) => x.exhibit!);
+    expect(starters.map((e) => [e.latest.title, e.latest.recipe, e.latest.n, e.versionCount, e.latest.publishedBy])).toEqual([
+      ["Loop & Lantern", "loop", 1, 1, null],
+      ["Arch Totem", "arches", 1, 1, null],
+      ["Glass Bloom", "bloom", 1, 1, null],
     ]);
-    claimAll(s, [ring[3]], later(2000));
-    expect(tiersOf(s.raise(later(2000)), centre)).toEqual([]);
-    claimAll(s, [ring[4]], later(3000));
-    expect(tiersOf(s.raise(later(3000)), centre)).toEqual(["silver"]);
-    expect(tiersOf(s.landmarks(), centre)).toEqual(["bronze", "silver"]);
-    expect(s.raise(later(4000))).toEqual([]);
-  });
-
-  it("records every lower tier with it when a tower is found already at 8, lowest first", () => {
-    const s = memory();
-    claimAll(s, block(5, 5), T0); // no raise between claims, as at boot
-    const raised = s.raise(T0).filter((l) => l.cellId === centre);
-    expect(raised.map((l) => l.tier)).toEqual(["bronze", "silver", "gold"]);
-    for (const l of raised) expect(l.raisers).toHaveLength(9); // who was there when it was found
-    expect(s.raise(T0)).toEqual([]);
-  });
-
-  it("doesn't record a tier again after dropping below it and climbing back", () => {
-    const s = memory();
-    claimAll(s, [centre, ...ring.slice(0, 3)], T0);
-    expect(tiersOf(s.raise(T0), centre)).toEqual(["bronze"]);
-    // the third neighbour moves away: down to 2
-    expect(s.claim(cell(10, 10), pidAt(ring[2]), nameAt(ring[2]), later(1000))).toBe("moved");
-    expect(tiersOf(s.raise(later(1000)), centre)).toEqual([]);
-    expect(tiersOf(s.landmarks(), centre)).toEqual(["bronze"]); // kept, though the tower dropped
-    // someone else fills the gap: back to 3, and nothing new
-    expect(s.claim(ring[2], "filler", "Filler", later(2000))).toBe("claimed");
-    expect(tiersOf(s.raise(later(2000)), centre)).toEqual([]);
-    expect(s.landmarks().filter((l) => l.cellId === centre).map((l) => l.raisedAt)).toEqual([T0.toISOString()]);
-  });
-
-  it("refuses a second row for the same cell and tier in the database itself", () => {
-    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
-    const path = join(dir, "app.db");
-    try {
-      openStore(path).close();
-      const v = new DatabaseSync(path);
-      const put = v.prepare("INSERT INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, 'X', '[]', 't')");
-      put.run(5, "bronze");
-      put.run(5, "silver");
-      expect(() => put.run(5, "bronze")).toThrow(/UNIQUE/);
-      v.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    expect(s.slots.slice(3).every((x) => x.exhibit === null)).toBe(true);
+    for (const e of starters) {
+      expect(checkSculpture(e.latest.recipe, e.latest.parts), e.latest.title).toEqual({ ok: true });
+      expect(e.latest.parts, `${e.latest.title} should differ from the bare defaults`).not.toEqual(defaultParts(e.latest.recipe));
     }
+    expect(s.draft.recipe).toBeNull();
+    expect(s.storeroom).toEqual([]);
+  });
+
+  it("runs each migration once: reopening never seeds again", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(db);
+    migrate(db);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
+    expect(db.prepare("SELECT COUNT(*) AS c FROM versions").get()).toEqual({ c: 3 });
+  });
+
+  it("refuses a database newer than the code", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length + 1}`);
+    expect(() => migrate(db)).toThrow(/only knows/);
+  });
+
+  it("rolls a failed migration back whole", () => {
+    const db = new DatabaseSync(":memory:");
+    expect(() => migrate(db, ["CREATE TABLE a (x); CREATE TABLE a (x);"])).toThrow();
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'a'").get()).toEqual({ c: 0 });
   });
 });
 
-describe("landmarks agree with heights()", () => {
-  it("raises exactly the tiers each held building's occupied neighbours reach, on random dense boards with ended leases", () => {
-    let seed = 7;
-    const rand = (): number => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
-    let raisedTotal = 0;
-    for (let round = 0; round < 40; round++) {
-      const s = memory();
-      const now = later(LEASE_MS + HOUR);
-      const old = new Set<number>();
-      for (let id = 0; id < TILES; id++) if (rand() < 0.1) old.add(id);
-      // first the leases that will have ended, then everyone else
-      for (const id of old) s.claim(id, pidAt(id), nameAt(id), T0);
-      for (let id = 0; id < TILES; id++) {
-        if (!old.has(id) && rand() < 0.85) s.claim(id, pidAt(id), nameAt(id), now);
-      }
-      const tiles = s.tiles();
-      const hs = heights(tiles, now);
-      // each held building, at every tier its occupied neighbours reach
-      const expected = tiles
-        .filter((t) => isActive(t, now))
-        .flatMap((t) =>
-          LANDMARK_TIERS.filter((x) => hs[t.id] - (t.level ?? 1) >= x.neighbours).map((x) => `${t.id}:${x.tier}`),
-        );
-      expect(s.raise(now).map((l) => `${l.cellId}:${l.tier}`)).toEqual(expected);
-      raisedTotal += expected.filter((k) => k.endsWith(":gold")).length;
-    }
-    expect(raisedTotal).toBeGreaterThan(20); // not a pass on empty lists
+describe("visitors", () => {
+  it("creates a visitor once and keeps the first name", () => {
+    expect(store.ensureVisitor(ANA, "Other", 3, T0).created).toBe(false);
+    expect(store.visitor(ANA)).toEqual({ pid: ANA, name: "Coral Heron", colour: 0 });
+    expect(store.view(ANA)).toEqual({ tag: tagOf(ANA), name: "Coral Heron", colour: 0 });
+    expect(tagOf(ANA)).toMatch(/^[0-9a-f]{6}$/);
+    expect(tagOf(ANA)).not.toBe(tagOf(BO));
   });
 });
 
-describe("migration 3 (landmarks)", () => {
-  it("upgrades a crit-10 database in place, keeping every claim", () => {
-    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
-    const path = join(dir, "app.db");
-    try {
-      // Exactly what crit 10 held: migrations 1 and 2, user_version 2, with a
-      // whole finished tower already standing on it.
-      const old = new DatabaseSync(path);
-      old.exec(`
-        CREATE TABLE cells (id INTEGER PRIMARY KEY, claimer_id TEXT, label TEXT, claimed_at TEXT);
-        CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id) WHERE claimer_id IS NOT NULL;
-        ALTER TABLE cells ADD COLUMN last_seen_at TEXT;
-        CREATE TABLE displaced (claimer_id TEXT PRIMARY KEY, label TEXT NOT NULL, cell_id INTEGER NOT NULL, displaced_at TEXT NOT NULL);
-        PRAGMA user_version = 2;
-      `);
-      const seed = old.prepare("INSERT INTO cells (id) VALUES (?)");
-      for (let id = 0; id < TILES; id++) seed.run(id);
-      const put = old.prepare("UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ?, last_seen_at = ? WHERE id = ?");
-      const tower = block(5, 5);
-      for (const id of [...tower, 0]) put.run(pidAt(id), nameAt(id), T0.toISOString(), T0.toISOString(), id);
-      old.prepare("INSERT INTO displaced VALUES (?, ?, ?, ?)").run(ALICE, "Alice", 3, T0.toISOString());
-      old.close();
+describe("leases", () => {
+  beforeEach(() => ok(store.start(ANA, "loop", T0)));
 
-      const s = openStore(path);
-      opened.push(s);
-      const held = s.tiles().filter((t) => t.claimerId !== null);
-      expect(held.map((t) => t.id).sort((a, b) => a - b)).toEqual([0, ...tower].sort((a, b) => a - b));
-      for (const t of held) expect(t).toMatchObject({ claimerId: pidAt(t.id), label: nameAt(t.id), level: 1 });
-      // Nothing is backfilled by the migration itself; the tower standing at
-      // 8 is recorded on the first raise (the server calls it at start).
-      expect(s.landmarks()).toEqual([]);
-      expect(golds(s.raise(new Date())).map((l) => l.cellId)).toEqual([cell(5, 5)]);
-      s.close();
-      opened.pop();
+  it("refuses an edit to a part someone else holds, naming the holder", () => {
+    ok(store.lease(ANA, "ribbon", T0));
+    const r = store.edit(BO, "ribbon", { turns: 4 }, at(1000));
+    expect(r).toMatchObject({ ok: false, error: "lease-held", holder: { tag: tagOf(ANA), name: "Coral Heron" } });
+    expect(store.lease(BO, "ribbon", at(1000))).toMatchObject({ ok: false, error: "lease-held" });
+    expect(store.snapshot(at(1000)).draft.parts!.ribbon.turns).toBe(2);
+  });
 
-      const again = openStore(path);
-      opened.push(again);
-      expect(golds(again.landmarks())).toHaveLength(1);
-      const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
-      v.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("lets two people edit two parts at once", () => {
+    ok(store.edit(ANA, "ribbon", { turns: 4 }, T0));
+    ok(store.edit(BO, "cube", { size: 1 }, T0));
+    const s = store.snapshot(T0);
+    expect(s.leases.map((l) => [l.part, l.pid])).toEqual([
+      ["cube", BO],
+      ["ribbon", ANA],
+    ]);
+    expect(s.draft.parts!.ribbon.turns).toBe(4);
+    expect(s.draft.parts!.cube.size).toBe(1);
+  });
+
+  it("takes the lease implicitly on an edit and renews it on every edit", () => {
+    const first = ok(store.edit(ANA, "ribbon", { turns: 3 }, T0));
+    expect(first.taken).toBe(true);
+    ok(store.edit(ANA, "ribbon", { turns: 4 }, at(10_000)));
+    // 20 s after the first edit, but only 10 s after the renewing one
+    expect(store.edit(BO, "ribbon", { turns: 1 }, at(20_000))).toMatchObject({ ok: false, error: "lease-held" });
+    expect(store.leases(at(20_000))[0].expiresAt).toBe(at(10_000 + LEASE_MS).toISOString());
+  });
+
+  it("renews a lease on POST /draft/lease", () => {
+    ok(store.lease(ANA, "ribbon", T0));
+    const again = ok(store.lease(ANA, "ribbon", at(14_000)));
+    expect(again.taken).toBe(false);
+    expect(store.lease(BO, "ribbon", at(20_000))).toMatchObject({ ok: false, error: "lease-held" });
+  });
+
+  it("is free on read once expired, with no sweep", () => {
+    ok(store.lease(ANA, "ribbon", T0));
+    expect(store.leases(at(LEASE_MS - 1))).toHaveLength(1);
+    expect(store.leases(at(LEASE_MS))).toHaveLength(0);
+    const r = ok(store.edit(BO, "ribbon", { turns: 5 }, at(LEASE_MS)));
+    expect(r.taken).toBe(true);
+    expect(store.snapshot(at(LEASE_MS)).leases[0].pid).toBe(BO);
+  });
+
+  it("expire() deletes and returns the leases that ran out", () => {
+    ok(store.lease(ANA, "ribbon", T0));
+    ok(store.lease(BO, "cube", at(5000)));
+    expect(store.expire(at(LEASE_MS)).map((l) => l.part)).toEqual(["ribbon"]);
+    expect(store.expire(at(LEASE_MS))).toEqual([]);
+    expect(store.leases(at(LEASE_MS)).map((l) => l.part)).toEqual(["cube"]);
+  });
+
+  it("releases one lease, or all of a visitor's", () => {
+    ok(store.lease(ANA, "ribbon", T0));
+    ok(store.lease(ANA, "cube", T0));
+    ok(store.lease(BO, "spheres", T0));
+    expect(store.release(BO, "ribbon", T0)).toEqual({ ok: true, released: false });
+    expect(store.release(ANA, "ribbon", T0)).toEqual({ ok: true, released: true });
+    expect(store.releaseAll(ANA)).toEqual(["cube"]);
+    expect(store.leases(T0).map((l) => l.part)).toEqual(["spheres"]);
+  });
+
+  it("refuses a part the recipe doesn't have, and bad values, without taking the lease", () => {
+    expect(store.lease(ANA, "petals", T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.lease(ANA, "constructor", T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.edit(ANA, "ribbon", { turns: 99 }, T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.edit(ANA, "ribbon", { turns: "3" }, T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.edit(ANA, "ribbon", { wings: 1 }, T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.leases(T0)).toEqual([]);
+  });
+
+  it("refuses leases and edits on an empty bench", () => {
+    ok(store.clear(ANA, T0));
+    expect(store.lease(ANA, "ribbon", T0)).toMatchObject({ ok: false, error: "draft-empty" });
+    expect(store.edit(ANA, "ribbon", { turns: 3 }, T0)).toMatchObject({ ok: false, error: "draft-empty" });
   });
 });
 
-describe("migration 5 (landmark tiers) from a version-4 database", () => {
-  it("keeps every landmark as gold, writes in its silver and bronze, keeps every plot, and allows one row per (cell, tier)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "skyline-"));
-    const path = join(dir, "app.db");
-    try {
-      // Exactly what production held after the city economy: migrations 1-4,
-      // user_version 4, with two landmarks (one per cell, raised at 8), a
-      // live plot and a wallet.
-      const old = new DatabaseSync(path);
-      old.exec(`
-        CREATE TABLE cells (id INTEGER PRIMARY KEY, claimer_id TEXT, label TEXT, claimed_at TEXT);
-        CREATE UNIQUE INDEX one_tile_each ON cells(claimer_id) WHERE claimer_id IS NOT NULL;
-        ALTER TABLE cells ADD COLUMN last_seen_at TEXT;
-        CREATE TABLE displaced (claimer_id TEXT PRIMARY KEY, label TEXT NOT NULL, cell_id INTEGER NOT NULL, displaced_at TEXT NOT NULL);
-        CREATE TABLE landmarks (id INTEGER PRIMARY KEY, cell_id INTEGER, label TEXT, raisers TEXT, raised_at TEXT);
-        CREATE UNIQUE INDEX one_landmark_each ON landmarks(cell_id);
-        CREATE TABLE players (
-          pid TEXT PRIMARY KEY, label TEXT,
-          coins INTEGER NOT NULL DEFAULT 100 CHECK (coins >= 0),
-          unclaimed_cents INTEGER NOT NULL DEFAULT 0 CHECK (unclaimed_cents >= 0),
-          created_at TEXT, last_relocated_at TEXT, last_helped_at TEXT,
-          earned_cents INTEGER NOT NULL DEFAULT 0, seen_at TEXT,
-          seen_earned_cents INTEGER NOT NULL DEFAULT 0, lease_lost_at TEXT
-        );
-        ALTER TABLE cells ADD COLUMN level INTEGER;
-        ALTER TABLE cells ADD COLUMN lease_ends_at TEXT;
-        ALTER TABLE cells ADD COLUMN owned_since TEXT;
-        ALTER TABLE cells ADD COLUMN pending_cents INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE cells ADD COLUMN settled_at TEXT;
-        CREATE TABLE events (id INTEGER PRIMARY KEY, type TEXT, text TEXT, cell_id INTEGER, at TEXT);
-        PRAGMA user_version = 4;
-      `);
-      const seed = old.prepare("INSERT INTO cells (id) VALUES (?)");
-      for (let id = 0; id < TILES; id++) seed.run(id);
-      const until = later(LEASE_MS).toISOString();
-      old
-        .prepare("UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ?, level = 3, lease_ends_at = ?, owned_since = ?, settled_at = ?, pending_cents = 700 WHERE id = ?")
-        .run(ALICE, "Alice", T0.toISOString(), until, T0.toISOString(), T0.toISOString(), 42);
-      old.prepare("INSERT INTO players (pid, label, coins) VALUES (?, ?, ?)").run(ALICE, "Alice", 321);
-      const nine = ["Mia", "Kai", "Zoe", "Ari", "Bo", "Cy", "Di", "Ed", "Flo"];
-      const mark = old.prepare("INSERT INTO landmarks (cell_id, label, raisers, raised_at) VALUES (?, ?, ?, ?)");
-      mark.run(77, "Mia", JSON.stringify(nine), "2026-10-10T00:00:00.000Z");
-      mark.run(30, "Kai", JSON.stringify(nine.slice(1)), "2026-10-11T00:00:00.000Z");
-      old.close();
+describe("the draft", () => {
+  it("starts from defaults, once", () => {
+    ok(store.start(ANA, "bloom", T0));
+    expect(store.snapshot(T0).draft).toMatchObject({ recipe: "bloom", parts: defaultParts("bloom"), revision: 1, basedOn: null });
+    expect(store.start(BO, "loop", T0)).toMatchObject({ ok: false, error: "draft-not-empty" });
+    expect(store.start(BO, "nope", T0)).toMatchObject({ ok: false, error: "bad-request" });
+  });
 
-      const s = openStore(path);
-      opened.push(s);
-      const tiers = (id: number): string[] => s.landmarks().filter((l) => l.cellId === id).map((l) => l.tier).sort();
-      // the old rows survive as gold, with their names and time; the tiers
-      // below are written in alongside them
-      expect(s.landmarks().filter((l) => l.tier === "gold")).toEqual([
-        { cellId: 77, tier: "gold", label: "Mia", raisers: nine, raisedAt: "2026-10-10T00:00:00.000Z" },
-        { cellId: 30, tier: "gold", label: "Kai", raisers: nine.slice(1), raisedAt: "2026-10-11T00:00:00.000Z" },
-      ]);
-      expect(tiers(77)).toEqual(["bronze", "gold", "silver"]);
-      expect(tiers(30)).toEqual(["bronze", "gold", "silver"]);
-      for (const l of s.landmarks()) expect(l.raisedAt).toBe(l.cellId === 77 ? "2026-10-10T00:00:00.000Z" : "2026-10-11T00:00:00.000Z");
-      // plots and wallets are untouched
-      expect(s.tiles()[42]).toMatchObject({ claimerId: ALICE, label: "Alice", level: 3, pendingCents: 700, leaseEndsAt: until });
-      expect(s.me(ALICE, T0).coins).toBe(321);
-      // nothing standing on the board, so nothing new is raised
-      expect(s.raise(T0)).toEqual([]);
-      s.close();
-      opened.pop();
+  it("credits each part's last author and counts each contributor's edits", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "ribbon", { turns: 3 }, T0));
+    ok(store.edit(ANA, "ribbon", { turns: 4 }, T0));
+    ok(store.edit(BO, "cube", { size: 1 }, T0));
+    ok(store.release(ANA, "ribbon", T0));
+    ok(store.edit(BO, "ribbon", { twist: 3 }, T0));
+    const d = store.snapshot(T0).draft;
+    expect(d.revision).toBe(5);
+    expect(d.partAuthors.ribbon.tag).toBe(tagOf(BO));
+    expect(d.partAuthors.cube.tag).toBe(tagOf(BO));
+    expect(d.partAuthors.spheres).toBeUndefined();
+    expect(d.contributors.map((c) => [c.name, c.edits])).toEqual([
+      ["Coral Heron", 2],
+      ["Teal Finch", 2],
+    ]);
+    expect(d.parts!.ribbon).toMatchObject({ turns: 4, twist: 3 });
+  });
 
-      // opening again runs nothing twice
-      const again = openStore(path);
-      opened.push(again);
-      expect(again.landmarks()).toHaveLength(6);
-      again.close();
-      opened.pop();
-      const v = new DatabaseSync(path);
-      expect((v.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(8);
-      // the unique index is (cell_id, tier) now: a new tier on a cell is
-      // allowed, the same tier twice is not
-      const put = v.prepare("INSERT INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, 'X', '[]', 't')");
-      put.run(50, "bronze");
-      put.run(50, "silver");
-      expect(() => put.run(77, "gold")).toThrow(/UNIQUE/);
-      // a row written without a tier is gold, as every earlier row was
-      v.prepare("INSERT INTO landmarks (cell_id, label, raisers, raised_at) VALUES (51, 'Y', '[]', 't')").run();
-      expect(v.prepare("SELECT tier FROM landmarks WHERE cell_id = 51").get()).toEqual({ tier: "gold" });
-      expect(v.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'one_landmark_each'").get()).toEqual({ n: 0 });
-      v.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("refuses remix into a non-empty bench unless replace, and replace archives first", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "ribbon", { turns: 5 }, T0));
+    const before = store.snapshot(T0).draft;
+    const starter = store.snapshot(T0).slots[1].exhibit!.latest;
+    expect(store.remix(BO, starter.id, false, T0)).toMatchObject({ ok: false, error: "draft-not-empty" });
+    expect(store.snapshot(T0).draft.id).toBe(before.id);
+
+    const r = ok(store.remix(BO, starter.id, true, at(1000)));
+    expect(r.archivedId).toBe(before.id);
+    const s = store.snapshot(at(1000));
+    expect(s.draft).toMatchObject({ recipe: "arches", parts: starter.parts, basedOn: { versionId: starter.id, title: "Arch Totem", n: 1 } });
+    expect(s.leases).toEqual([]);
+    expect(s.archivedDrafts[0]).toMatchObject({ id: before.id, recipe: "loop", reason: "replaced", archivedBy: { tag: tagOf(BO) } });
+    expect(s.archivedDrafts[0].contributors.map((c) => c.name)).toEqual(["Coral Heron"]);
+  });
+
+  it("brings an archived draft back with its numbers and credits", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "ribbon", { turns: 5 }, T0));
+    const { archivedId } = ok(store.clear(ANA, T0));
+    expect(store.snapshot(T0).archivedDrafts[0]).toMatchObject({ id: archivedId, reason: "cleared" });
+    expect(store.snapshot(T0).draft.recipe).toBeNull();
+    ok(store.restoreArchived(BO, archivedId, false, at(1000)));
+    const d = store.snapshot(at(1000)).draft;
+    expect(d.parts!.ribbon.turns).toBe(5);
+    expect(d.contributors.map((c) => [c.name, c.edits])).toEqual([["Coral Heron", 1]]);
+    expect(store.restoreArchived(BO, archivedId, false, at(1000))).toMatchObject({ ok: false, error: "draft-not-empty" });
+    expect(store.restoreArchived(BO, 9999, true, at(1000))).toMatchObject({ ok: false, error: "not-found" });
+    expect(store.restoreArchived(BO, d.id, true, at(1000))).toMatchObject({ ok: false, error: "not-found" });
+  });
+
+  it("refuses clear while someone else holds a lease, and on an empty bench", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.lease(BO, "cube", T0));
+    expect(store.clear(ANA, T0)).toMatchObject({ ok: false, error: "lease-held", holder: { tag: tagOf(BO) } });
+    ok(store.lease(ANA, "ribbon", T0));
+    expect(store.clear(BO, T0)).toMatchObject({ ok: false, error: "lease-held" });
+    ok(store.clear(ANA, at(LEASE_MS)));
+    expect(store.clear(ANA, at(LEASE_MS))).toMatchObject({ ok: false, error: "draft-empty" });
+  });
+});
+
+describe("versions", () => {
+  it("publishes a new exhibit into a free slot, keeping the draft and its credits", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(BO, "cube", { size: 1.2 }, T0));
+    const p = ok(store.publish(ANA, { title: "Cube Dream", slot: 4 }, at(1000)));
+    expect(p).toMatchObject({ n: 1, stored: null });
+    const s = store.snapshot(at(1000));
+    expect(s.slots[3].exhibit!.latest).toMatchObject({
+      title: "Cube Dream",
+      n: 1,
+      publishedBy: { tag: tagOf(ANA), name: "Coral Heron" },
+      contributors: [{ tag: tagOf(BO), name: "Teal Finch", edits: 1 }],
+      publishedAt: at(1000).toISOString(),
+    });
+    expect(s.draft.recipe).toBe("loop");
+  });
+
+  it("keeps names as they were when the version was made", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "cube", { size: 1.2 }, T0));
+    const p = ok(store.publish(ANA, { title: "Before", slot: 4 }, T0));
+    store.rename(ANA, "Renamed");
+    const v = store.history(p.exhibitId)!.versions[0];
+    expect(v.contributors[0].name).toBe("Coral Heron");
+    expect(v.publishedBy!.name).toBe("Coral Heron");
+  });
+
+  it("adds a version to an existing exhibit; history is newest first", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "cube", { size: 1.2 }, T0));
+    const p = ok(store.publish(ANA, { title: "Second", exhibitId: 1 }, at(1000)));
+    expect(p.n).toBe(2);
+    const h = store.history(1)!;
+    expect(h.versions.map((v) => [v.n, v.title])).toEqual([
+      [2, "Second"],
+      [1, "Loop & Lantern"],
+    ]);
+    expect(h.exhibit.versionCount).toBe(2);
+    expect(store.publish(ANA, { title: "x", exhibitId: 999 }, T0)).toMatchObject({ ok: false, error: "not-found" });
+    expect(store.history(999)).toBeNull();
+  });
+
+  it("records the version a remix came from on what it publishes", () => {
+    ok(store.remix(ANA, 2, false, T0));
+    const p = ok(store.publish(ANA, { title: "Totem II", slot: 5 }, T0));
+    expect(store.history(p.exhibitId)!.versions[0].basedOn).toEqual({ exhibitId: 2, versionId: 2, title: "Arch Totem", n: 1 });
+  });
+
+  it("refuses to publish an empty bench", () => {
+    expect(store.publish(ANA, { title: "x", slot: 4 }, T0)).toMatchObject({ ok: false, error: "draft-empty" });
+  });
+
+  it("restore makes version N+1 with the old numbers and restoredFrom", () => {
+    ok(store.start(ANA, "loop", T0));
+    ok(store.edit(ANA, "ribbon", { turns: 5 }, T0));
+    ok(store.publish(ANA, { title: "Loopier", exhibitId: 1 }, at(1000)));
+    const r = ok(store.restoreVersion(BO, 1, 1, at(2000)));
+    expect(r).toMatchObject({ n: 3, from: 1 });
+    const h = store.history(1)!;
+    expect(h.versions.map((v) => v.n)).toEqual([3, 2, 1]);
+    expect(h.versions[0]).toMatchObject({ restoredFrom: 1, title: "Loop & Lantern", parts: h.versions[2].parts, publishedBy: { tag: tagOf(BO) } });
+    expect(h.versions[1].parts.ribbon.turns).toBe(5);
+    expect(store.restoreVersion(BO, 2, 1, T0)).toMatchObject({ ok: false, error: "not-found" });
+    expect(store.restoreVersion(BO, 1, 999, T0)).toMatchObject({ ok: false, error: "not-found" });
+  });
+
+  it("refuses UPDATE and DELETE on versions and their credits in the database itself", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(db);
+    expect(() => db.exec("UPDATE versions SET title = 'x' WHERE id = 1")).toThrow(/immutable/);
+    expect(() => db.exec("DELETE FROM versions WHERE id = 1")).toThrow(/immutable/);
+    db.exec("INSERT INTO version_credits (version_id, pid, name, colour, edits, ord) VALUES (1, 'p', 'n', 0, 1, 0)");
+    expect(() => db.exec("UPDATE version_credits SET name = 'x'")).toThrow(/immutable/);
+    expect(() => db.exec("DELETE FROM version_credits")).toThrow(/immutable/);
+    expect(db.prepare("SELECT title FROM versions WHERE id = 1").get()).toEqual({ title: "Loop & Lantern" });
+  });
+});
+
+describe("slots", () => {
+  beforeEach(() => ok(store.start(ANA, "loop", T0)));
+
+  it("never silently replaces a full slot", () => {
+    const r = store.publish(BO, { title: "Usurper", slot: 1 }, T0);
+    expect(r).toMatchObject({ ok: false, error: "slot-taken", exhibit: { id: 1, latest: { title: "Loop & Lantern" } } });
+    expect(store.snapshot(T0).slots[0].exhibit!.id).toBe(1);
+    expect(store.snapshot(T0).storeroom).toEqual([]);
+  });
+
+  it("with replace, moves the old exhibit to the storeroom with all its versions", () => {
+    ok(store.publish(ANA, { title: "v2", exhibitId: 1 }, T0));
+    const r = ok(store.publish(BO, { title: "Usurper", slot: 1, replace: true }, at(1000)));
+    expect(r.stored).toBe(1);
+    const s = store.snapshot(at(1000));
+    expect(s.slots[0].exhibit!.latest.title).toBe("Usurper");
+    expect(s.storeroom.map((e) => [e.id, e.slot, e.versionCount])).toEqual([[1, null, 2]]);
+    expect(store.history(1)!.versions).toHaveLength(2);
+  });
+
+  it("stores an exhibit and displays it again on a free slot", () => {
+    expect(ok(store.storeAway(2)).slot).toBe(2);
+    expect(store.storeAway(2)).toMatchObject({ ok: false, error: "slot-empty" });
+    expect(store.storeAway(99)).toMatchObject({ ok: false, error: "not-found" });
+    expect(store.snapshot(T0).slots[1].exhibit).toBeNull();
+    expect(store.display(2, 1, false)).toMatchObject({ ok: false, error: "slot-taken", exhibit: { id: 1 } });
+    ok(store.display(2, 6, false));
+    expect(store.snapshot(T0).slots[5].exhibit!.id).toBe(2);
+    expect(store.display(2, 5, false)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.display(99, 5, false)).toMatchObject({ ok: false, error: "not-found" });
+  });
+
+  it("display with replace swaps the slot's exhibit into the storeroom", () => {
+    ok(store.storeAway(3));
+    const r = ok(store.display(3, 1, true));
+    expect(r.stored).toBe(1);
+    const s = store.snapshot(T0);
+    expect(s.slots[0].exhibit!.id).toBe(3);
+    expect(s.storeroom.map((e) => e.id)).toEqual([1]);
   });
 });

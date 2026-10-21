@@ -1,508 +1,165 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  accrue,
-  buildingName,
-  DISTRICT_SIZE,
-  HELP_COOLDOWN_MS,
-  HELP_GIFT,
-  HELP_REWARD,
-  LEASE_MS,
-  MAX_LEVEL,
-  MAYOR_MIN_LEVEL,
-  mayorBonus,
-  PARK_COST,
-  PARK_LIMIT,
-  PARK_MS,
-  isZone,
-  rate,
-  REZONE_COOLDOWN_MS,
-  REZONE_COST,
-  RETURN_BONUS,
-  RETURN_WINDOW_MS,
-  RELOCATE_COOLDOWN_MS,
-  RELOCATE_COST,
-  renewal,
-  renewOptions,
-  STARTING_COINS,
-  type Tier,
-  tiersReached,
-  upgradeCost,
-  WELCOME_AFTER_MS,
-  type Zone,
-  zoneBonus,
-} from "./economy.ts";
+import { checkEdit, checkSculpture, defaultParts, RECIPES } from "../public/recipes.js";
+import type { ArchivedDraftView, Credit, DraftView, ExhibitHistory, ExhibitView, Parts, VersionView, VisitorView } from "./types.ts";
 
-// The board is N×N, row-major: tile id = row * N + col.
-export const N = 12;
-export const TILES = N * N;
+// The museum's store: one SQLite file, every write one BEGIN IMMEDIATE
+// transaction, every time-dependent function given `now` so tests can run
+// it over ":memory:" with their own clock (CLAUDE.md, Build sketch).
+//
+// A pid is the only proof of who anyone is, so it stays in here and in the
+// server. Everything this module hands out for display is a VisitorView:
+// tag, name, colour.
 
-// A plot as stored. A plot is held while `claimerId` is set and its lease
-// hasn't ended; one whose lease has ended is free on every read (isActive),
-// whether or not settle() has cleared the row yet (docs/adr/0005).
-export type Tile = {
-  id: number;
-  claimerId: string | null;
-  label: string | null;
-  claimedAt: string | null;
-  level: number | null;
-  leaseEndsAt: string | null;
-  ownedSince: string | null;
-  pendingCents: number;
-  settledAt: string | null;
-  // The building's zone (docs/adr/0009): 'civic' on every plot nobody holds.
-  zone: string;
-};
+/** A lease lasts this long, renewed by every accepted edit (CLAUDE.md). */
+export const LEASE_MS = 15_000;
+export const SLOTS = 6;
+/** How many archived drafts the state event lists, newest first. */
+export const ARCHIVE_LIST = 12;
 
-// A park as stored (docs/adr/0007): a public good on a plot nobody holds,
-// running from placedAt until endsAt. placedBy is the placer's pid, so it
-// never leaves the store; everyone else sees the label.
-export type Park = { cellId: number; placedBy: string; label: string; placedAt: string; endsAt: string };
+export const tagOf = (pid: string): string => createHash("sha256").update(pid).digest("hex").slice(0, 6);
 
-// A park that ended, as settle() found it: for the server to log.
-export type ParkEnd = { cellId: number; pid: string; label: string; at: string };
-
-// A district's mayor changing hands (docs/adr/0010), for the server to log:
-// pids stay on the server, and the log turns them into tags.
-export type MayorChange = {
-  district: number;
-  pid: string | null;
-  label: string | null;
-  cellId: number | null;
-  from: string | null;
-  fromLabel: string | null;
-};
-
-// A crown a tower earned, recorded for good (docs/adr/0004, as amended by
-// ADR 5 and ADR 6): one row per (cell, tier), bronze at 3 occupied
-// neighbours, silver at 5, gold at 8. The raisers are labels, holder first,
-// then the occupied neighbours in board order: never a pid, since the row
-// outlives everyone in it and is shown to anyone.
-export type Landmark = { cellId: number; tier: Tier; label: string; raisers: string[]; raisedAt: string };
-
-// A public line in the city log. No pid, ever.
-export type CityEvent = { id: number; type: string; text: string; cellId: number | null; at: string };
-
-// A lease that ended, as settle() found it: for the server to log.
-export type Expiry = { cellId: number; pid: string; label: string; at: string; pendingCents: number };
-
-// Your own wallet and building, as only your page is sent it. Money is
-// coins, except `pending` and `rate`, which are hundredths of a coin (rate a
-// minute). `pending` is everything a collect would pay: your building's
-// uncollected income plus any left from an ended lease.
-export type Me = {
-  coins: number;
-  pending: number;
-  rate: number;
-  cellId: number | null;
-  level: number | null;
-  leaseEndsAt: string | null;
-  ownedSince: string | null;
-  relocateAt: string | null; // when you may move again; null if you never have
-  helpAt: string | null; // when you may help again; null if you never have
-  rezoneAt: string | null; // when you may rezone again; null if you never have
-  parks: number; // your parks still running
-  parkLimit: number; // how many may run at once
-  // The neighbour whose help you can return for the bonus (docs/adr/0008):
-  // their plot and when the window closes. Only while it's open and they
-  // stand next to your building, since help is adjacent-only. Never a pid.
-  returnable: { cellId: number; until: string } | null;
-};
-
-// What a visit tells you once: coins your building earned while you were
-// away, and that your lease ended since you were last here.
-export type Visit = { welcome: number | null; expired: boolean };
-
-export type ClaimResult = "claimed" | "moved" | "renamed" | "taken" | "coins" | "cooldown";
-export type CollectResult = { paid: number };
-export type UpgradeResult = "upgraded" | "no-land" | "max-level" | "coins";
-export type RenewResult = "renewed" | "hours" | "no-land" | "max-lease" | "coins";
-// "returned": a help that returned the favour and paid RETURN_BONUS each.
-export type HelpResult = "helped" | "returned" | "no-land" | "not-neighbour" | "cooldown";
-export type ParkResult = "parked" | "no-land" | "taken" | "park-limit" | "coins";
-// "zone": not one of the zones; "same-zone": your building already is it.
-export type RezoneResult =
-  | { ok: true; zone: Zone; from: string; cellId: number }
-  | { ok: false; reason: "no-land" | "zone" | "same-zone" | "cooldown" | "coins" };
-
-export type Store = {
-  // Every row, as stored. Use isActive(tile, now) for whether it's held.
-  tiles(): Tile[];
-  // Settles every building's income up to `now` and frees every plot whose
-  // lease ended by then (docs/adr/0005). Every action below runs it first, in
-  // its own transaction; the sweep runs it on its own.
-  settle(now: Date): void;
-  // Leases settle() has ended since the last call, oldest first.
-  takeExpired(): Expiry[];
-  // Parks settle() has deleted since the last call, oldest first.
-  takeParksEnded(): ParkEnd[];
-  // Every park row, as stored; use parkActive(park, now) for whether it runs.
-  parks(): Park[];
-  // A park on a free plot, by someone holding land (docs/adr/0007).
-  park(pid: string, cellId: number, now: Date): ParkResult;
-  // A free plot when you hold none (free); your own plot again (a rename);
-  // or a move when you hold land (RELOCATE_COST, cooldown).
-  claim(tileId: number, pid: string, label: string, now: Date): ClaimResult;
-  collect(pid: string, now: Date): CollectResult;
-  upgrade(pid: string, now: Date): UpgradeResult;
-  renew(pid: string, hours: number, now: Date): RenewResult;
-  help(pid: string, cellId: number, now: Date): HelpResult;
-  // Your own building's zone, and only yours (docs/adr/0009).
-  rezone(pid: string, zone: string, now: Date): RezoneResult;
-  // Your wallet as of `now`, income counted to the minute without writing.
-  me(pid: string, now: Date): Me;
-  // A visit: returns the once-only notices and marks you seen.
-  visit(pid: string, now: Date): Visit;
-  // Marks you seen without telling you anything (your page is open).
-  seen(pid: string, now: Date): void;
-  // The name on your wallet, if you have one.
-  label(pid: string): string | null;
-  // The latest `limit` public events, newest first.
-  events(limit: number): CityEvent[];
-  landmarks(): Landmark[];
-  // Records every tier each held building has reached (by occupied
-  // neighbours) that its cell has never had, lower tiers included, and
-  // returns those just recorded: by cell, lowest tier first.
-  raise(now: Date): Landmark[];
-  // Every district whose mayor changed since the last call (docs/adr/0010),
-  // by district: who now (null if the seat emptied) and who before. Seats
-  // are derived, so the last ones seen are kept in memory only; a new
-  // mayor writes the city log unless `record` is false (the boot baseline).
-  elect(now: Date, record?: boolean): MayorChange[];
-  close(): void;
-};
-
-// Timestamps are toISOString() output (and strftime('%Y-%m-%dT%H:%M:%fZ') in
-// migration 4, the same shape), which sorts as text in time order.
-const iso = (ms: number): string => new Date(ms).toISOString();
-
-export const isActive = (t: Tile, now: Date): boolean =>
-  t.claimerId !== null && t.leaseEndsAt !== null && t.leaseEndsAt > now.toISOString();
-
-export const parkActive = (p: Park, now: Date): boolean => p.placedAt <= now.toISOString() && p.endsAt > now.toISOString();
-
-// 8-neighbours: one step in any direction, never wrapping round an edge.
-export function neighbourIds(id: number): number[] {
-  const row = Math.floor(id / N);
-  const col = id % N;
-  const out: number[] = [];
-  for (let r = row - 1; r <= row + 1; r++) {
-    for (let c = col - 1; c <= col + 1; c++) {
-      if ((r !== row || c !== col) && r >= 0 && r < N && c >= 0 && c < N) out.push(r * N + c);
-    }
-  }
-  return out;
-}
-export const adjacent = (a: number, b: number): boolean =>
-  a !== b && Math.abs(Math.floor(a / N) - Math.floor(b / N)) <= 1 && Math.abs((a % N) - (b % N)) <= 1;
-
-// The neighbours of `id` that count as occupied for a building held by
-// `holder`: every running building, and every running park someone else
-// placed (docs/adr/0007: a park never counts for its placer's own building).
-// `building(n)` says whether a building runs on n; `parkBy(n)` names the
-// placer of a park running on n, or null.
-export function occupiedAround(
-  id: number,
-  holder: string,
-  building: (n: number) => boolean,
-  parkBy: (n: number) => string | null,
-): number[] {
-  return neighbourIds(id).filter((n) => {
-    if (building(n)) return true;
-    const by = parkBy(n);
-    return by !== null && by !== holder;
-  });
-}
-
-// The zone terms of the building on `id` held by `holder` (docs/adr/0009):
-// its own zone's self term plus what each adjacent building held by someone
-// else gives it, gifts capped. `at(n)` is the running building on n (its
-// holder and zone), or null. Parks have no zone and give nothing here.
-export function zoneTermsAround(
-  id: number,
-  holder: string,
-  own: string,
-  at: (n: number) => { pid: string; zone: string } | null,
-): number {
-  const received: string[] = [];
-  for (const n of neighbourIds(id)) {
-    const b = at(n);
-    if (b !== null && b.pid !== holder) received.push(b.zone);
-  }
-  return zoneBonus(own, received);
-}
-
-// --- districts and mayors (docs/adr/0010) ---
-
-// The district of a plot: nine DISTRICT_SIZE-square blocks, 0..8 row-major.
-// Derived from the plot id, never stored.
-const PER_ROW = N / DISTRICT_SIZE;
-export const district = (id: number): number =>
-  Math.floor(Math.floor(id / N) / DISTRICT_SIZE) * PER_ROW + Math.floor((id % N) / DISTRICT_SIZE);
-export const DISTRICTS = PER_ROW * PER_ROW;
-
-// A district's mayor: the plot of their building, who holds it, and how many
-// other qualifying buildings there are someone else's.
-export type Seat = { district: number; cellId: number; pid: string; others: number };
-
-// Every district's mayor among `buildings` (each a running building's plot,
-// holder and level), by district. A building qualifies at MAYOR_MIN_LEVEL
-// or more. The mayor is the one holder of the highest-level qualifier: two
-// people at the top level is a tie, and a tie is no mayor. They're mayor
-// only over someone: at least one other qualifier held by someone else
-// (mayorBonus is 0 below MAYOR_MIN_OTHERS, so a seat with none isn't one).
-// A holder with several top buildings (impossible with one each) sits on
-// the lowest plot.
-export function seats(buildings: readonly { id: number; pid: string; level: number }[]): Map<number, Seat> {
-  const by = new Map<number, { id: number; pid: string; level: number }[]>();
-  for (const b of buildings) {
-    if (b.level < MAYOR_MIN_LEVEL) continue;
-    const d = district(b.id);
-    by.set(d, [...(by.get(d) ?? []), b]);
-  }
-  const out = new Map<number, Seat>();
-  for (const [d, list] of by) {
-    const top = Math.max(...list.map((b) => b.level));
-    const atTop = list.filter((b) => b.level === top).sort((a, b) => a.id - b.id);
-    if (new Set(atTop.map((b) => b.pid)).size > 1) continue;
-    const pid = atTop[0].pid;
-    const others = list.filter((b) => b.pid !== pid).length;
-    if (mayorBonus(others) === 0) continue;
-    out.set(d, { district: d, cellId: atTop[0].id, pid, others });
-  }
-  return out;
-}
-
-// The mayor's term of the building on `id`, in percentage points: what its
-// seat pays, or 0 if it isn't a mayor's.
-export function mayorTerm(id: number, mayors: Map<number, Seat>): number {
-  const seat = mayors.get(district(id));
-  return seat && seat.cellId === id ? mayorBonus(seat.others) : 0;
-}
-
-// "row 3, column 5", as the page says it. The city log uses the same.
-export const place = (id: number): string => `row ${Math.floor(id / N) + 1}, column ${(id % N) + 1}`;
-
-// --- income, integrated piecewise ---
-
-// `zone` is fixed over any interval integrate() sees: a rezone settles
-// everyone first (docs/adr/0009), so it's a cut point by construction.
-type Building = { id: number; pid: string; label: string; level: number; end: number; pending: number; settled: number; zone?: string };
-// A park's running time, [start, end), and who placed it.
-export type ParkSpan = { id: number; by: string; start: number; end: number };
-type Projection = {
-  pending: Map<number, number>; // still standing at `now`
-  expired: (Expiry & { endMs: number })[];
-  earned: Map<string, number>; // cents earned per pid over the interval
-};
-
-// Every building's income from its settled_at up to `now`. Rates depend on
-// who is next to whom, and between actions that changes only when a lease
-// ends or a park starts or ends (docs/adr/0007), so the time is cut at each
-// of those in (settled_at, now): each piece is earned at the rates that held
-// over it, then the leases ending there are let go. A park counts over a
-// piece if it runs for the whole of it, and never for its placer's own
-// building. A building stops earning at its own lease end and at the 4-hour
-// cap. Zones (docs/adr/0009) add their terms at each piece from the
-// buildings still standing over it, and so do mayors (docs/adr/0010): a
-// seat depends only on which buildings stand and their levels, and a level
-// changes only at an upgrade, which settles first. Pure: the caller writes the result
-// (settle) or only reads it (me).
-export function integrate(buildings: Building[], now: number, parks: ParkSpan[] = []): Projection {
-  const live = new Map(buildings.map((b) => [b.id, b]));
-  const pending = new Map(buildings.map((b) => [b.id, b.pending]));
-  const earned = new Map<string, number>();
-  const expired: Projection["expired"] = [];
-  if (buildings.length === 0) return { pending, expired, earned };
-
-  // Lets go of every lease ended at or before `x` (a lease ending exactly
-  // now has ended), in the order they ended.
-  const endBy = (x: number): void => {
-    for (const b of [...live.values()].filter((b) => b.end <= x).sort((p, q) => p.end - q.end || p.id - q.id)) {
-      live.delete(b.id);
-      expired.push({ cellId: b.id, pid: b.pid, label: b.label, at: iso(b.end), endMs: b.end, pendingCents: pending.get(b.id)! });
-      pending.delete(b.id);
-    }
-  };
-  let t = Math.min(...buildings.map((b) => b.settled));
-  endBy(t);
-  const times = [...buildings.map((b) => b.end), ...parks.flatMap((p) => [p.start, p.end])];
-  const cuts = [...new Set(times.filter((e) => e > t && e < now)), now].sort((a, b) => a - b);
-  for (const cut of cuts) {
-    if (cut > t) {
-      // Over [t, cut] nobody arrives or leaves and no park starts or ends,
-      // so every rate is fixed.
-      const parkBy = new Map<number, string>();
-      for (const p of parks) if (p.start <= t && p.end > t) parkBy.set(p.id, p.by);
-      const mayors = seats([...live.values()]);
-      for (const b of live.values()) {
-        const from = Math.max(t, b.settled);
-        if (from >= cut) continue;
-        const n = occupiedAround(b.id, b.pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length;
-        const bonus = zoneTermsAround(b.id, b.pid, b.zone ?? "civic", (id) => {
-          const x = live.get(id);
-          return x ? { pid: x.pid, zone: x.zone ?? "civic" } : null;
-        }) + mayorTerm(b.id, mayors);
-        const before = pending.get(b.id)!;
-        const after = accrue(before, rate(b.level, n, bonus), cut - from);
-        pending.set(b.id, after);
-        earned.set(b.pid, (earned.get(b.pid) ?? 0) + after - before);
-      }
-      t = cut;
-    }
-    endBy(cut);
-  }
-  return { pending, expired, earned };
-}
-
-// Each step runs once, in order, in its own transaction, and PRAGMA
-// user_version records how many have run. Production holds real claims, so a
-// step runs against whatever is there, never an empty file. Never edit a
-// committed step: add a new one.
-const MIGRATIONS = [
-  // 1. Crit 8's schema. IF NOT EXISTS because crit 8 created it without
-  // recording a version, so production arrives here at version 0 with the
-  // table already in place.
-  `CREATE TABLE IF NOT EXISTS cells (
-     id         INTEGER PRIMARY KEY,
-     claimer_id TEXT,
-     label      TEXT,
-     claimed_at TEXT
-   );
-   CREATE UNIQUE INDEX IF NOT EXISTS one_tile_each ON cells(claimer_id)
-     WHERE claimer_id IS NOT NULL;`,
-
-  // 2. Crit 9: dormancy and displacement. Existing claims count as last seen
-  // when they were made.
-  `ALTER TABLE cells ADD COLUMN last_seen_at TEXT;
-   UPDATE cells SET last_seen_at = claimed_at WHERE claimer_id IS NOT NULL;
-   CREATE TABLE displaced (
-     claimer_id   TEXT PRIMARY KEY,
-     label        TEXT NOT NULL,
-     cell_id      INTEGER NOT NULL,
-     displaced_at TEXT NOT NULL
-   );`,
-
-  // 3. Crit 10 (week 11): landmarks, docs/adr/0004. Nothing to backfill: a
-  // tower already standing at 8 is recorded by the first raise(). One row
-  // per cell ever, held by the unique index as well as the code.
-  `CREATE TABLE landmarks (
-     id        INTEGER PRIMARY KEY,
-     cell_id   INTEGER,
-     label     TEXT,
-     raisers   TEXT,
-     raised_at TEXT
-   );
-   CREATE UNIQUE INDEX one_landmark_each ON landmarks(cell_id);`,
-
-  // 4. The city economy, docs/adr/0005. Players get wallets, plots get a
-  // building and a lease, and a public city log begins.
-  //
-  // Live data: every plot held when this runs becomes a level-1 building
-  // whose ownership, settlement and 24-hour lease start now, so nobody loses
-  // a plot on deploy (a tile that was dormant is simply held again). Each
-  // holder gets a wallet of 100 coins under their label. The numbers here are
-  // written out, not read from src/economy.ts: this step is a record of what
-  // was done once, and must not change if the game's numbers do.
-  //
-  // Kept but unused from here on, rather than dropped: cells.last_seen_at
-  // (dormancy is gone; nothing reads or writes it) and the displaced table
-  // (nobody is displaced any more). Dropping either gains nothing and would
-  // lose history from production.
-  //
-  // players: earned_cents counts every cent a building ever earned its
-  // owner, and seen_at/seen_earned_cents what it was when they were last
-  // here, so a visit can say what they earned while away. lease_lost_at is
-  // set when a lease ends and cleared once they've been told.
-  `CREATE TABLE players (
-     pid               TEXT PRIMARY KEY,
-     label             TEXT,
-     coins             INTEGER NOT NULL DEFAULT 100 CHECK (coins >= 0),
-     unclaimed_cents   INTEGER NOT NULL DEFAULT 0 CHECK (unclaimed_cents >= 0),
-     created_at        TEXT,
-     last_relocated_at TEXT,
-     last_helped_at    TEXT,
-     earned_cents      INTEGER NOT NULL DEFAULT 0,
-     seen_at           TEXT,
-     seen_earned_cents INTEGER NOT NULL DEFAULT 0,
-     lease_lost_at     TEXT
-   );
-   ALTER TABLE cells ADD COLUMN level INTEGER;
-   ALTER TABLE cells ADD COLUMN lease_ends_at TEXT;
-   ALTER TABLE cells ADD COLUMN owned_since TEXT;
-   ALTER TABLE cells ADD COLUMN pending_cents INTEGER NOT NULL DEFAULT 0;
-   ALTER TABLE cells ADD COLUMN settled_at TEXT;
-   CREATE TABLE events (
-     id      INTEGER PRIMARY KEY,
-     type    TEXT,
-     text    TEXT,
-     cell_id INTEGER,
-     at      TEXT
-   );
-   UPDATE cells SET
-     level = 1,
-     owned_since = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-     settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-     lease_ends_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+24 hours'),
-     pending_cents = 0
-   WHERE claimer_id IS NOT NULL;
-   INSERT OR IGNORE INTO players (pid, label, coins, created_at, seen_at)
-     SELECT claimer_id, label, 100, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     FROM cells WHERE claimer_id IS NOT NULL;`,
-
-  // 5. Landmark tiers, docs/adr/0006: bronze at 3 occupied neighbours,
-  // silver at 5, gold at 8. Every row before this was raised at 8, so the
-  // column's default makes each one gold. One row per (cell, tier) from
-  // here, not per cell. A cell's tiers are always a prefix of bronze,
-  // silver, gold, so each gold row gets its silver and bronze written in,
-  // with the same names and time. The tier names are written out here, not
-  // read from src/economy.ts: this step is a record of what was done once.
-  `ALTER TABLE landmarks ADD COLUMN tier TEXT NOT NULL DEFAULT 'gold';
-   DROP INDEX one_landmark_each;
-   CREATE UNIQUE INDEX one_landmark_per_tier ON landmarks(cell_id, tier);
-   INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at, tier)
-     SELECT cell_id, label, raisers, raised_at, 'silver' FROM landmarks WHERE tier = 'gold' ORDER BY id;
-   INSERT OR IGNORE INTO landmarks (cell_id, label, raisers, raised_at, tier)
-     SELECT cell_id, label, raisers, raised_at, 'bronze' FROM landmarks WHERE tier = 'gold' ORDER BY id;`,
-
-  // 6. Parks, docs/adr/0007: a public good placed on a free plot, one row
-  // per plot while it runs, deleted once it ends. placed_by is the placer's
-  // pid and never leaves the store. Nothing to backfill, and cells (with its
-  // one_tile_each index) is untouched: a park is not a tile anyone holds.
-  `CREATE TABLE parks (
-     cell_id   INTEGER PRIMARY KEY,
-     placed_by TEXT NOT NULL,
-     label     TEXT,
-     placed_at TEXT NOT NULL,
-     ends_at   TEXT NOT NULL
-   );`,
-
-  // 7. Return the favour, docs/adr/0008: who last helped this player and
-  // when, so helping them back within the hour can pay a bonus once.
-  // helped_by is a pid and never leaves the store. Both nullable, so every
-  // row already there means "no favour open", which is true.
-  `ALTER TABLE players ADD COLUMN helped_by TEXT;
-   ALTER TABLE players ADD COLUMN helped_by_at TEXT;`,
-
-  // 8. Zoning, docs/adr/0009: every plot gets a zone, and every player the
-  // time of their last rezone. Every row already there becomes 'civic', the
-  // neutral zone (0 to itself, 0 to its neighbours), so this step changes
-  // nobody's income; and nobody has a cooldown running. 'civic' is written
-  // out here, not read from src/economy.ts: this step is a record.
-  `ALTER TABLE cells ADD COLUMN zone TEXT NOT NULL DEFAULT 'civic';
-   ALTER TABLE players ADD COLUMN last_rezoned_at TEXT;`,
+// The starters (CLAUDE.md, "Three starters are seeded once"): each recipe's
+// defaults with a few numbers moved so the three plinths don't look like
+// one recipe at rest. Written out as data, not computed at migration time,
+// so a later change to a default can't change what migration 2 meant.
+const STARTERS: { slot: number; title: string; recipe: string; parts: Parts }[] = [
+  {
+    slot: 1,
+    title: "Loop & Lantern",
+    recipe: "loop",
+    parts: {
+      ribbon: { lift: 0, turn: 0, scale: 1, turns: 3, twist: 2.5, radius: 1, colour: 2, speed: 0.4 },
+      cube: { lift: 0, turn: 0, scale: 1, size: 0.8, colour: 3, spin: 0.4, tilt: 30 },
+      spheres: { lift: 0.1, turn: 0, scale: 1, count: 6, orbit: 1.5, size: 0.16, colour: 5, bob: 0.4 },
+    },
+  },
+  {
+    slot: 2,
+    title: "Arch Totem",
+    recipe: "arches",
+    parts: {
+      stack: { lift: 0, turn: 0, scale: 1, segments: 5, height: 0.34, taper: 0.5, colour: 0 },
+      arch: { lift: 0.2, turn: 0, scale: 1, count: 3, span: 1.2, colour: 1, sway: 0.3 },
+      halo: { lift: 0.6, turn: 0, scale: 1, radius: 1, thickness: 0.05, colour: 7, tilt: 40 },
+    },
+  },
+  {
+    slot: 3,
+    title: "Glass Bloom",
+    recipe: "bloom",
+    parts: {
+      petals: { lift: 0, turn: 0, scale: 1, count: 9, curl: 0.65, length: 1, colour: 3 },
+      stem: { lift: 0, turn: 0, scale: 1, height: 1.3, bend: 0.4, colour: 4 },
+      motes: { lift: 0, turn: 0, scale: 1, count: 14, spread: 1.3, colour: 7, drift: 0.5 },
+    },
+  },
 ];
 
-function migrate(db: DatabaseSync): void {
+const sq = (s: string): string => `'${s.replace(/'/g, "''")}'`;
+
+// Numbered migrations; PRAGMA user_version records how many have run. A
+// committed migration is never edited: the volume outlives every deploy.
+export const MIGRATIONS: string[] = [
+  // 1. The museum's schema (docs/adr/0012). A fresh file: Skyline's tables
+  // are left alone in app.db.
+  `CREATE TABLE visitors (
+     pid        TEXT PRIMARY KEY,
+     name       TEXT NOT NULL,
+     colour     INTEGER NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   -- One live draft (archived_at NULL) at most; an empty workbench has none.
+   -- part_authors is JSON: part id -> VisitorView as they were.
+   CREATE TABLE drafts (
+     id             INTEGER PRIMARY KEY,
+     recipe         TEXT NOT NULL,
+     parts          TEXT NOT NULL,
+     revision       INTEGER NOT NULL DEFAULT 1,
+     part_authors   TEXT NOT NULL DEFAULT '{}',
+     based_on       INTEGER REFERENCES versions(id),
+     created_at     TEXT NOT NULL,
+     archived_at    TEXT,
+     archived_by    TEXT,
+     archive_reason TEXT CHECK (archive_reason IN ('replaced', 'cleared'))
+   );
+   CREATE UNIQUE INDEX one_live_draft ON drafts((archived_at IS NULL)) WHERE archived_at IS NULL;
+   CREATE TABLE draft_credits (
+     draft_id INTEGER NOT NULL REFERENCES drafts(id),
+     pid      TEXT NOT NULL,
+     name     TEXT NOT NULL,
+     colour   INTEGER NOT NULL,
+     edits    INTEGER NOT NULL DEFAULT 0,
+     first_at TEXT NOT NULL,
+     PRIMARY KEY (draft_id, pid)
+   );
+   CREATE TABLE leases (
+     part       TEXT PRIMARY KEY,
+     draft_id   INTEGER NOT NULL REFERENCES drafts(id),
+     pid        TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );
+   CREATE TABLE exhibits (
+     id         INTEGER PRIMARY KEY,
+     slot       INTEGER UNIQUE CHECK (slot BETWEEN 1 AND 6),
+     created_at TEXT NOT NULL
+   );
+   CREATE TABLE versions (
+     id               INTEGER PRIMARY KEY,
+     exhibit_id       INTEGER NOT NULL REFERENCES exhibits(id),
+     n                INTEGER NOT NULL,
+     title            TEXT NOT NULL,
+     recipe           TEXT NOT NULL,
+     parts            TEXT NOT NULL,
+     published_by     TEXT,
+     publisher_name   TEXT,
+     publisher_colour INTEGER,
+     published_at     TEXT NOT NULL,
+     restored_from    INTEGER,
+     based_on         INTEGER REFERENCES versions(id),
+     UNIQUE (exhibit_id, n)
+   );
+   CREATE TABLE version_credits (
+     version_id INTEGER NOT NULL REFERENCES versions(id),
+     pid        TEXT NOT NULL,
+     name       TEXT NOT NULL,
+     colour     INTEGER NOT NULL,
+     edits      INTEGER NOT NULL,
+     ord        INTEGER NOT NULL,
+     PRIMARY KEY (version_id, pid)
+   );
+   -- Versions are immutable (CLAUDE.md): no route changes one, and the
+   -- database refuses to as well, credits included.
+   CREATE TRIGGER versions_no_update BEFORE UPDATE ON versions
+     BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
+   CREATE TRIGGER versions_no_delete BEFORE DELETE ON versions
+     BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
+   CREATE TRIGGER version_credits_no_update BEFORE UPDATE ON version_credits
+     BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
+   CREATE TRIGGER version_credits_no_delete BEFORE DELETE ON version_credits
+     BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;`,
+
+  // 2. The three starters in slots 1-3, version 1 each, published by the
+  // museum. A migration, so a redeploy never seeds them again.
+  STARTERS.map(
+    (s, i) =>
+      `INSERT INTO exhibits (id, slot, created_at) VALUES (${i + 1}, ${s.slot}, '2026-10-21T00:00:00.000Z');
+       INSERT INTO versions (id, exhibit_id, n, title, recipe, parts, published_at)
+         VALUES (${i + 1}, ${i + 1}, 1, ${sq(s.title)}, ${sq(s.recipe)}, ${sq(JSON.stringify(s.parts))}, '2026-10-21T00:00:00.000Z');`,
+  ).join("\n"),
+];
+
+export function migrate(db: DatabaseSync, migrations = MIGRATIONS): void {
   const { user_version: from } = db.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (from > MIGRATIONS.length) {
-    throw new Error(`database is at version ${from}, but this code only knows ${MIGRATIONS.length}`);
+  if (from > migrations.length) {
+    throw new Error(`database is at version ${from}, but this code only knows ${migrations.length}`);
   }
-  for (let v = from; v < MIGRATIONS.length; v++) {
+  for (let v = from; v < migrations.length; v++) {
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.exec(MIGRATIONS[v]);
+      db.exec(migrations[v]);
       db.exec(`PRAGMA user_version = ${v + 1}`);
       db.exec("COMMIT");
     } catch (err) {
@@ -512,174 +169,119 @@ function migrate(db: DatabaseSync): void {
   }
 }
 
-type PlayerRow = {
-  pid: string;
-  label: string | null;
-  coins: number;
-  unclaimedCents: number;
-  lastRelocatedAt: string | null;
-  lastHelpedAt: string | null;
-  earnedCents: number;
-  seenAt: string | null;
-  seenEarnedCents: number;
-  leaseLostAt: string | null;
-  helpedBy: string | null;
-  helpedByAt: string | null;
-  lastRezonedAt: string | null;
+export type Visitor = { pid: string; name: string; colour: number };
+
+/** A lease as the server sees it: the holder's pid stays server-side. */
+export type Lease = { part: string; pid: string; holder: VisitorView; expiresAt: string };
+
+/** The museum minus anything that depends on who's asking. */
+export type Snapshot = {
+  draft: DraftView;
+  leases: Lease[];
+  slots: { slot: number; exhibit: ExhibitView | null }[];
+  storeroom: ExhibitView[];
+  archivedDrafts: ArchivedDraftView[];
 };
 
-export function openStore(path: string): Store {
+type Refusal<E extends string> = { ok: false; error: E; message: string };
+const refuse = <E extends string>(error: E, message: string): Refusal<E> => ({ ok: false, error, message });
+
+export type HeldRefusal = Refusal<"lease-held"> & { holder: VisitorView; expiresAt: string };
+
+export type PublishInput = { title: string; slot?: number; exhibitId?: number; replace?: boolean };
+
+export type Store = {
+  /** The visitor for a pid, created with this name and colour if new. */
+  ensureVisitor(pid: string, name: string, colour: number, now: Date): { visitor: Visitor; created: boolean };
+  visitor(pid: string): Visitor | null;
+  rename(pid: string, name: string): { ok: true; from: string };
+  view(pid: string): VisitorView;
+
+  snapshot(now: Date): Snapshot;
+  /** Unexpired leases only: an expired lease is free on every read. */
+  leases(now: Date): Lease[];
+  history(exhibitId: number): ExhibitHistory | null;
+
+  start(pid: string, recipe: string, now: Date): { ok: true; draftId: number } | Refusal<"draft-not-empty" | "bad-request">;
+  remix(
+    pid: string,
+    versionId: number,
+    replace: boolean,
+    now: Date,
+  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty" | "not-found">;
+  restoreArchived(
+    pid: string,
+    archivedId: number,
+    replace: boolean,
+    now: Date,
+  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty" | "not-found">;
+  lease(pid: string, part: string, now: Date): { ok: true; taken: boolean; expiresAt: string } | HeldRefusal | Refusal<"draft-empty" | "bad-request">;
+  release(pid: string, part: string, now: Date): { ok: true; released: boolean };
+  /** Releases every lease a visitor holds (their last stream closed). */
+  releaseAll(pid: string): string[];
+  edit(
+    pid: string,
+    part: string,
+    values: unknown,
+    now: Date,
+  ): { ok: true; revision: number; values: Record<string, number>; taken: boolean } | HeldRefusal | Refusal<"draft-empty" | "bad-request">;
+  clear(pid: string, now: Date): { ok: true; archivedId: number } | HeldRefusal | Refusal<"draft-empty">;
+  publish(
+    pid: string,
+    input: PublishInput,
+    now: Date,
+  ):
+    | { ok: true; exhibitId: number; versionId: number; n: number; stored: number | null }
+    | Refusal<"draft-empty" | "not-found" | "bad-request">
+    | (Refusal<"slot-taken"> & { exhibit: ExhibitView });
+  restoreVersion(pid: string, exhibitId: number, versionId: number, now: Date): { ok: true; versionId: number; n: number; from: number } | Refusal<"not-found">;
+  display(
+    exhibitId: number,
+    slot: number,
+    replace: boolean,
+  ): { ok: true; stored: number | null } | Refusal<"not-found" | "bad-request"> | (Refusal<"slot-taken"> & { exhibit: ExhibitView });
+  storeAway(exhibitId: number): { ok: true; slot: number } | Refusal<"not-found" | "slot-empty">;
+  /** Deletes leases that ran out by `now`, and returns them. */
+  expire(now: Date): Lease[];
+  close(): void;
+};
+
+type DraftRow = {
+  id: number;
+  recipe: string;
+  parts: string;
+  revision: number;
+  part_authors: string;
+  based_on: number | null;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: "replaced" | "cleared" | null;
+};
+type VersionRow = {
+  id: number;
+  exhibit_id: number;
+  n: number;
+  title: string;
+  recipe: string;
+  parts: string;
+  published_by: string | null;
+  publisher_name: string | null;
+  publisher_colour: number | null;
+  published_at: string;
+  restored_from: number | null;
+  based_on: number | null;
+};
+type ExhibitRow = { id: number; slot: number | null };
+type CreditRow = { pid: string; name: string; colour: number; edits: number };
+
+// `leaseMs` is for a test that watches a lease run out; the museum's is LEASE_MS.
+export function openStore(path: string, { leaseMs = LEASE_MS }: { leaseMs?: number } = {}): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   migrate(db);
 
-  // Every tile exists as a row, so a claim is always an UPDATE.
-  const seed = db.prepare("INSERT OR IGNORE INTO cells (id) VALUES (?)");
-  for (let id = 0; id < TILES; id++) seed.run(id);
-
-  // Prepared on first use: tests open stores by the thousand and most never
-  // use most of these.
-  const lazy = (sql: string) => {
-    let stmt: ReturnType<DatabaseSync["prepare"]> | undefined;
-    return () => (stmt ??= db.prepare(sql));
-  };
-
-  const COLUMNS = `id, claimer_id AS claimerId, label, claimed_at AS claimedAt, level,
-    lease_ends_at AS leaseEndsAt, owned_since AS ownedSince, pending_cents AS pendingCents, settled_at AS settledAt, zone`;
-  const selectAll = db.prepare(`SELECT ${COLUMNS} FROM cells ORDER BY id`);
-  const selectHeld = lazy(`SELECT ${COLUMNS} FROM cells WHERE claimer_id IS NOT NULL ORDER BY id`);
-  const selectCell = db.prepare(`SELECT ${COLUMNS} FROM cells WHERE id = ?`);
-  const selectMine = db.prepare(`SELECT ${COLUMNS} FROM cells WHERE claimer_id = ?`);
-  // Nothing to settle: no time has passed for anyone and no lease has ended.
-  // Checked first, so claims made all at one moment (the page's preview tests
-  // make them by the hundred thousand) stay cheap.
-  const settleBounds = db.prepare(
-    "SELECT MIN(settled_at) AS settled, MIN(lease_ends_at) AS ends, COUNT(*) AS held FROM cells WHERE claimer_id IS NOT NULL",
-  );
-  const writePending = lazy("UPDATE cells SET pending_cents = ?, settled_at = ? WHERE id = ?");
-  const free = db.prepare(
-    `UPDATE cells SET claimer_id = NULL, label = NULL, claimed_at = NULL, last_seen_at = NULL, level = NULL,
-       lease_ends_at = NULL, owned_since = NULL, pending_cents = 0, settled_at = NULL, zone = 'civic' WHERE id = ?`,
-  );
-  // The WHERE is the rule: a plot nobody holds (settle() has already freed
-  // every ended lease) and no running park stands on, and its change count
-  // says whether this claim won.
-  const take = db.prepare(
-    `UPDATE cells SET claimer_id = ?, label = ?, claimed_at = ?, level = ?, lease_ends_at = ?, owned_since = ?,
-       pending_cents = ?, settled_at = ?, zone = ? WHERE id = ? AND claimer_id IS NULL
-       AND NOT EXISTS (SELECT 1 FROM parks WHERE parks.cell_id = cells.id AND parks.ends_at > ?)`,
-  );
-  const relabelCell = db.prepare("UPDATE cells SET label = ? WHERE claimer_id = ?");
-  const setLevel = lazy("UPDATE cells SET level = ? WHERE id = ?");
-  const setLease = lazy("UPDATE cells SET lease_ends_at = ? WHERE id = ?");
-  const zeroPending = lazy("UPDATE cells SET pending_cents = 0 WHERE id = ?");
-  const setZone = lazy("UPDATE cells SET zone = ? WHERE id = ?");
-
-  const PLAYER = `pid, label, coins, unclaimed_cents AS unclaimedCents, last_relocated_at AS lastRelocatedAt,
-    last_helped_at AS lastHelpedAt, earned_cents AS earnedCents, seen_at AS seenAt,
-    seen_earned_cents AS seenEarnedCents, lease_lost_at AS leaseLostAt, helped_by AS helpedBy,
-    helped_by_at AS helpedByAt, last_rezoned_at AS lastRezonedAt`;
-  const selectPlayer = db.prepare(`SELECT ${PLAYER} FROM players WHERE pid = ?`);
-  // A player is a row from their first action on, with the starting coins.
-  // A label typed with a claim is kept on the wallet too.
-  const upsertPlayer = db.prepare(
-    `INSERT INTO players (pid, label, coins, created_at, seen_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(pid) DO UPDATE SET label = COALESCE(excluded.label, players.label)`,
-  );
-  const addCoins = lazy("UPDATE players SET coins = coins + ? WHERE pid = ?");
-  const loseLease = lazy(
-    "UPDATE players SET unclaimed_cents = unclaimed_cents + ?, lease_lost_at = ? WHERE pid = ?",
-  );
-  const addEarned = lazy("UPDATE players SET earned_cents = earned_cents + ? WHERE pid = ?");
-  const payOut = lazy("UPDATE players SET coins = coins + ?, unclaimed_cents = ? WHERE pid = ?");
-  const relocated = lazy("UPDATE players SET coins = coins - ?, last_relocated_at = ? WHERE pid = ?");
-  const helped = lazy("UPDATE players SET coins = coins + ?, last_helped_at = ? WHERE pid = ?");
-  const owe = lazy("UPDATE players SET helped_by = ?, helped_by_at = ? WHERE pid = ?");
-  const rezoned = lazy("UPDATE players SET coins = coins - ?, last_rezoned_at = ? WHERE pid = ?");
-  const clearLost = lazy("UPDATE players SET lease_lost_at = NULL WHERE pid = ?");
-  const markSeen = lazy(
-    "UPDATE players SET seen_at = ?, seen_earned_cents = earned_cents, lease_lost_at = NULL WHERE pid = ?",
-  );
-
-  const insertEvent = db.prepare("INSERT INTO events (type, text, cell_id, at) VALUES (?, ?, ?, ?)");
-  const selectEvents = lazy(
-    "SELECT id, type, text, cell_id AS cellId, at FROM events ORDER BY at DESC, id DESC LIMIT ?",
-  );
-
-  const selectLandmarks = lazy(
-    "SELECT cell_id AS cellId, tier, label, raisers, raised_at AS raisedAt FROM landmarks ORDER BY id",
-  );
-  const selectRecorded = lazy("SELECT cell_id AS cellId, tier FROM landmarks");
-  // OR IGNORE on the unique (cell, tier): a tower that drops and fills again
-  // records nothing new.
-  const recordLandmark = lazy(
-    "INSERT OR IGNORE INTO landmarks (cell_id, tier, label, raisers, raised_at) VALUES (?, ?, ?, ?, ?)",
-  );
-
-  const PARK = "cell_id AS cellId, placed_by AS placedBy, label, placed_at AS placedAt, ends_at AS endsAt";
-  const selectParks = db.prepare(`SELECT ${PARK} FROM parks ORDER BY cell_id`);
-  const selectParkAt = lazy(`SELECT ${PARK} FROM parks WHERE cell_id = ? AND ends_at > ?`);
-  const countParks = lazy("SELECT COUNT(*) AS n FROM parks WHERE placed_by = ? AND ends_at > ?");
-  const insertPark = lazy("INSERT INTO parks (cell_id, placed_by, label, placed_at, ends_at) VALUES (?, ?, ?, ?, ?)");
-  const endParks = db.prepare(`DELETE FROM parks WHERE ends_at <= ? RETURNING ${PARK}`);
-  const parkCharge = lazy("UPDATE players SET coins = coins - ? WHERE pid = ?");
-
-  let expiredSince: Expiry[] = [];
-  // The mayors elect() last saw, by district: pid and label only.
-  let seated = new Map<number, { pid: string; label: string }>();
-  let parksEndedSince: ParkEnd[] = [];
-  const spans = (parks: Park[]): ParkSpan[] =>
-    parks.map((p) => ({ id: p.cellId, by: p.placedBy, start: Date.parse(p.placedAt), end: Date.parse(p.endsAt) }));
-
-  const buildingsOf = (rows: Tile[]): Building[] =>
-    rows.map((t) => ({
-      id: t.id,
-      pid: t.claimerId!,
-      label: t.label ?? "",
-      level: t.level ?? 1,
-      // a held row with no lease (none should exist after migration 4) has ended
-      end: t.leaseEndsAt ? Date.parse(t.leaseEndsAt) : 0,
-      pending: t.pendingCents,
-      settled: t.settledAt ? Date.parse(t.settledAt) : t.leaseEndsAt ? Date.parse(t.leaseEndsAt) : 0,
-      zone: t.zone,
-    }));
-
-  // In a transaction the caller holds. Income first, while every park that
-  // ran in the interval is still there to count; then parks that ended by
-  // `now` are deleted, since every building is settled past their end.
-  function settleIn(now: Date): void {
-    settleIncome(now);
-    const at = now.toISOString();
-    for (const p of (endParks.all(at) as Park[]).sort((a, b) => a.endsAt.localeCompare(b.endsAt) || a.cellId - b.cellId)) {
-      insertEvent.run("park-end", `${p.label ?? ""}'s park ended at ${place(p.cellId)}`, p.cellId, p.endsAt);
-      parksEndedSince.push({ cellId: p.cellId, pid: p.placedBy, label: p.label ?? "", at: p.endsAt });
-    }
-  }
-
-  function settleIncome(now: Date): void {
-    const ms = now.getTime();
-    const b = settleBounds.get() as { settled: string | null; ends: string | null; held: number };
-    if (b.held === 0) return;
-    if (b.settled !== null && Date.parse(b.settled) >= ms && b.ends !== null && Date.parse(b.ends) > ms) return;
-
-    const held = buildingsOf(selectHeld().all() as Tile[]);
-    const p = integrate(held, ms, spans(selectParks.all() as Park[]));
-    // settled_at never moves backwards, even for a clock that does
-    const settled = new Map(held.map((h) => [h.id, h.settled]));
-    for (const [id, cents] of p.pending) writePending().run(cents, iso(Math.max(ms, settled.get(id)!)), id);
-    for (const [pid, cents] of p.earned) if (cents > 0) addEarned().run(cents, pid);
-    for (const e of p.expired) {
-      free.run(e.cellId);
-      upsertPlayer.run(e.pid, e.label, STARTING_COINS, e.at, e.at);
-      loseLease().run(e.pendingCents, e.at, e.pid);
-      insertEvent.run("expire", `${e.label}'s lease ended at ${place(e.cellId)}`, e.cellId, e.at);
-      expiredSince.push({ cellId: e.cellId, pid: e.pid, label: e.label, at: e.at, pendingCents: e.pendingCents });
-    }
-  }
-
-  // One BEGIN IMMEDIATE per action: settle, check, change. A refusal still
-  // commits the settlement (it's true either way) but changes nothing else.
   function tx<T>(fn: () => T): T {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -692,378 +294,379 @@ export function openStore(path: string): Store {
     }
   }
 
-  const ensure = (pid: string, label: string | null, now: Date): void => {
-    const at = now.toISOString();
-    upsertPlayer.run(pid, label, STARTING_COINS, at, at);
+  const q = {
+    visitor: db.prepare("SELECT pid, name, colour FROM visitors WHERE pid = ?"),
+    insertVisitor: db.prepare("INSERT OR IGNORE INTO visitors (pid, name, colour, created_at) VALUES (?, ?, ?, ?)"),
+    rename: db.prepare("UPDATE visitors SET name = ? WHERE pid = ?"),
+    live: db.prepare("SELECT * FROM drafts WHERE archived_at IS NULL"),
+    draft: db.prepare("SELECT * FROM drafts WHERE id = ?"),
+    insertDraft: db.prepare("INSERT INTO drafts (recipe, parts, part_authors, based_on, created_at) VALUES (?, ?, ?, ?, ?)"),
+    archive: db.prepare("UPDATE drafts SET archived_at = ?, archived_by = ?, archive_reason = ? WHERE id = ? AND archived_at IS NULL"),
+    setParts: db.prepare("UPDATE drafts SET parts = ?, part_authors = ?, revision = revision + 1 WHERE id = ?"),
+    archived: db.prepare("SELECT * FROM drafts WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC LIMIT ?"),
+    draftCredits: db.prepare("SELECT pid, name, colour, edits FROM draft_credits WHERE draft_id = ? ORDER BY first_at, rowid"),
+    credit: db.prepare(
+      `INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) VALUES (?, ?, ?, ?, 1, ?)
+       ON CONFLICT (draft_id, pid) DO UPDATE SET edits = edits + 1, name = excluded.name, colour = excluded.colour`,
+    ),
+    copyCredits: db.prepare(
+      "INSERT INTO draft_credits (draft_id, pid, name, colour, edits, first_at) SELECT ?, pid, name, colour, edits, first_at FROM draft_credits WHERE draft_id = ?",
+    ),
+    leases: db.prepare("SELECT part, pid, expires_at FROM leases WHERE expires_at > ? ORDER BY part"),
+    lease: db.prepare("SELECT part, pid, expires_at FROM leases WHERE part = ? AND expires_at > ?"),
+    setLease: db.prepare(
+      "INSERT INTO leases (part, draft_id, pid, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (part) DO UPDATE SET draft_id = excluded.draft_id, pid = excluded.pid, expires_at = excluded.expires_at",
+    ),
+    dropLease: db.prepare("DELETE FROM leases WHERE part = ? AND pid = ?"),
+    dropLeasesOf: db.prepare("DELETE FROM leases WHERE pid = ? RETURNING part"),
+    dropAllLeases: db.prepare("DELETE FROM leases"),
+    expired: db.prepare("DELETE FROM leases WHERE expires_at <= ? RETURNING part, pid, expires_at"),
+    exhibit: db.prepare("SELECT id, slot FROM exhibits WHERE id = ?"),
+    inSlot: db.prepare("SELECT id, slot FROM exhibits WHERE slot = ?"),
+    onDisplay: db.prepare("SELECT id, slot FROM exhibits WHERE slot IS NOT NULL ORDER BY slot"),
+    storeroom: db.prepare(
+      "SELECT e.id, e.slot FROM exhibits e WHERE e.slot IS NULL ORDER BY (SELECT MAX(v.published_at) FROM versions v WHERE v.exhibit_id = e.id) DESC, e.id DESC",
+    ),
+    insertExhibit: db.prepare("INSERT INTO exhibits (slot, created_at) VALUES (?, ?)"),
+    setSlot: db.prepare("UPDATE exhibits SET slot = ? WHERE id = ?"),
+    version: db.prepare("SELECT * FROM versions WHERE id = ?"),
+    latest: db.prepare("SELECT * FROM versions WHERE exhibit_id = ? ORDER BY n DESC LIMIT 1"),
+    versionsOf: db.prepare("SELECT * FROM versions WHERE exhibit_id = ? ORDER BY n DESC"),
+    countOf: db.prepare("SELECT COUNT(*) AS c FROM versions WHERE exhibit_id = ?"),
+    insertVersion: db.prepare(
+      `INSERT INTO versions (exhibit_id, n, title, recipe, parts, published_by, publisher_name, publisher_colour, published_at, restored_from, based_on)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    versionCredits: db.prepare("SELECT pid, name, colour, edits FROM version_credits WHERE version_id = ? ORDER BY ord"),
+    insertVersionCredit: db.prepare("INSERT INTO version_credits (version_id, pid, name, colour, edits, ord) VALUES (?, ?, ?, ?, ?, ?)"),
   };
-  const playerOf = (pid: string): PlayerRow | undefined => selectPlayer.get(pid) as PlayerRow | undefined;
-  const mineOf = (pid: string): Tile | undefined => selectMine.get(pid) as Tile | undefined;
-  const label = (pid: string, cell: Tile): string => cell.label ?? playerOf(pid)?.label ?? "";
-  const ago = (when: string | null, now: Date): number => (when === null ? Infinity : now.getTime() - Date.parse(when));
-  // The checks above take's WHERE should make it always win; if it ever
-  // doesn't, the whole action rolls back rather than half-move someone.
-  const took = (changes: number | bigint): void => {
-    if (Number(changes) !== 1) throw new Error("claim lost a plot its checks said was free");
+
+  const visitorOf = (pid: string): Visitor | null => (q.visitor.get(pid) as Visitor | undefined) ?? null;
+  const viewOf = (pid: string): VisitorView => {
+    const v = visitorOf(pid);
+    return { tag: tagOf(pid), name: v?.name ?? "Someone", colour: v?.colour ?? 0 };
   };
+  const credits = (rows: CreditRow[]): Credit[] => rows.map((r) => ({ tag: tagOf(r.pid), name: r.name, colour: r.colour, edits: r.edits }));
+  const liveDraft = (): DraftRow | null => (q.live.get() as DraftRow | undefined) ?? null;
+  const versionRow = (id: number): VersionRow | null => (q.version.get(id) as VersionRow | undefined) ?? null;
+
+  function basedOn(versionId: number | null): VersionView["basedOn"] {
+    if (versionId === null) return null;
+    const v = versionRow(versionId);
+    return v ? { exhibitId: v.exhibit_id, versionId: v.id, title: v.title, n: v.n } : null;
+  }
+
+  function versionView(v: VersionRow): VersionView {
+    return {
+      id: v.id,
+      exhibitId: v.exhibit_id,
+      n: v.n,
+      title: v.title,
+      recipe: v.recipe,
+      parts: JSON.parse(v.parts) as Parts,
+      contributors: credits(q.versionCredits.all(v.id) as CreditRow[]),
+      publishedBy: v.published_by === null ? null : { tag: tagOf(v.published_by), name: v.publisher_name ?? "", colour: v.publisher_colour ?? 0 },
+      publishedAt: v.published_at,
+      restoredFrom: v.restored_from,
+      basedOn: basedOn(v.based_on),
+    };
+  }
+
+  function exhibitView(e: ExhibitRow): ExhibitView {
+    const latest = q.latest.get(e.id) as VersionRow;
+    const { c } = q.countOf.get(e.id) as { c: number };
+    return { id: e.id, slot: e.slot, latest: versionView(latest), versionCount: c };
+  }
+
+  const EMPTY: DraftView = { id: 0, recipe: null, parts: null, revision: 0, partAuthors: {}, contributors: [], basedOn: null };
+
+  function draftView(d: DraftRow | null): DraftView {
+    if (!d) return EMPTY;
+    return {
+      id: d.id,
+      recipe: d.recipe,
+      parts: JSON.parse(d.parts) as Parts,
+      revision: d.revision,
+      partAuthors: JSON.parse(d.part_authors) as Record<string, VisitorView>,
+      contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
+      basedOn: basedOn(d.based_on),
+    };
+  }
+
+  function leaseView(row: { part: string; pid: string; expires_at: string }): Lease {
+    return { part: row.part, pid: row.pid, holder: viewOf(row.pid), expiresAt: row.expires_at };
+  }
+  const heldBy = (part: string, now: Date): Lease | null => {
+    const row = q.lease.get(part, now.toISOString()) as { part: string; pid: string; expires_at: string } | undefined;
+    return row ? leaseView(row) : null;
+  };
+  const held = (l: Lease): HeldRefusal => ({
+    ok: false,
+    error: "lease-held",
+    message: `${l.holder.name} is shaping this part`,
+    holder: l.holder,
+    expiresAt: l.expiresAt,
+  });
+
+  // Archive the live draft (if any) and drop its leases. Inside a caller's
+  // transaction: replacing archives first, in the same transaction.
+  function archiveLive(pid: string, reason: "replaced" | "cleared", now: Date): number | null {
+    const d = liveDraft();
+    if (!d) return null;
+    q.archive.run(now.toISOString(), pid, reason, d.id);
+    q.dropAllLeases.run();
+    return d.id;
+  }
+
+  // Put a new live draft on the bench, archiving the old one first when
+  // `replace` says so.
+  function bench(
+    pid: string,
+    replace: boolean,
+    now: Date,
+    make: () => number,
+  ): { ok: true; draftId: number; archivedId: number | null } | Refusal<"draft-not-empty"> {
+    if (liveDraft() && !replace) return refuse("draft-not-empty", "The workbench already holds a sculpture");
+    const archivedId = archiveLive(pid, "replaced", now);
+    return { ok: true, draftId: make(), archivedId };
+  }
+
+  const partOf = (recipe: string, part: string): boolean => Object.hasOwn(RECIPES[recipe]?.parts ?? {}, part);
+
+  // Who holds a slot, for a slot-taken refusal.
+  function slotTaken(slot: number): (Refusal<"slot-taken"> & { exhibit: ExhibitView }) | null {
+    const there = q.inSlot.get(slot) as ExhibitRow | undefined;
+    if (!there) return null;
+    const exhibit = exhibitView(there);
+    return { ok: false, error: "slot-taken", message: `Slot ${slot} holds "${exhibit.latest.title}"`, exhibit };
+  }
+
+  function addVersion(
+    exhibitId: number,
+    pid: string,
+    v: { title: string; recipe: string; parts: string; restoredFrom: number | null; basedOn: number | null },
+    creditRows: CreditRow[],
+    now: Date,
+  ): { versionId: number; n: number } {
+    const { c } = q.countOf.get(exhibitId) as { c: number };
+    const n = c + 1;
+    const me = viewOf(pid);
+    const { lastInsertRowid } = q.insertVersion.run(
+      exhibitId,
+      n,
+      v.title,
+      v.recipe,
+      v.parts,
+      pid,
+      me.name,
+      me.colour,
+      now.toISOString(),
+      v.restoredFrom,
+      v.basedOn,
+    );
+    const versionId = Number(lastInsertRowid);
+    creditRows.forEach((r, i) => q.insertVersionCredit.run(versionId, r.pid, r.name, r.colour, r.edits, i));
+    return { versionId, n };
+  }
+
+  const leasesAt = (now: Date): Lease[] =>
+    (q.leases.all(now.toISOString()) as { part: string; pid: string; expires_at: string }[]).map(leaseView);
 
   return {
-    tiles: () => selectAll.all() as Tile[],
-
-    settle: (now) => tx(() => settleIn(now)),
-
-    takeExpired() {
-      const out = expiredSince;
-      expiredSince = [];
-      return out;
-    },
-
-    takeParksEnded() {
-      const out = parksEndedSince;
-      parksEndedSince = [];
-      return out;
-    },
-
-    parks: () => selectParks.all() as Park[],
-
-    // Checked in this order: your land, the plot, your running parks, your
-    // coins. Settled first, so a park that ended is gone and its plot free.
-    park(pid, cellId, now) {
-      return tx((): ParkResult => {
-        settleIn(now);
-        const mine = mineOf(pid);
-        if (!mine) return "no-land";
-        const at = now.toISOString();
-        const target = selectCell.get(cellId) as Tile | undefined;
-        if (!target || target.claimerId !== null || selectParkAt().get(cellId, at) !== undefined) return "taken";
-        if ((countParks().get(pid, at) as { n: number }).n >= PARK_LIMIT) return "park-limit";
-        const player = playerOf(pid);
-        if (!player || player.coins < PARK_COST) return "coins";
-        const who = label(pid, mine);
-        parkCharge().run(PARK_COST, pid);
-        insertPark().run(cellId, pid, who, at, iso(now.getTime() + PARK_MS));
-        insertEvent.run("park", `${who} opened a park at ${place(cellId)}`, cellId, at);
-        return "parked";
+    ensureVisitor(pid, name, colour, now) {
+      const existing = visitorOf(pid);
+      if (existing) return { visitor: existing, created: false };
+      return tx(() => {
+        const { changes } = q.insertVisitor.run(pid, name, colour, now.toISOString());
+        return { visitor: visitorOf(pid)!, created: Number(changes) > 0 };
       });
     },
-
-    claim(tileId, pid, newLabel, now) {
-      return tx((): ClaimResult => {
-        settleIn(now);
-        const at = now.toISOString();
-        const mine = mineOf(pid);
-        if (mine && mine.id === tileId) {
-          ensure(pid, newLabel, now);
-          relabelCell.run(newLabel, pid);
-          return "renamed";
-        }
-        const target = selectCell.get(tileId) as Tile;
-        if (target.claimerId !== null || selectParkAt().get(tileId, at) !== undefined) return "taken";
-        ensure(pid, newLabel, now);
-        if (!mine) {
-          clearLost().run(pid); // they've chosen a new plot, so "your lease ended" is old news
-          took(take.run(pid, newLabel, at, 1, iso(now.getTime() + LEASE_MS), at, 0, at, "civic", tileId, at).changes);
-          insertEvent.run("claim", `${newLabel} built a ${buildingName(1)} at ${place(tileId)}`, tileId, at);
-          return "claimed";
-        }
-        // A move: the building goes with you, level, lease, ownership start,
-        // uncollected income and zone all kept (docs/adr/0009: the zone is
-        // part of the building, and was paid for).
-        const player = playerOf(pid)!;
-        if (ago(player.lastRelocatedAt, now) < RELOCATE_COOLDOWN_MS) return "cooldown";
-        if (player.coins < RELOCATE_COST) return "coins";
-        free.run(mine.id);
-        took(take.run(pid, newLabel, mine.claimedAt, mine.level, mine.leaseEndsAt, mine.ownedSince, mine.pendingCents, at, mine.zone, tileId, at).changes);
-        relocated().run(RELOCATE_COST, at, pid);
-        insertEvent.run(
-          "relocate",
-          `${newLabel} moved their ${buildingName(mine.level ?? 1)} to ${place(tileId)}`,
-          tileId,
-          at,
-        );
-        return "moved";
+    visitor: visitorOf,
+    rename(pid, name) {
+      return tx(() => {
+        const from = visitorOf(pid)?.name ?? "";
+        q.rename.run(name, pid);
+        return { ok: true as const, from };
       });
     },
+    view: viewOf,
 
-    // Your building's uncollected income plus anything left from an ended
-    // lease, paid as whole coins; the leftover hundredths are kept for next
-    // time. A second collect straight after pays nothing.
-    collect(pid, now) {
-      return tx((): CollectResult => {
-        settleIn(now);
-        const player = playerOf(pid);
-        if (!player) return { paid: 0 };
-        const mine = mineOf(pid);
-        const total = (mine?.pendingCents ?? 0) + player.unclaimedCents;
-        const paid = Math.floor(total / 100);
-        if (paid === 0) return { paid: 0 };
-        if (mine) zeroPending().run(mine.id);
-        payOut().run(paid, total % 100, pid);
-        return { paid };
-      });
-    },
+    leases: leasesAt,
 
-    upgrade(pid, now) {
-      return tx((): UpgradeResult => {
-        settleIn(now);
-        const mine = mineOf(pid);
-        if (!mine) return "no-land";
-        const level = mine.level ?? 1;
-        const cost = upgradeCost(level);
-        if (cost === null || level >= MAX_LEVEL) return "max-level";
-        const player = playerOf(pid);
-        if (!player || player.coins < cost) return "coins";
-        addCoins().run(-cost, pid);
-        setLevel().run(level + 1, mine.id);
-        insertEvent.run(
-          "upgrade",
-          `${label(pid, mine)} upgraded to a ${buildingName(level + 1)} at ${place(mine.id)}`,
-          mine.id,
-          now.toISOString(),
-        );
-        return "upgraded";
-      });
-    },
-
-    renew(pid, hours, now) {
-      return tx((): RenewResult => {
-        settleIn(now);
-        const option = renewal(hours);
-        if (!option) return "hours";
-        const mine = mineOf(pid);
-        if (!mine || !mine.leaseEndsAt || !mine.ownedSince) return "no-land";
-        const choice = renewOptions(new Date(mine.leaseEndsAt), new Date(mine.ownedSince)).find((o) => o.hours === hours)!;
-        if (!choice.allowed) return "max-lease";
-        const player = playerOf(pid);
-        if (!player || player.coins < choice.cost) return "coins";
-        addCoins().run(-choice.cost, pid);
-        setLease().run(choice.endsAt.toISOString(), mine.id);
-        insertEvent.run(
-          "renew",
-          `${label(pid, mine)} renewed their lease at ${place(mine.id)} by ${hours} hours`,
-          mine.id,
-          now.toISOString(),
-        );
-        return "renewed";
-      });
-    },
-
-    help(pid, cellId, now) {
-      return tx((): HelpResult => {
-        settleIn(now);
-        const mine = mineOf(pid);
-        if (!mine) return "no-land";
-        const them = selectCell.get(cellId) as Tile | undefined;
-        if (!them || them.claimerId === null || them.claimerId === pid || !adjacent(mine.id, cellId)) {
-          return "not-neighbour";
-        }
-        const player = playerOf(pid)!;
-        if (ago(player.lastHelpedAt, now) < HELP_COOLDOWN_MS) return "cooldown";
-        const at = now.toISOString();
-        ensure(them.claimerId, them.label, now);
-        // Returning the favour (docs/adr/0008): they helped me within the
-        // window. Read and cleared here, in this transaction, so it pays
-        // once; a return opens no favour back, or a pair could trade the
-        // bonus every hour without either starting an exchange.
-        const returned = player.helpedBy === them.claimerId && ago(player.helpedByAt, now) < RETURN_WINDOW_MS;
-        const bonus = returned ? RETURN_BONUS : 0;
-        addCoins().run(HELP_GIFT + bonus, them.claimerId);
-        helped().run(HELP_REWARD + bonus, at, pid);
-        if (returned) owe().run(null, null, pid);
-        else owe().run(pid, at, them.claimerId);
-        insertEvent.run(
-          "help",
-          returned
-            ? `${label(pid, mine)} returned ${them.label ?? ""}'s help`
-            : `${label(pid, mine)} helped ${them.label ?? ""} at ${place(cellId)}`,
-          cellId,
-          at,
-        );
-        return returned ? "returned" : "helped";
-      });
-    },
-
-    // Checked in this order: your land, the zone, a change at all, the
-    // cooldown, your coins. Settled first: the new zone changes your rate and
-    // every neighbour's, so it applies only from now (a cut point).
-    rezone(pid, zone, now) {
-      return tx((): RezoneResult => {
-        settleIn(now);
-        const mine = mineOf(pid);
-        if (!mine) return { ok: false, reason: "no-land" };
-        if (!isZone(zone)) return { ok: false, reason: "zone" };
-        if (mine.zone === zone) return { ok: false, reason: "same-zone" };
-        const player = playerOf(pid);
-        if (!player) return { ok: false, reason: "no-land" };
-        if (ago(player.lastRezonedAt, now) < REZONE_COOLDOWN_MS) return { ok: false, reason: "cooldown" };
-        if (player.coins < REZONE_COST) return { ok: false, reason: "coins" };
-        const at = now.toISOString();
-        rezoned().run(REZONE_COST, at, pid);
-        setZone().run(zone, mine.id);
-        insertEvent.run("rezone", `${label(pid, mine)} zoned ${zone === "civic" ? "civic" : `a ${zone}`}`, mine.id, at);
-        return { ok: true, zone, from: mine.zone, cellId: mine.id };
-      });
-    },
-
-    me(pid, now) {
-      const player = playerOf(pid);
-      const blank: Me = {
-        coins: STARTING_COINS,
-        pending: 0,
-        rate: 0,
-        cellId: null,
-        level: null,
-        leaseEndsAt: null,
-        ownedSince: null,
-        relocateAt: null,
-        helpAt: null,
-        rezoneAt: null,
-        parks: 0,
-        parkLimit: PARK_LIMIT,
-        returnable: null,
-      };
-      if (!player) return blank;
-      const held = selectHeld().all() as Tile[];
-      const parks = selectParks.all() as Park[];
-      const p = integrate(buildingsOf(held), now.getTime(), spans(parks));
-      const lost = p.expired.filter((e) => e.pid === pid).reduce((sum, e) => sum + e.pendingCents, 0);
-      const mine = held.find((t) => t.claimerId === pid && p.pending.has(t.id));
-      const live = new Set(p.pending.keys());
-      const parkBy = new Map(parks.filter((x) => parkActive(x, now)).map((x) => [x.cellId, x.placedBy]));
-      const n = mine ? occupiedAround(mine.id, pid, (id) => live.has(id), (id) => parkBy.get(id) ?? null).length : 0;
-      const byId = new Map(held.filter((t) => live.has(t.id)).map((t) => [t.id, t]));
-      const bonus = mine
-        ? zoneTermsAround(mine.id, pid, mine.zone, (id) => {
-            const x = byId.get(id);
-            return x ? { pid: x.claimerId!, zone: x.zone } : null;
-          }) + mayorTerm(mine.id, seats([...byId.values()].map((t) => ({ id: t.id, pid: t.claimerId!, level: t.level ?? 1 }))))
-        : 0;
-      const after = (when: string | null, ms: number): string | null => (when === null ? null : iso(Date.parse(when) + ms));
-      // the favour I can return: open, and its helper's building beside mine
-      const helper =
-        mine && player.helpedBy !== null && ago(player.helpedByAt, now) < RETURN_WINDOW_MS
-          ? held.find((t) => t.claimerId === player.helpedBy && live.has(t.id) && adjacent(mine.id, t.id))
-          : undefined;
+    snapshot(now) {
+      const shown = new Map((q.onDisplay.all() as ExhibitRow[]).map((e) => [e.slot!, e]));
       return {
-        coins: player.coins,
-        pending: (mine ? p.pending.get(mine.id)! : 0) + player.unclaimedCents + lost,
-        rate: mine ? rate(mine.level ?? 1, n, bonus) : 0,
-        cellId: mine ? mine.id : null,
-        level: mine ? (mine.level ?? 1) : null,
-        leaseEndsAt: mine?.leaseEndsAt ?? null,
-        ownedSince: mine?.ownedSince ?? null,
-        relocateAt: after(player.lastRelocatedAt, RELOCATE_COOLDOWN_MS),
-        helpAt: after(player.lastHelpedAt, HELP_COOLDOWN_MS),
-        rezoneAt: after(player.lastRezonedAt, REZONE_COOLDOWN_MS),
-        parks: parks.filter((x) => x.placedBy === pid && parkActive(x, now)).length,
-        parkLimit: PARK_LIMIT,
-        returnable: helper ? { cellId: helper.id, until: after(player.helpedByAt, RETURN_WINDOW_MS)! } : null,
+        draft: draftView(liveDraft()),
+        leases: leasesAt(now),
+        slots: Array.from({ length: SLOTS }, (_, i) => {
+          const e = shown.get(i + 1);
+          return { slot: i + 1, exhibit: e ? exhibitView(e) : null };
+        }),
+        storeroom: (q.storeroom.all() as ExhibitRow[]).map(exhibitView),
+        archivedDrafts: (q.archived.all(ARCHIVE_LIST) as DraftRow[]).map((d) => ({
+          id: d.id,
+          recipe: d.recipe,
+          archivedAt: d.archived_at!,
+          reason: d.archive_reason!,
+          archivedBy: d.archived_by === null ? null : viewOf(d.archived_by),
+          contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
+        })),
       };
     },
 
-    visit(pid, now) {
-      return tx((): Visit => {
-        settleIn(now);
-        const player = playerOf(pid);
-        if (!player) return { welcome: null, expired: false };
-        const away = ago(player.seenAt, now);
-        const coins = Math.floor((player.earnedCents - player.seenEarnedCents) / 100);
-        markSeen().run(now.toISOString(), pid);
-        return {
-          welcome: away >= WELCOME_AFTER_MS && coins > 0 ? coins : null,
-          expired: player.leaseLostAt !== null,
-        };
+    history(exhibitId) {
+      const e = q.exhibit.get(exhibitId) as ExhibitRow | undefined;
+      if (!e) return null;
+      return { exhibit: exhibitView(e), versions: (q.versionsOf.all(exhibitId) as VersionRow[]).map(versionView) };
+    },
+
+    start(pid, recipe, now) {
+      if (!Object.hasOwn(RECIPES, recipe)) return refuse("bad-request", "No such recipe");
+      return tx(() => {
+        const out = bench(pid, false, now, () =>
+          Number(q.insertDraft.run(recipe, JSON.stringify(defaultParts(recipe)), "{}", null, now.toISOString()).lastInsertRowid),
+        );
+        return out.ok ? { ok: true as const, draftId: out.draftId } : out;
       });
     },
 
-    seen(pid, now) {
-      tx(() => {
-        settleIn(now);
-        markSeen().run(now.toISOString(), pid);
+    remix(pid, versionId, replace, now) {
+      return tx(() => {
+        const v = versionRow(versionId);
+        if (!v) return refuse("not-found", "No such version");
+        return bench(pid, replace, now, () => Number(q.insertDraft.run(v.recipe, v.parts, "{}", v.id, now.toISOString()).lastInsertRowid));
       });
     },
 
-    label: (pid) => playerOf(pid)?.label ?? null,
-
-    events: (limit) => selectEvents().all(limit) as CityEvent[],
-
-    landmarks: () =>
-      (selectLandmarks().all() as { cellId: number; tier: Tier; label: string; raisers: string; raisedAt: string }[]).map((r) => ({
-        cellId: r.cellId,
-        tier: r.tier,
-        label: r.label,
-        raisers: JSON.parse(r.raisers) as string[],
-        raisedAt: r.raisedAt,
-      })),
-
-    // Not inside each action: the server runs this straight after every
-    // change, in the same synchronous turn, so no other request can come
-    // between the two. A building counts as occupied while its lease runs,
-    // and a park while it runs, for everyone but its placer (ADR 7).
-    // Reaching a tier records every tier below it too (ADR 6), so a cell's
-    // tiers are always a prefix of bronze, silver, gold; gold also needs 3
-    // distinct people round it (ADR 7). What's recorded is read first, so a
-    // quiet broadcast writes nothing. The raisers are those people's labels,
-    // each once: the holder, then the neighbours in board order.
-    raise(now) {
-      const tiles = selectAll.all() as Tile[];
-      const around = (t: Tile | undefined): t is Tile => t !== undefined && isActive(t, now);
-      const parkAt = new Map((selectParks.all() as Park[]).filter((x) => parkActive(x, now)).map((x) => [x.cellId, x]));
-      const recorded = new Set(
-        (selectRecorded().all() as { cellId: number; tier: string }[]).map((r) => `${r.cellId}:${r.tier}`),
-      );
-      const due: Landmark[] = [];
-      for (const tile of tiles) {
-        if (!around(tile)) continue;
-        const counted = occupiedAround(tile.id, tile.claimerId!, (id) => around(tiles[id]), (id) => parkAt.get(id)?.placedBy ?? null);
-        // each counted neighbour as [pid, label]: its holder, or its park's placer
-        const who: [string, string][] = [
-          [tile.claimerId!, tile.label ?? ""],
-          ...counted.map((id): [string, string] =>
-            around(tiles[id]) ? [tiles[id].claimerId!, tiles[id].label ?? ""] : [parkAt.get(id)!.placedBy, parkAt.get(id)!.label ?? ""],
-          ),
-        ];
-        const people = new Map<string, string>();
-        for (const [p, l] of who) if (!people.has(p)) people.set(p, l);
-        for (const tier of tiersReached(counted.length, people.size)) {
-          if (recorded.has(`${tile.id}:${tier}`)) continue;
-          due.push({ cellId: tile.id, tier, label: tile.label ?? "", raisers: [...people.values()], raisedAt: now.toISOString() });
-        }
-      }
-      if (due.length === 0) return [];
-      return tx(() =>
-        due.filter(
-          (l) => Number(recordLandmark().run(l.cellId, l.tier, l.label, JSON.stringify(l.raisers), l.raisedAt).changes) === 1,
-        ),
-      );
-    },
-
-    elect(now, record = true) {
-      const tiles = selectAll.all() as Tile[];
-      const current = seats(tiles.filter((t) => isActive(t, now)).map((t) => ({ id: t.id, pid: t.claimerId!, level: t.level ?? 1 })));
-      const changes: MayorChange[] = [];
-      for (let d = 0; d < DISTRICTS; d++) {
-        const was = seated.get(d) ?? null;
-        const is = current.get(d) ?? null;
-        if ((was?.pid ?? null) === (is?.pid ?? null)) continue;
-        changes.push({
-          district: d,
-          pid: is?.pid ?? null,
-          label: is ? (tiles[is.cellId].label ?? "") : null,
-          cellId: is?.cellId ?? null,
-          from: was?.pid ?? null,
-          fromLabel: was?.label ?? null,
+    restoreArchived(pid, archivedId, replace, now) {
+      return tx(() => {
+        const old = q.draft.get(archivedId) as DraftRow | undefined;
+        if (!old || old.archived_at === null) return refuse("not-found", "No such archived draft");
+        return bench(pid, replace, now, () => {
+          const id = Number(q.insertDraft.run(old.recipe, old.parts, old.part_authors, old.based_on, now.toISOString()).lastInsertRowid);
+          q.copyCredits.run(id, old.id);
+          return id;
         });
-      }
-      seated = new Map([...current].map(([d, x]) => [d, { pid: x.pid, label: tiles[x.cellId].label ?? "" }]));
-      if (record) {
-        const at = now.toISOString();
-        for (const c of changes) {
-          if (c.pid !== null) insertEvent.run("mayor", `${c.label} became mayor of district ${c.district + 1}`, c.cellId, at);
-        }
-      }
-      return changes;
+      });
     },
 
-    close: () => db.close(),
+    lease(pid, part, now) {
+      return tx(() => {
+        const d = liveDraft();
+        if (!d) return refuse("draft-empty", "The workbench is empty");
+        if (!partOf(d.recipe, part)) return refuse("bad-request", "No such part on this sculpture");
+        const current = heldBy(part, now);
+        if (current && current.pid !== pid) return held(current);
+        const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
+        q.setLease.run(part, d.id, pid, expiresAt);
+        return { ok: true as const, taken: !current, expiresAt };
+      });
+    },
+
+    release(pid, part) {
+      return tx(() => ({ ok: true as const, released: Number(q.dropLease.run(part, pid).changes) > 0 }));
+    },
+
+    releaseAll(pid) {
+      return tx(() => (q.dropLeasesOf.all(pid) as { part: string }[]).map((r) => r.part));
+    },
+
+    edit(pid, part, values, now) {
+      return tx(() => {
+        const d = liveDraft();
+        if (!d) return refuse("draft-empty", "The workbench is empty");
+        if (!partOf(d.recipe, part)) return refuse("bad-request", "No such part on this sculpture");
+        const current = heldBy(part, now);
+        if (current && current.pid !== pid) return held(current);
+        const checked = checkEdit(d.recipe, part, values);
+        if (!checked.ok) return refuse("bad-request", checked.reason);
+        const parts = JSON.parse(d.parts) as Parts;
+        parts[part] = { ...parts[part], ...checked.values };
+        // belt and braces: what's stored is always something the page can draw
+        const whole = checkSculpture(d.recipe, parts);
+        if (!whole.ok) return refuse("bad-request", whole.reason);
+        const me = viewOf(pid);
+        const authors = JSON.parse(d.part_authors) as Record<string, VisitorView>;
+        authors[part] = me;
+        q.setParts.run(JSON.stringify(parts), JSON.stringify(authors), d.id);
+        q.credit.run(d.id, pid, me.name, me.colour, now.toISOString());
+        q.setLease.run(part, d.id, pid, new Date(now.getTime() + leaseMs).toISOString());
+        return { ok: true as const, revision: d.revision + 1, values: checked.values, taken: !current };
+      });
+    },
+
+    clear(pid, now) {
+      return tx(() => {
+        if (!liveDraft()) return refuse("draft-empty", "The workbench is already empty");
+        const other = leasesAt(now).find((l) => l.pid !== pid);
+        if (other) return held(other);
+        return { ok: true as const, archivedId: archiveLive(pid, "cleared", now)! };
+      });
+    },
+
+    publish(pid, input, now) {
+      return tx(() => {
+        const d = liveDraft();
+        if (!d) return refuse("draft-empty", "The workbench is empty");
+        const creditRows = q.draftCredits.all(d.id) as CreditRow[];
+        const v = { title: input.title, recipe: d.recipe, parts: d.parts, restoredFrom: null, basedOn: d.based_on };
+        if (input.exhibitId !== undefined) {
+          const e = q.exhibit.get(input.exhibitId) as ExhibitRow | undefined;
+          if (!e) return refuse("not-found", "No such exhibit");
+          const { versionId, n } = addVersion(e.id, pid, v, creditRows, now);
+          return { ok: true as const, exhibitId: e.id, versionId, n, stored: null };
+        }
+        const slot = input.slot!;
+        const taken = slotTaken(slot);
+        if (taken && !input.replace) return taken;
+        // Never silent: the old exhibit moves to the storeroom, all its
+        // versions with it, before the new one takes the slot.
+        if (taken) q.setSlot.run(null, taken.exhibit.id);
+        const exhibitId = Number(q.insertExhibit.run(slot, now.toISOString()).lastInsertRowid);
+        const { versionId, n } = addVersion(exhibitId, pid, v, creditRows, now);
+        return { ok: true as const, exhibitId, versionId, n, stored: taken ? taken.exhibit.id : null };
+      });
+    },
+
+    restoreVersion(pid, exhibitId, versionId, now) {
+      return tx(() => {
+        const v = versionRow(versionId);
+        if (!v || v.exhibit_id !== exhibitId) return refuse("not-found", "No such version of this exhibit");
+        const creditRows = q.versionCredits.all(v.id) as CreditRow[];
+        const out = addVersion(exhibitId, pid, { title: v.title, recipe: v.recipe, parts: v.parts, restoredFrom: v.n, basedOn: v.based_on }, creditRows, now);
+        return { ok: true as const, ...out, from: v.n };
+      });
+    },
+
+    display(exhibitId, slot, replace) {
+      return tx(() => {
+        const e = q.exhibit.get(exhibitId) as ExhibitRow | undefined;
+        if (!e) return refuse("not-found", "No such exhibit");
+        if (e.slot !== null) return refuse("bad-request", `It's already on display in slot ${e.slot}`);
+        const taken = slotTaken(slot);
+        if (taken && !replace) return taken;
+        if (taken) q.setSlot.run(null, taken.exhibit.id);
+        q.setSlot.run(slot, e.id);
+        return { ok: true as const, stored: taken ? taken.exhibit.id : null };
+      });
+    },
+
+    storeAway(exhibitId) {
+      return tx(() => {
+        const e = q.exhibit.get(exhibitId) as ExhibitRow | undefined;
+        if (!e) return refuse("not-found", "No such exhibit");
+        if (e.slot === null) return refuse("slot-empty", "It's already in the storeroom");
+        q.setSlot.run(null, e.id);
+        return { ok: true as const, slot: e.slot };
+      });
+    },
+
+    expire(now) {
+      return tx(() => (q.expired.all(now.toISOString()) as { part: string; pid: string; expires_at: string }[]).map(leaseView));
+    },
+
+    close() {
+      db.close();
+    },
   };
 }

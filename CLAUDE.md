@@ -285,9 +285,10 @@ multiple rooms, leaderboards, economies, rate limiting.
   unknown keys (including `constructor`), non-numbers and out-of-range
   values.
 - **Spec files run in parallel against one app, and there is one shared
-  draft.** Tests that need the workbench run in one file, in sequence
-  (`describe.sequential`), and never assume it starts empty: they clear it
-  first.
+  draft.** Tests that need the workbench run in one file, in sequence, and
+  never assume it starts empty: they clear it first. Vitest 5 dropped
+  `describe.sequential`; tests in one file already run in order, so the
+  file's `describe`s pin `{ concurrent: false }` to keep it that way.
 - **The logs are tested from a server the test starts itself**
   (`PORT=0`, temp `DB_PATH`), since the app under `APP_URL` is a separate
   process.

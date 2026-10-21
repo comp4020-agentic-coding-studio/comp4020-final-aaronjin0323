@@ -3,19 +3,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openStore } from "../src/db.ts";
-import { claimEffects, expiryDrops, line, people, quote, tag } from "../src/log.ts";
+import { line, quote, tag } from "../src/log.ts";
+import { open, post, sleep, type Visitor } from "./helpers.ts";
 
-// Crit 10: the server logs who did what, and at the crit someone narrates two
-// strangers' play from `flyctl logs` alone. The app under APP_URL is a
+// The server logs who did what, one `event key=value` line each, a person as
+// a tag and every typed string JSON-quoted. The app under APP_URL is a
 // separate process (a container in CI) whose stdout the spec can't read, so
-// this file starts its own copy of src/server.ts, on a free port with a
-// throwaway database, and reads what it prints.
+// this file starts its own copy of src/server.ts on a free port with a
+// throwaway database, and reads what it prints. Its own server, so its
+// workbench is its own too.
 
-const MIA = "00000000-0000-4000-8000-00000000017a";
-const KAI = "00000000-0000-4000-8000-0000000004a1";
-const ZED = "00000000-0000-4000-8000-000000000ced";
-const TAG = /^[0-9a-f]{6}$/;
+const MIA: Visitor = { pid: "00000000-0000-4000-8000-00000000017a", cookie: "pid=00000000-0000-4000-8000-00000000017a" };
+const KAI: Visitor = { pid: "00000000-0000-4000-8000-0000000004a1", cookie: "pid=00000000-0000-4000-8000-0000000004a1" };
+const ZED: Visitor = { pid: "00000000-0000-4000-8000-000000000ced", cookie: "pid=00000000-0000-4000-8000-000000000ced" };
 
 let app: ChildProcess;
 let dir: string;
@@ -23,9 +23,9 @@ let base: string;
 let out = "";
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), "skyline-log-"));
+  dir = mkdtempSync(join(tmpdir(), "museum-log-"));
   app = spawn(process.execPath, ["src/server.ts"], {
-    env: { ...process.env, PORT: "0", DB_PATH: join(dir, "app.db"), NODE_ENV: "test" },
+    env: { ...process.env, PORT: "0", DB_PATH: join(dir, "museum.db"), NODE_ENV: "test", LEASE_MS: "300", SWEEP_MS: "100" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   app.stdout!.setEncoding("utf8").on("data", (s: string) => (out += s));
@@ -48,278 +48,105 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const claim = (pid: string, cellId: number, label: string): Promise<Response> =>
-  fetch(new URL("/claim", base), {
-    method: "POST",
-    headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ cellId, label }),
-  });
+const act = (who: Visitor, path: string, body?: unknown, extra?: Record<string, string>) => post(who, path, body, extra, base);
 
-// The log lines that start with `event`, once the server has had a moment to
-// write them.
+// The log lines that start with `event`, once the server has had a moment.
 async function lines(event: string): Promise<string[]> {
-  await new Promise((r) => setTimeout(r, 50));
+  await sleep(50);
   return out.split("\n").filter((l) => l.startsWith(event + " "));
 }
 
-describe("the server log", () => {
-  it("says who claimed which tile, and tells two visitors apart", async () => {
-    expect((await claim(MIA, 5 * 12 + 5, "Mia")).status).toBe(200); // r6c6
-    expect((await claim(KAI, 5 * 12 + 6, "Kai")).status).toBe(200); // r6c7, beside her
-
-    const claims = await lines("claim");
-    expect(claims).toHaveLength(2);
-    const [mia, kai] = claims;
-    expect(mia).toMatch(new RegExp(`^claim who=${tag(MIA)} label="Mia" at=r6c6$`));
-    expect(kai).toMatch(new RegExp(`^claim who=${tag(KAI)} label="Kai" at=r6c7 lifted=${tag(MIA)}:"Mia"$`));
-    expect(tag(MIA)).toMatch(TAG);
-    expect(tag(MIA)).not.toBe(tag(KAI));
+describe("the server log", { concurrent: false }, () => {
+  it("formats key=value, quoting strings and escaping what could fake a line", () => {
+    expect(line("x", { who: { raw: "abc123" }, n: 3, ok: true, name: 'Mia "M"', gone: undefined })).toBe('x who=abc123 n=3 ok=true name="Mia \\"M\\""');
+    expect(quote("a\nb")).toBe('"a\\nb"');
+    expect(quote("a\u2028b\u202eb")).toBe('"a\\u2028b\\u202eb"');
+    expect(JSON.parse(quote("a\u2028b\u202eb"))).toBe("a\u2028b\u202eb");
   });
 
-  it("names a move's old tile, and who a refused claim lost to", async () => {
-    expect((await claim(MIA, 0, "Mia")).status).toBe(200); // moves to r1c1, dropping Kai
-    expect((await claim(KAI, 0, "Kai")).status).toBe(409);
+  it("logs a new visitor, a rename and a page load by tag", async () => {
+    expect((await act(MIA, "/me", { name: "Mia" })).status).toBe(200);
+    const [fresh] = await lines("visitor.new");
+    expect(fresh).toMatch(new RegExp(`^visitor\\.new who=${tag(MIA.pid)} name="[A-Z][a-z]+ [A-Z][a-z]+" colour=\\d$`));
+    expect((await lines("rename"))[0]).toMatch(new RegExp(`^rename who=${tag(MIA.pid)} from="[A-Z][a-z]+ [A-Z][a-z]+" to="Mia"$`));
+  });
 
-    const moved = (await lines("relocate")).at(-1)!;
-    expect(moved).toMatch(new RegExp(`^relocate who=${tag(MIA)} label="Mia" at=r1c1 from=r6c6 dropped=${tag(KAI)}:"Kai"$`));
-    const refused = (await lines("claim.refused")).at(-1)!;
-    expect(refused).toMatch(
-      new RegExp(`^claim.refused who=${tag(KAI)} status=409 reason=taken at=r1c1 label="Kai" held=${tag(MIA)}:"Mia"$`),
+  it("logs a start, an edit and a refused edit naming the holder", async () => {
+    await act(KAI, "/me", { name: "Kai" });
+    expect((await act(MIA, "/draft/start", { recipe: "loop" })).status).toBe(200);
+    expect((await act(MIA, "/draft/edit", { part: "ribbon", values: { turns: 3 } })).status).toBe(200);
+    expect((await act(KAI, "/draft/edit", { part: "ribbon", values: { turns: 4 } })).status).toBe(409);
+    expect((await lines("draft.start"))[0]).toBe(`draft.start who=${tag(MIA.pid)} recipe=loop draft=1`);
+    expect((await lines("edit"))[0]).toBe(`edit who=${tag(MIA.pid)} part=ribbon values={"turns":3} rev=2`);
+    expect((await lines("edit.refused"))[0]).toMatch(
+      new RegExp(`^edit\\.refused who=${tag(KAI.pid)} status=409 error=lease-held holder=${tag(MIA.pid)}:"Mia" message=".+"$`),
     );
   });
 
-  it("logs each economy action by tag: collect, upgrade, renew, help, and each refusal with its status", async () => {
-    const post = (pid: string, path: string, body: object = {}): Promise<Response> =>
-      fetch(new URL(path, base), {
-        method: "POST",
-        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-    expect((await claim(ZED, 1, "Zed")).status).toBe(200); // r1c2, beside Mia at r1c1
-    expect((await post(KAI, "/collect")).status).toBe(200);
-    expect((await post(KAI, "/upgrade")).status).toBe(402);
-    expect((await post(ZED, "/renew", { hours: 6 })).status).toBe(200);
-    expect((await post(ZED, "/help", { cellId: 0 })).status).toBe(200);
-    expect((await post(ZED, "/help", { cellId: 0 })).status).toBe(429);
-    expect((await post(KAI, "/help", { cellId: 0 })).status).toBe(400);
+  it("logs a lease running out on the sweep", async () => {
+    await sleep(600);
+    expect((await lines("lease.expire"))[0]).toMatch(new RegExp(`^lease\\.expire who=${tag(MIA.pid)} part=ribbon at="[^"]+"$`));
+  });
 
-    expect((await lines("collect")).at(-1)).toMatch(new RegExp(`^collect who=${tag(KAI)} paid=\\d+ coins=\\d+$`));
-    expect((await lines("upgrade.refused")).at(-1)).toBe(`upgrade.refused who=${tag(KAI)} status=402 reason=coins`);
-    expect((await lines("renew")).at(-1)).toMatch(new RegExp(`^renew who=${tag(ZED)} at=r1c2 hours=6 until="[^"]+" coins=0$`));
-    expect((await lines("help")).at(-1)).toBe(`help who=${tag(ZED)} at=r1c2 to=r1c1 helped=${tag(MIA)}:"Mia"`);
-    expect((await lines("help.refused")).slice(-2)).toEqual([
-      `help.refused who=${tag(ZED)} status=429 reason=cooldown to=r1c1`,
-      `help.refused who=${tag(KAI)} status=400 reason=not-neighbour to=r1c1`,
+  it("logs a publish and a refused one, with the title quoted", async () => {
+    const title = 'Moon "1"\nfake=line';
+    const bad = await act(MIA, "/publish", { title, slot: 4 });
+    expect(bad.status).toBe(400); // a newline isn't allowed in a title
+    const ok = await act(MIA, "/publish", { title: 'Moon "1" \u202e', slot: 4 });
+    expect(ok.status).toBe(200);
+    const taken = await act(KAI, "/publish", { title: "Mine", slot: 1 });
+    expect(taken.status).toBe(409);
+    const [pub] = await lines("publish");
+    expect(pub).toBe(`publish who=${tag(MIA.pid)} title="Moon \\"1\\" \\u202e" exhibit=4 n=1 slot=4`);
+    expect(out).not.toContain("\nfake=line");
+    expect((await lines("publish.refused")).map((l) => l.split(" message=")[0])).toEqual([
+      `publish.refused who=${tag(MIA.pid)} status=400 error=bad-request`,
+      `publish.refused who=${tag(KAI.pid)} status=409 error=slot-taken`,
     ]);
   });
 
-  it("logs a park by tag, plot and label, and its refusals", async () => {
-    const post = (pid: string, body: object): Promise<Response> =>
-      fetch(new URL("/park", base), {
-        method: "POST",
-        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-    const PIP = "00000000-0000-4000-8000-000000000919";
-    expect((await claim(PIP, 50, "Pip")).status).toBe(200); // r5c3
-    expect((await post(PIP, { cellId: 51 })).status).toBe(200); // r5c4
-    expect((await post(PIP, { cellId: 51 })).status).toBe(409);
-    expect((await lines("park")).at(-1)).toMatch(new RegExp(`^park who=${tag(PIP)} at=r5c4 label="Pip" coins=40$`));
-    expect((await lines("park.refused")).at(-1)).toBe(`park.refused who=${tag(PIP)} status=409 reason=taken at=r5c4`);
-    expect(out).not.toContain(PIP);
+  it("logs restore, store and display", async () => {
+    expect((await act(KAI, "/exhibits/2/restore", { versionId: 2 })).status).toBe(200);
+    expect((await act(KAI, "/exhibits/4/store")).status).toBe(200);
+    expect((await act(KAI, "/exhibits/4/display", { slot: 5 })).status).toBe(200);
+    expect((await lines("restore"))[0]).toBe(`restore who=${tag(KAI.pid)} exhibit=2 from=1 n=2`);
+    expect((await lines("store"))[0]).toBe(`store who=${tag(KAI.pid)} exhibit=4 slot=4`);
+    expect((await lines("display"))[0]).toBe(`display who=${tag(KAI.pid)} exhibit=4 slot=5`);
   });
 
-  it("logs a rezone by tag, plot, zone and the zone it was, and its refusals (docs/adr/0009)", async () => {
-    const post = (pid: string, body: object): Promise<Response> =>
-      fetch(new URL("/rezone", base), {
-        method: "POST",
-        headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-    const ROO = "00000000-0000-4000-8000-000000000a00";
-    expect((await claim(ROO, 70, "Roo")).status).toBe(200); // r6c11
-    expect((await post(ROO, { zone: "factory" })).status).toBe(200);
-    expect((await post(ROO, { zone: "market" })).status).toBe(429);
-    expect((await post(ROO, { zone: "x\nrezone who=000000" })).status).toBe(400);
-    expect((await lines("rezone")).at(-1)).toBe(`rezone who=${tag(ROO)} at=r6c11 zone=factory from=civic coins=60`);
-    expect((await lines("rezone.refused")).slice(-2)).toEqual([
-      `rezone.refused who=${tag(ROO)} status=429 reason=cooldown zone="market"`,
-      `rezone.refused who=${tag(ROO)} status=400 reason=zone zone="x\\nrezone who=000000"`,
-    ]);
-    expect(out.split("\n").filter((l) => l.startsWith("rezone who=000000"))).toHaveLength(0);
-    expect(out).not.toContain(ROO);
+  it("logs a remix that archived the draft, and a clear", async () => {
+    expect((await act(KAI, "/draft/remix", { versionId: 3, replace: true })).status).toBe(200);
+    expect((await act(KAI, "/draft/clear")).status).toBe(200);
+    expect((await lines("draft.remix"))[0]).toBe(`draft.remix who=${tag(KAI.pid)} version=3 draft=2 archived=1`);
+    expect((await lines("draft.clear"))[0]).toBe(`draft.clear who=${tag(KAI.pid)} archived=2`);
   });
 
-  it("logs a stream opening and closing, with the open count", async () => {
-    const controller = new AbortController();
-    const res = await fetch(new URL("/events", base), { headers: { cookie: `pid=${KAI}` }, signal: controller.signal });
-    expect(res.status).toBe(200);
-    expect((await lines("stream.open")).at(-1)).toMatch(new RegExp(`^stream.open who=${tag(KAI)} open=1$`));
-    controller.abort();
-    await new Promise((r) => setTimeout(r, 200));
-    expect((await lines("stream.close")).at(-1)).toMatch(new RegExp(`^stream.close who=${tag(KAI)} open=0 secs=\\d+$`));
-  });
+  it("logs a cross-site POST, and a stream opening and closing with the leases it released", async () => {
+    expect((await act(ZED, "/me", { name: "x" }, { origin: "https://evil.example" })).status).toBe(403);
+    expect((await lines("rename.refused")).at(-1)).toBe(`rename.refused who=${tag(ZED.pid)} status=403 error=cross-origin`);
 
-  it("can't be made to forge a line with a typed label", async () => {
-    const before = out.split("\n").length;
-    const forged = "x\nclaim who=000000 at=r1c1";
-    expect((await claim(KAI, 100, forged)).status).toBe(400); // a control character, so refused
-    await new Promise((r) => setTimeout(r, 50));
-    const added = out.split("\n").slice(before - 1, -1);
-    expect(added).toHaveLength(1);
-    expect(added[0]).toMatch(/^claim\.refused who=[0-9a-f]{6} status=400 reason=label at=r9c5 label="x\\nclaim who=000000 at=r1c1"$/);
-    expect(out.split("\n").filter((l) => l.startsWith("claim who=000000"))).toHaveLength(0);
-  });
-
-  it("never prints a pid, on any path a visitor can take", async () => {
-    // A pid check only covers lines that were printed, so walk every logged
-    // path first: a page load, a stream, a claim, a refusal.
-    for (const pid of [MIA, KAI]) {
-      expect((await fetch(new URL("/", base), { headers: { cookie: `pid=${pid}` } })).status).toBe(200);
-    }
-    await new Promise((r) => setTimeout(r, 50));
-    for (const event of ["page", "stream.open", "stream.close", "claim", "claim.refused", "relocate", "collect", "upgrade.refused", "renew", "help", "help.refused", "park", "park.refused", "rezone", "rezone.refused"]) {
-      expect((await lines(event)).length, `no ${event} line was printed`).toBeGreaterThan(0);
-    }
-    for (const pid of [MIA, KAI, ZED]) {
-      expect(out).not.toContain(pid);
-      // nor a long run of it, in case something prints part of the cookie
-      expect(out).not.toContain(pid.replaceAll("-", "").slice(-12));
-    }
-    expect(out).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-  });
-});
-
-describe("quoting", () => {
-  it("keeps every string on one line, whatever it holds", () => {
-    for (const s of ["a\nb", "a\rb", "a\u2028b", "a\u2029b", 'say "hi"', "back\\slash"]) {
-      const l = line("claim", { label: s });
-      expect(l).not.toMatch(/[\n\r\u2028\u2029]/);
-      expect(JSON.parse(l.slice('claim label='.length))).toBe(s);
-    }
-  });
-
-  it("escapes bidi overrides, so a label can't reorder the line it's on", () => {
-    expect(quote("a\u202eb")).toBe('"a\\u202eb"');
-    // an astral format character (a tag) is escaped as its surrogate pair, so the value still parses
-    expect(quote("a\u{e0041}b")).toBe('"a\\udb40\\udc41b"');
-    expect(JSON.parse(quote("a\u{e0041}b"))).toBe("a\u{e0041}b");
-  });
-});
-
-// Replaced by ADR 5: "names whose dormant tile was taken over" went with
-// dormant tiles. What a claim and an expiry did, by the same height rule:
-describe("what a claim or an expiry did", () => {
-  it("names who a claim lifted, and who a lease ending dropped", () => {
-    const store = openStore(":memory:");
-    try {
-      const t0 = new Date("2026-10-01T10:00:00.000Z");
-      store.claim(0, MIA, "Mia", t0);
-      store.claim(2, KAI, "Kai", t0);
-      const t1 = new Date(t0.getTime() + 60 * 60 * 1000);
-      const before = store.tiles();
-      expect(store.claim(1, "ivy-pid", "Ivy", t1)).toBe("claimed");
-      const did = claimEffects(before, store.tiles(), "ivy-pid", 1, t1);
-      expect(people(did.lifted)).toEqual({ raw: `${tag(MIA)}:"Mia",${tag(KAI)}:"Kai"` });
-      expect(did.from).toBeNull();
-      // Mia's lease ends a day on (Kai's too); Ivy, an hour younger, is who it drops
-      const end = new Date(t0.getTime() + 24 * 60 * 60 * 1000);
-      expect(people(expiryDrops(store.tiles(), 0, end))).toEqual({ raw: `${tag("ivy-pid")}:"Ivy"` });
-    } finally {
-      store.close();
-    }
-  });
-});
-
-// A park ends on the clock (docs/adr/0007), two hours after it's placed, so
-// a server is started on a database whose park ended while it was off: the
-// boot's settlement deletes it, and the line has to be there, without a pid.
-describe("a park ending", () => {
-  it("is logged by plot, tag and label, naming who it stopped lifting", async () => {
-    const d = mkdtempSync(join(tmpdir(), "skyline-park-"));
-    const path = join(d, "app.db");
-    const PIP = "00000000-0000-4000-8000-000000000919";
-    const ROO = "00000000-0000-4000-8000-0000000004a0";
-    const then = new Date(Date.now() - 3 * 60 * 60 * 1000); // placed 3 h ago: ended 1 h ago
-    const s = openStore(path);
-    expect(s.claim(0, PIP, "Pip", then)).toBe("claimed");
-    expect(s.claim(2, ROO, "Roo", then)).toBe("claimed");
-    expect(s.park(PIP, 1, then)).toBe("parked");
+    await act(ZED, "/draft/start", { recipe: "bloom" });
+    const s = await open(ZED, base);
+    await s.first();
+    await act(ZED, "/draft/lease", { part: "stem" });
     s.close();
-    let text = "";
-    const child = spawn(process.execPath, ["src/server.ts"], {
-      env: { ...process.env, PORT: "0", DB_PATH: path, NODE_ENV: "test" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    try {
-      child.stdout!.setEncoding("utf8").on("data", (c: string) => (text += c));
-      child.stderr!.setEncoding("utf8").on("data", (c: string) => (text += c));
-      for (let i = 0; i < 100 && !/^start /m.test(text); i++) await new Promise((r) => setTimeout(r, 50));
-      const ended = text.split("\n").filter((l) => l.startsWith("park.end "));
-      expect(ended, text).toHaveLength(1);
-      expect(ended[0]).toMatch(new RegExp(`^park\\.end at=r1c2 who=${tag(PIP)} label="Pip" ended="[^"]+" dropped=${tag(ROO)}:"Roo"$`));
-      expect(text).not.toContain(PIP);
-      expect(text).not.toContain(ROO);
-    } finally {
-      child.kill("SIGTERM");
-      rmSync(d, { recursive: true, force: true });
-    }
+    await sleep(200);
+    expect((await lines("stream.open")).at(-1)).toMatch(new RegExp(`^stream\\.open who=${tag(ZED.pid)} open=1$`));
+    expect((await lines("stream.close")).at(-1)).toMatch(new RegExp(`^stream\\.close who=${tag(ZED.pid)} open=0 secs=\\d+ released=stem$`));
   });
-});
 
-// A mayor (docs/adr/0010) needs Lv2+ buildings, which take hours of income,
-// so a server is started on a database seeded hours in the past: Kay at Lv3
-// and Mei at Lv2, apart in the centre district (5), so Kay is already mayor
-// at boot. That seat is a baseline, not news; Mei's upgrades then tie him
-// (no mayor) and pass him (Mei is).
-describe("a mayor changing", () => {
-  it("is logged by district, tag and label, with who it was before, never a pid", async () => {
-    const d = mkdtempSync(join(tmpdir(), "skyline-mayor-"));
-    const path = join(d, "app.db");
-    const KAY = "00000000-0000-4000-8000-0000000000ca";
-    const MEI = "00000000-0000-4000-8000-0000000000ae";
-    const then = new Date(Date.now() - 5 * 60 * 60 * 1000);
-    const later = new Date(Date.now() - 60 * 60 * 1000);
-    const s = openStore(path);
-    expect(s.claim(4 * 12 + 4, KAY, "Kay", then)).toBe("claimed"); // r5c5
-    expect(s.claim(7 * 12 + 7, MEI, "Mei", then)).toBe("claimed"); // r8c8
-    s.collect(KAY, later);
-    expect(s.upgrade(KAY, later)).toBe("upgraded");
-    expect(s.upgrade(KAY, later)).toBe("upgraded");
-    s.collect(MEI, later);
-    expect(s.upgrade(MEI, later)).toBe("upgraded");
-    s.close();
-    let text = "";
-    const child = spawn(process.execPath, ["src/server.ts"], {
-      env: { ...process.env, PORT: "0", DB_PATH: path, NODE_ENV: "test" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    try {
-      child.stdout!.setEncoding("utf8").on("data", (c: string) => (text += c));
-      child.stderr!.setEncoding("utf8").on("data", (c: string) => (text += c));
-      for (let i = 0; i < 100 && !/^start port=\d+/m.test(text); i++) await new Promise((r) => setTimeout(r, 50));
-      const url = `http://127.0.0.1:${/^start port=(\d+)/m.exec(text)![1]}`;
-      const as = (pid: string, route: string) =>
-        fetch(new URL(route, url), { method: "POST", headers: { cookie: `pid=${pid}`, "content-type": "application/json", accept: "application/json" }, body: "{}" });
-      const mayorLines = () => text.split("\n").filter((l) => l.startsWith("mayor "));
-      expect(mayorLines(), "Kay's seat at boot is not news").toEqual([]);
-      expect((await as(MEI, "/collect")).status).toBe(200);
-      expect((await as(MEI, "/upgrade")).status).toBe(200); // Lv3: a tie, nobody
-      await new Promise((r) => setTimeout(r, 50));
-      expect(mayorLines()).toEqual([`mayor district=5 who=none from=${tag(KAY)}`]);
-      expect((await as(MEI, "/upgrade")).status).toBe(200); // Lv4: Mei
-      await new Promise((r) => setTimeout(r, 50));
-      expect(mayorLines()).toEqual([`mayor district=5 who=none from=${tag(KAY)}`, `mayor district=5 who=${tag(MEI)} label="Mei" from=none`]);
-      // the city log says it in words, by label
-      const page = await (await fetch(new URL("/", url), { headers: { cookie: `pid=${KAY}` } })).text();
-      expect(page).toContain("Mei became mayor of district 5");
-      expect(page).not.toContain(MEI);
-      expect(page).not.toContain(KAY);
-      expect(text).not.toContain(KAY);
-      expect(text).not.toContain(MEI);
-    } finally {
-      child.kill("SIGTERM");
-      rmSync(d, { recursive: true, force: true });
+  it("never prints a pid, only tags, once every path above has logged", async () => {
+    for (const event of ["start", "visitor.new", "rename", "page", "draft.start", "edit", "edit.refused", "lease", "lease.expire", "publish", "restore", "draft.clear", "stream.open", "stream.close"]) {
+      if (event === "page") {
+        await fetch(base, { headers: { cookie: MIA.cookie } });
+      }
+      expect(await lines(event), `no ${event} line`).not.toEqual([]);
     }
+    for (const v of [MIA, KAI, ZED]) {
+      expect(out).not.toContain(v.pid);
+      expect(out).toContain(tag(v.pid));
+    }
+    // every line is an event name, then key=value fields
+    for (const l of out.trim().split("\n")) expect(l).toMatch(/^[a-z][a-z.-]*( [a-zA-Z]+=\S.*)*$/);
   });
 });
