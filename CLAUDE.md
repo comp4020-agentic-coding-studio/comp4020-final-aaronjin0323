@@ -57,11 +57,22 @@ Settled; change them here first, then in the code.
   numbered 1--6, each playing a saved performance on a loop, and the stage
   at the centre holding the live one. No rooms, no free-roaming avatars.
 - **A performance is a set and a loop of gestures** (ADR 16). The set
-  names the objects (`orbit`: four spheres, a ribbon, a bell); the loop is
-  up to 40 gestures, each at a moment (0 to 30 s) of a 30 s loop. The sets,
-  the gesture shapes and every bound live in `public/stage.js`, the one
-  copy, imported by the server (to refuse) and the page (to play). An
-  out-of-range or unknown value is a `400`, never clamped.
+  names the objects; the loop is up to 40 gestures, each at a moment (0 to
+  30 s) of a 30 s loop. What every set shares (the loop, caps, checking,
+  runs) lives in `public/stage.js` with the registry `SETS`; each set's
+  objects, gesture shapes, bounds and step live in `public/sets/<id>.js`,
+  the one copy, imported by the server (to refuse) and the page (to play).
+  An out-of-range or unknown value is a `400`, never clamped.
+- **Four sets, each a plug-in** (ADR 18): `orbit` (four spheres that fall
+  upward, a ribbon, a bell), `chimes` (a ring of tuned chimes and a
+  striker on a cord), `doors` (two door frames joined to each other, three
+  bouncy balls) and `seesaw` (a plank on a pivot, three stones). A set's
+  look, touch, buttons and sounds live in `public/sets/<id>-view.js`; the
+  scene, page and server ask the set and never name an object. The stage
+  card's set row starts a silent loop on another set, asking first and
+  archiving a loop with gestures (`POST /stage/clear` with `set`). Each new
+  set has one starter performance (migration 4), on a free plinth or in
+  the storeroom.
 - **What happens on the stage is a rule, not a record.** The objects' every
   position at every moment comes from the set, the gestures and the shared
   clock alone, by a fixed 60 Hz step from the start of the loop with no
@@ -69,8 +80,8 @@ Settled; change them here first, then in the code.
   same performance; no frame writes to the server. Held by
   `spec/stage.test.ts`.
 - **The rules use only arithmetic every engine rounds the same.** In
-  `public/stage.js`: + − × ÷ and `Math.sqrt` (exactly rounded by IEEE 754
-  in every browser), never `Math.sin`, `cos`, `pow`, `exp` or `**`, which
+  `public/stage.js` and every rules file in `public/sets/`: + − × ÷ and
+  `Math.sqrt` (exactly rounded by IEEE 754 in every browser), never `Math.sin`, `cos`, `pow`, `exp` or `**`, which
   JavaScript lets each engine approximate differently in the last digit,
   enough for Safari and Chrome to disagree about a collision a few seconds
   in. The ribbon's curve uses a fixed polynomial sine of its own. Held by a
@@ -111,7 +122,8 @@ Settled; change them here first, then in the code.
   and at most 12 from any one visitor: past 12 your own oldest drops, past
   40 the oldest of all. So nobody can crowd others out by mashing a button.
   Other viewers see a gesture within about a second.
-- **Grabbing takes it.** Picking up a sphere claims it for 10 s
+- **Grabbing takes it.** Picking up a holdable object (a sphere, the
+  striker, a ball, a stone: the set says which) claims it for 10 s
   (`POST /stage/grab`), shown to everyone as the holder's colour ring.
   Anyone may grab a sphere someone else holds: the claim moves to them and
   the answer names who lost it, so both screens can show the tug. A throw
@@ -344,7 +356,7 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
 | `POST /stage/gesture` | `{ gesture }` | add one gesture to the loop (a throw needs your claim and ends it) | `409 taken`, `400` |
 | `POST /stage/drop` | `{ object }` | let go of a sphere without throwing | `400` |
 | `POST /stage/undo` | | remove your own newest gesture from the loop | `409 nothing-to-undo` |
-| `POST /stage/clear` | | archive the loop, start a silent one | `409 stage-empty` |
+| `POST /stage/clear` | `{ set? }` | archive the loop, start a silent one (on `set`, or the same set) | `409 stage-empty` (same set, no gestures), `400` |
 | `POST /stage/join` | `{ versionId, replace? }` | bring a version's performance to the stage; with `replace`, archive the loop first | `409 stage-busy`, `404`, `400` |
 | `POST /stage/restore-archived` | `{ archivedId, replace? }` | bring an archived loop back | as join |
 | `POST /publish` | `{ title, slot?, exhibitId?, replace? }` | leave the loop as a new exhibit in `slot`, or the next version of `exhibitId` | `409 stage-empty`, `409 slot-taken`, `404`, `400` |
@@ -390,8 +402,8 @@ goals, rate limiting.
   saying which claims are tested and which are judged.
 - **The loop length** (30 s), the gesture cap (40) and the claim (10 s) are
   first guesses; watch two or three people play before the showcase.
-- **More sets** (glass that tints what passes behind it, a door that swaps
-  objects) once the first is fun.
+- **More sets** beyond the four of ADR 18 (glass that tints what passes
+  behind it) once people have played these.
 
 
 ## How to work in here
