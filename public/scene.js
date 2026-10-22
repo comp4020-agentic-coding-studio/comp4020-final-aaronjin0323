@@ -1168,7 +1168,13 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const { seen, dist } = sight(key, v);
     return seen && (key === "bench" || dist <= FAR_PLINTH);
   }
-  const perfOf = (key, v) => (key === "bench" && pending.length ? { ...v.perf, gestures: [...v.perf.gestures, ...pending] } : v.perf);
+  // (only a pending gesture on this set's objects: one made just before the
+  // stage switched sets would otherwise land on the new set's rules)
+  const perfOf = (key, v) => {
+    if (key !== "bench" || !pending.length) return v.perf;
+    const mine = pending.filter((g) => !!setOf(v.perf.set)?.objects.includes(g.object));
+    return mine.length ? { ...v.perf, gestures: [...v.perf.gestures, ...mine] } : v.perf;
+  };
 
   // Plays every performance to now (without drawing): the views step on,
   // and what happened is heard. Called by each frame, and by probe() when
