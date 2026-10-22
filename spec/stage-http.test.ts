@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CAP_EACH } from "../public/stage.js";
+import { CAP_EACH, SETS } from "../public/stage.js";
+import { validGesture } from "./set-helpers.ts";
 import type { StateEvent } from "../src/types.ts";
 import { get, open, post, sleep, stateOf, type Visitor, visitor } from "./helpers.ts";
 
@@ -96,7 +97,10 @@ describe("the stage", { concurrent: false }, () => {
 
   it("refuses to grab what isn't a sphere", async () => {
     const a = visitor();
-    for (const object of ["bell", "ribbon", "nobody", "Teal", 3]) {
+    const live = SETS[(await look()).draft.parts!.set];
+    const cant = live.objects.filter((o) => !live.holdable.includes(o));
+    expect(cant.length).toBeGreaterThan(0);
+    for (const object of [...cant, "bell", "ribbon", "nobody", "Teal", "constructor", 3]) {
       const r = await post(a, "/stage/grab", { object });
       expect(r.status, String(object)).toBe(400);
     }
@@ -137,6 +141,53 @@ describe("the stage", { concurrent: false }, () => {
     expect(state(r).archivedDrafts[0]).toMatchObject({ id: r.body.archivedId, reason: "cleared" });
     const again = await post(a, "/stage/clear");
     expect([again.status, again.body.error]).toEqual([409, "stage-empty"]);
+  });
+
+  // Choosing a set (ADR 18). The store's tests switch to a test-only set;
+  // here every other registered set is chosen in turn (none until the
+  // second set lands), and the same set behaves as plain Start over.
+  it("start over takes a set: unknown is 400, the same set with no gestures 409, with gestures it archives", async () => {
+    await fresh();
+    const a = visitor();
+    const live = (await look()).draft.parts!.set;
+    for (const set of ["nope", "constructor", "Orbit", "", 3, null]) {
+      const r = await post(a, "/stage/clear", { set });
+      expect([r.status, r.body.error], JSON.stringify(set)).toEqual([400, "bad-request"]);
+    }
+    expect((await post(a, "/stage/clear", { set: live, extra: 1 })).status).toBe(400);
+    const quiet = await post(a, "/stage/clear", { set: live });
+    expect([quiet.status, quiet.body.error]).toEqual([409, "stage-empty"]);
+    await play(a, validGesture(live, Object.keys(SETS[live].gestures).find((k) => k !== "throw")!));
+    const r = await post(a, "/stage/clear", { set: live });
+    expect(r.status).toBe(200);
+    expect(state(r).draft.parts).toEqual({ set: live, gestures: [] });
+    expect(state(r).archivedDrafts[0]).toMatchObject({ id: r.body.archivedId, reason: "cleared" });
+  });
+
+  it("choosing another set starts a silent loop on it, archiving one with gestures; what's holdable comes from it", async () => {
+    for (const id of Object.keys(SETS)) {
+      if (id === "orbit") continue;
+      await fresh();
+      const a = visitor();
+      await play(a, tap());
+      const r = await post(a, "/stage/clear", { set: id });
+      expect(r.status, id).toBe(200);
+      expect(state(r).draft.parts).toEqual({ set: id, gestures: [] });
+      expect(state(r).archivedDrafts[0]).toMatchObject({ id: r.body.archivedId, reason: "cleared" });
+      // a silent loop switches without archiving anything
+      const back = await post(a, "/stage/clear", { set: "orbit" });
+      expect([back.status, back.body.archivedId], id).toEqual([200, null]);
+      expect(state(back).archivedTotal).toBe(state(r).archivedTotal);
+      await post(a, "/stage/clear", { set: id });
+      for (const object of SETS[id].objects) {
+        const g = await post(a, "/stage/grab", { object });
+        expect(g.status, `${id}: grab ${object}`).toBe(SETS[id].holdable.includes(object) ? 200 : 400);
+        await post(a, "/stage/drop", { object });
+      }
+      expect((await post(a, "/stage/grab", { object: "teal" })).status, `${id}: no orbit sphere`).toBe(400);
+    }
+    await post(visitor(), "/stage/clear", { set: "orbit" });
+    expect((await look()).draft.parts!.set).toBe("orbit");
   });
 
   it("join brings a plinth's performance to the stage; over someone's playing it asks, and replace archives", async () => {

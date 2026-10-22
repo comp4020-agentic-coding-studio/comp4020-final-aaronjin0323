@@ -17,26 +17,31 @@ export type VisitorView = {
 export type Credit = VisitorView & { edits: number };
 
 /** One gesture in a loop (public/stage.js): when in the loop it happened,
- * what was done to which object, and who did it (their tag). */
+ * what was done to which object, and who did it (their tag). The kinds,
+ * objects and any further number fields are the set's (public/sets/<id>.js,
+ * `gestures`); checkGesture refuses anything else. */
 export type Gesture = {
-  kind: "throw" | "pluck" | "tap";
+  /** a kind the set declares; `throw` is the shared one for holdables */
+  kind: string;
   object: string;
   /** seconds into the loop, 0 to under LOOP */
   at: number;
-  /** a throw: where the sphere was let go, and its speed */
+  /** a throw: where it was let go, and its speed */
   from?: number[];
   v?: number[];
-  /** a pluck: where round the ribbon, 0 to under 1 */
+  /** e.g. Orbit's pluck: where round the ribbon, 0 to under 1 */
   u?: number;
   by: string;
+  /** a set's own fields: numbers, or lists of numbers */
+  [field: string]: string | number | number[] | undefined;
 };
 
 /** A performance: a set of objects and the loop of gestures played on it. */
 export type Performance = { set: string; gestures: Gesture[] };
 
-/** Someone holding a sphere (CLAUDE.md, "Grabbing takes it"). */
+/** Someone holding an object (CLAUDE.md, "Grabbing takes it"). */
 export type ClaimView = {
-  /** the sphere's id */
+  /** the held object's id: one of the live set's `holdable` */
   part: string;
   holder: VisitorView;
   /** ISO time; the claim ends then unless they throw or drop first */
@@ -123,7 +128,8 @@ export type PoseBody = {
   look: [number, number];
   /** where your hand or reticle points, world space, each within -10..10 */
   reach?: [number, number, number] | null;
-  /** a sphere id; display only, the claim in `state` is the authority */
+  /** an id some set lets you hold (HOLDABLE in public/stage.js); display
+   * only, the claim in `state` is the authority */
   holding?: string | null;
 };
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { checkGesture, checkPerformance, emptyPerformance, keepNewest, SPHERES } from "../public/stage.js";
+import { checkGesture, checkPerformance, emptyPerformance, isHoldable, keepNewest, setOf } from "../public/stage.js";
 import type { ArchivedDraftView, Credit, DraftView, ExhibitHistory, ExhibitView, Gesture, Performance, VersionView, VisitorView } from "./types.ts";
 
 // The museum's store: one SQLite file, every write one BEGIN IMMEDIATE
@@ -410,7 +410,8 @@ export type Store = {
   claims(now: Date): Claim[];
   history(exhibitId: number): ExhibitHistory | null;
 
-  /** Claim a sphere, taking it from whoever held it. */
+  /** Claim a holdable object of the set on the stage (a sphere, on Orbit),
+   * taking it from whoever held it. */
   grab(pid: string, sphere: string, now: Date): { ok: true; from: VisitorView | null; expiresAt: string } | Refusal<"bad-request">;
   /** Let go of a sphere without throwing it. */
   drop(pid: string, sphere: string): { ok: true; dropped: boolean };
@@ -419,7 +420,10 @@ export type Store = {
   /** Add one gesture to the loop; a throw needs the claim and ends it. */
   gesture(pid: string, g: unknown, now: Date): { ok: true; gesture: Gesture; revision: number } | TakenRefusal | Refusal<"bad-request">;
   undo(pid: string, now: Date): { ok: true; removed: Gesture } | Refusal<"nothing-to-undo">;
-  clear(pid: string, now: Date): { ok: true; archivedId: number } | Refusal<"stage-empty">;
+  /** Start over: archive the loop and leave a silent one, on `set` (or
+   * the same set). Another set starts even from a silent loop (archiving
+   * nothing); the same set needs gestures to clear. */
+  clear(pid: string, now: Date, set?: string): { ok: true; archivedId: number | null } | Refusal<"stage-empty" | "bad-request">;
   join(pid: string, versionId: number, replace: boolean, now: Date): Placed | Refusal<"stage-busy" | "not-found" | "bad-request">;
   restoreArchived(pid: string, archivedId: number, replace: boolean, now: Date): Placed | Refusal<"stage-busy" | "not-found" | "bad-request">;
   publish(
@@ -499,6 +503,8 @@ export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: numb
     insertDraft: db.prepare("INSERT INTO drafts (recipe, parts, based_on, created_at) VALUES ('stage', ?, ?, ?)"),
     archive: db.prepare("UPDATE drafts SET archived_at = ?, archived_by = ?, archive_reason = ? WHERE id = ? AND archived_at IS NULL"),
     setParts: db.prepare("UPDATE drafts SET parts = ?, revision = revision + 1 WHERE id = ?"),
+    // a silent loop moved to another set: nothing joined, nothing kept
+    resetLoop: db.prepare("UPDATE drafts SET parts = ?, based_on = NULL, revision = revision + 1 WHERE id = ? AND archived_at IS NULL"),
     archived: db.prepare("SELECT * FROM drafts WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC LIMIT ?"),
     // keyset paging in the same order: everything after the given row
     archivedBefore: db.prepare(
@@ -679,8 +685,6 @@ export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: numb
     contributors: credits(q.draftCredits.all(d.id) as CreditRow[]),
   });
 
-  const isSphere = (s: string): boolean => SPHERES.includes(s);
-
   return {
     ensureVisitor(pid, name, colour, now) {
       const existing = visitorOf(pid);
@@ -729,9 +733,10 @@ export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: numb
     },
 
     grab(pid, sphere, now) {
-      if (!isSphere(sphere)) return refuse("bad-request", "Only a sphere can be picked up");
       return tx(() => {
         const d = stage(now);
+        // what can be held is the set's to say (ADR 18)
+        if (!isHoldable((JSON.parse(d.parts) as Performance).set, sphere)) return refuse("bad-request", "That can't be picked up");
         const was = heldBy(sphere, now);
         const expiresAt = new Date(now.getTime() + claimMs).toISOString();
         q.setClaim.run(sphere, d.id, pid, expiresAt);
@@ -786,12 +791,23 @@ export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: numb
       });
     },
 
-    clear(pid, now) {
+    clear(pid, now, set) {
+      if (set !== undefined && !setOf(set)) return refuse("bad-request", "No such set");
       return tx(() => {
-        const d = liveDraft();
-        if (!hasGestures(d)) return refuse("stage-empty", "The stage is already quiet");
-        const archivedId = archiveLive(pid, "cleared", now)!;
-        q.insertDraft.run(JSON.stringify(emptyPerformance((JSON.parse(d!.parts) as Performance).set)), null, now.toISOString());
+        const d = stage(now);
+        const was = (JSON.parse(d.parts) as Performance).set;
+        const next = set ?? was;
+        const busy = hasGestures(d);
+        if (!busy && next === was) return refuse("stage-empty", "The stage is already quiet");
+        // a loop with gestures is archived, as Start over always did; a
+        // silent one has nothing to keep, so it becomes the new set's
+        if (!busy) {
+          q.resetLoop.run(JSON.stringify(emptyPerformance(next)), d.id);
+          q.dropAllClaims.run();
+          return { ok: true as const, archivedId: null };
+        }
+        const archivedId = archiveLive(pid, "cleared", now);
+        q.insertDraft.run(JSON.stringify(emptyPerformance(next)), null, now.toISOString());
         return { ok: true as const, archivedId };
       });
     },

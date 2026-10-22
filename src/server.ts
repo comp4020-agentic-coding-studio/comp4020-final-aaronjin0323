@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
-import { SPHERES, VISITOR_COLOURS } from "../public/stage.js";
+import { HOLDABLE, VISITOR_COLOURS } from "../public/stage.js";
 import { openStore, SLOTS, type Snapshot } from "./db.ts";
 import { MARK, renderMuseum, SHELL } from "./html.ts";
 import { log, person, raw, type Value, who } from "./log.ts";
@@ -506,10 +506,13 @@ const postUndo = action("undo", (pid, body, now) => {
   return { log: { kind: raw(r.removed.kind), object: raw(r.removed.object), at: r.removed.at }, json: { removed: r.removed } };
 });
 
+// Start over, or choose a set (ADR 18): `set` is checked against SETS by
+// the store; here only its shape, so the log can print it raw.
 const postClear = action("stage.clear", (pid, body, now) => {
-  only(body, []);
-  const r = check(store.clear(pid, now));
-  return { log: { archived: r.archivedId }, json: { archivedId: r.archivedId } };
+  only(body, ["set"]);
+  const set = body.set === undefined ? undefined : word(body.set, "set");
+  const r = check(store.clear(pid, now, set));
+  return { log: { set: set === undefined ? undefined : raw(set), archived: r.archivedId ?? undefined }, json: { archivedId: r.archivedId } };
 });
 
 const postJoin = action("stage.join", (pid, body, now) => {
@@ -584,7 +587,8 @@ const postPose = route("pose", (pid, body, now) => {
   if (Math.abs(pitch) > 1.5) throw bad("pitch must be within -1.5 to 1.5");
   const reach = body.reach === undefined || body.reach === null ? null : numbers(body.reach, "reach", 3, 10);
   const holding = body.holding ?? null;
-  if (holding !== null && !(typeof holding === "string" && SPHERES.includes(holding))) throw bad("holding must be a sphere or null");
+  // anything some set lets you hold; display only, the claim is the authority
+  if (holding !== null && !(typeof holding === "string" && HOLDABLE.includes(holding))) throw bad("holding must be something you can hold, or null");
   const last = poses.get(pid);
   if (last && now.getTime() - last.at < POSE_GAP_MS) return { ok: true, ignored: true };
   const pose: PoseBody = { at: [x, z], look: [yaw, pitch], reach: reach && [reach[0], reach[1], reach[2]], holding };

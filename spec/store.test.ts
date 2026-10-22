@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
-import { CAP_EACH, checkPerformance, events, LOOP } from "../public/stage.js";
+import { CAP_EACH, checkPerformance, events, LOOP, SETS } from "../public/stage.js";
 import { ARCHIVE_LIST, CLAIM_MS, migrate, MIGRATIONS, openStore, type Store, tagOf } from "../src/db.ts";
 
 // The store's rules over ":memory:" with an injected clock (CLAUDE.md, "The
@@ -157,6 +157,53 @@ describe("claims", () => {
     expect(store.grab(ANA, "bell", T0)).toMatchObject({ ok: false, error: "bad-request" });
     expect(store.grab(ANA, "nobody", T0)).toMatchObject({ ok: false, error: "bad-request" });
   });
+});
+
+// Choosing a set (ADR 18), with a tiny set registered for this test only:
+// the server runs on SETS, so a second set is a second entry there.
+describe("choosing a set", () => {
+  const still = { startState: () => ({ n: 0 }), tick: () => {}, apply: () => {}, copyState: (s: { n: number }) => ({ ...s }), view: () => ({}), ease: (v: object) => v, positions: () => [[0, 0, 0]] };
+  const blocks = { id: "blocks", name: "Blocks", objects: ["block", "lamp"], holdable: ["block"], gestures: { throw: { objects: ["block"] }, tap: { objects: ["lamp"] } }, colour: { block: 1, lamp: 2 }, fingerprint: { gestures: [], hash: "", events: 0 }, ...still };
+  beforeEach(() => {
+    (SETS as Record<string, unknown>).blocks = blocks;
+    return () => {
+      delete (SETS as Record<string, unknown>).blocks;
+    };
+  });
+
+  it("switching to another set archives a loop with gestures and starts a silent one on the new set", () => {
+    ok(store.gesture(ANA, tap(), T0));
+    ok(store.grab(BO, "teal", T0));
+    const r = ok(store.clear(BO, at(1000), "blocks"));
+    expect(r.archivedId).toBeTruthy();
+    const s = store.snapshot(at(1000));
+    expect(s.draft.parts).toEqual({ set: "blocks", gestures: [] });
+    expect(s.archivedDrafts[0]).toMatchObject({ id: r.archivedId, reason: "cleared" });
+    expect(store.claims(at(1000))).toEqual([]);
+  });
+
+  it("switching from a silent loop needs no gestures, and nothing is archived", () => {
+    const before = store.snapshot(T0).archivedTotal;
+    ok(store.clear(ANA, T0, "blocks"));
+    expect(store.snapshot(T0).draft.parts).toEqual({ set: "blocks", gestures: [] });
+    expect(store.snapshot(T0).archivedTotal).toBe(before);
+    // and back again
+    ok(store.clear(ANA, T0, "orbit"));
+    expect(store.snapshot(T0).draft.parts!.set).toBe("orbit");
+  });
+
+  it("what can be held and thrown comes from the set on the stage", () => {
+    expect(store.grab(ANA, "block", T0)).toMatchObject({ ok: false, error: "bad-request" });
+    ok(store.clear(ANA, T0, "blocks"));
+    expect(store.grab(ANA, "teal", T0)).toMatchObject({ ok: false, error: "bad-request" });
+    expect(store.grab(ANA, "lamp", T0)).toMatchObject({ ok: false, error: "bad-request" });
+    const throwBlock = { kind: "throw", object: "block", at: 1, from: [0.3, 0.4, 0.2], v: [0.5, 1.5, -0.4] };
+    expect(store.gesture(ANA, throwBlock, T0)).toMatchObject({ ok: false, error: "taken" });
+    ok(store.grab(ANA, "block", T0));
+    ok(store.gesture(ANA, throwBlock, T0));
+    ok(store.gesture(BO, { kind: "tap", object: "lamp", at: 2 }, T0));
+    expect(store.gesture(BO, tap(), T0)).toMatchObject({ ok: false, error: "bad-request" });
+  });
 
   it("ends on the clock, on drop, and when the visitor leaves", () => {
     ok(store.grab(ANA, "teal", T0));
@@ -207,12 +254,21 @@ describe("the stage's loop", () => {
 
   it("brings an archived loop back with its gestures and credits", () => {
     ok(store.gesture(ANA, tap(4), T0));
-    const { archivedId } = ok(store.clear(ANA, T0));
+    const archivedId = ok(store.clear(ANA, T0)).archivedId!;
     ok(store.gesture(BO, pluck(), T0));
     expect(store.restoreArchived(BO, archivedId, false, T0)).toMatchObject({ ok: false, error: "stage-busy" });
     ok(store.restoreArchived(BO, archivedId, true, at(1000)));
     expect(gestures()).toEqual([{ ...tap(4), by: tagOf(ANA) }]);
     expect(store.snapshot(at(1000)).draft.contributors).toMatchObject([{ tag: tagOf(ANA) }]);
+  });
+
+  it("start over takes a set: the same set needs gestures; an unknown one is refused", () => {
+    expect(store.clear(ANA, T0, "orbit")).toMatchObject({ ok: false, error: "stage-empty" });
+    for (const set of ["nope", "constructor", "Orbit", ""]) expect(store.clear(ANA, T0, set), set).toMatchObject({ ok: false, error: "bad-request" });
+    ok(store.gesture(ANA, tap(), T0));
+    const r = ok(store.clear(ANA, at(1000), "orbit"));
+    expect(r.archivedId).toBeTruthy();
+    expect(store.snapshot(at(1000)).draft.parts).toEqual({ set: "orbit", gestures: [] });
   });
 
   it("keeps every archived loop reachable past the state's newest few", () => {
