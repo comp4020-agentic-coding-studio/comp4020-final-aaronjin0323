@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BELL,
@@ -20,6 +20,7 @@ import {
   simulate,
   type Gesture,
 } from "../public/stage.js";
+import { holdsTheSetContract } from "./set-helpers.ts";
 
 // The Loop Stage's rules (CLAUDE.md, "The museum"; ADR 16). What happens on
 // the stage is computed from the set, the gestures and the loop moment alone,
@@ -28,6 +29,9 @@ import {
 const dist = (a: number[], b: number[]): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const throwAt = (sphere: string, at: number, from: number[], v: number[], by = "aaaaaa") => ({ kind: "throw", object: sphere, at, from, v, by });
 const perf = (gestures: Gesture[]) => ({ set: "orbit", gestures });
+
+// What every set holds (spec/set-helpers.ts), Orbit included.
+holdsTheSetContract("orbit");
 
 describe("the orbit set", () => {
   it("is four spheres, a ribbon and a bell", () => {
@@ -232,10 +236,18 @@ describe("every browser plays the same performance", () => {
   // last-digit difference grows through collisions until two screens
   // disagree (CLAUDE.md, "The rules use only arithmetic every engine rounds
   // the same").
-  it("the rules use no maths an engine may approximate", () => {
-    const code = readFileSync("public/stage.js", "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
-    const bad = code.match(/Math\.(sin|cos|tan|asin|acos|atan2?|pow|exp|expm1|log\w*|cbrt|hypot|sinh|cosh|tanh)\b|\*\*/g) ?? [];
-    expect(bad).toEqual([]);
+  // Every rules file: stage.js and each set's rules in public/sets/ (not a
+  // *-view.js, which only draws). Seen red with a Math.sin in orbit.js.
+  it("the rules use no maths an engine may approximate, in stage.js and every set's rules", () => {
+    const files = ["public/stage.js", ...readdirSync("public/sets").filter((f) => f.endsWith(".js") && !f.endsWith("-view.js")).map((f) => `public/sets/${f}`)];
+    expect(files).toContain("public/sets/kit.js");
+    // every registered set has its rules file there
+    for (const id of Object.keys(SETS)) expect(files).toContain(`public/sets/${id}.js`);
+    for (const file of files) {
+      const code = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+      const bad = code.match(/Math\.(sin|cos|tan|asin|acos|atan2?|pow|exp|expm1|log\w*|cbrt|hypot|sinh|cosh|tanh|random)\b|\*\*|\bDate\b|\bperformance\.now\b/g) ?? [];
+      expect(bad, file).toEqual([]);
+    }
   });
 
   // A busy performance's exact positions, every half second, hashed. Node
