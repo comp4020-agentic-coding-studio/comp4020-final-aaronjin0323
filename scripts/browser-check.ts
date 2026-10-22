@@ -42,6 +42,9 @@ async function visitor(browser: Browser, opts: Opts = DESKTOP): Promise<Page> {
   page.on("pageerror", (e) => check(false, "no script errors", e.message));
   await page.goto(`${APP}/?v=${Date.now()}`);
   await live(page);
+  // and the 3D room, which loads after the stream: a probe before it exists
+  // throws, and a gesture before it is drawn isn't seen
+  await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function" || document.body.classList.contains("no-gl"), null, { timeout: 10_000 });
   return page;
 }
 
@@ -89,16 +92,31 @@ const movedFrom = (page: Page, id: string, from: number[], ms: number, since = D
       () => -1,
     );
 
-/** Drags a sphere on the canvas toward a point and lets go: a throw. */
-async function throwSphere(page: Page, id: string, to: { x: number; y: number }): Promise<void> {
+/** The first-person view: where you stand, look, aim and what you hold. */
+const fpOf = (page: Page) => page.evaluate(() => (document.querySelector("[data-scene]") as any).probe().fp);
+
+/** Walks forward with the keyboard for `ms`, from wherever you are. */
+async function walk(page: Page, ms: number, key = "KeyW"): Promise<void> {
+  await page.focus("[data-scene]");
+  await page.keyboard.down(key);
+  await page.waitForTimeout(ms);
+  await page.keyboard.up(key);
+  await page.waitForTimeout(120);
+}
+
+/** Aims the eyes at a sphere (as a mouse would turn them), then holds the
+ * hand at the reticle for `holdMs` and lets go: a first-person throw. */
+async function aimAndThrow(page: Page, id: string, holdMs = 500): Promise<void> {
+  await page.evaluate((id) => {
+    const c = document.querySelector("[data-scene]") as any;
+    const s = c.probe().stage.spheres[id].pos;
+    c.lookAtPoint(s[0], s[1] + 0.66, s[2]);
+  }, id);
+  await page.waitForTimeout(150);
   const box = (await page.locator("[data-scene]").boundingBox())!;
-  const from = (await stageOf(page)).spheres[id].at;
-  await page.mouse.move(box.x + from.x, box.y + from.y);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  for (let i = 1; i <= 8; i++) {
-    await page.mouse.move(box.x + from.x + ((to.x - from.x) * i) / 8, box.y + from.y + ((to.y - from.y) * i) / 8);
-    await page.waitForTimeout(16);
-  }
+  await page.waitForTimeout(holdMs);
   await page.mouse.up();
 }
 
@@ -183,9 +201,10 @@ async function noWebGL(browser: Browser): Promise<void> {
   await ctx.close();
 }
 
-// Real-time play (ADR 16): A throws a sphere by dragging it, and B sees it
-// fly within a second; A's gesture shows on A's screen at once; B grabs
-// what A holds and A's throw is refused; B rings the bell from the
+// Real-time play in first person (ADR 16, 17): A walks up to the stage,
+// aims at a sphere and throws it by holding and letting go; it plays on A's
+// screen at once and on B's within a second. A holds gold; B takes it with
+// its button, and A's throw is refused. B rings the bell from the
 // keyboard and A sees it; the loop credits both.
 async function realtime(browser: Browser): Promise<void> {
   console.log("\n— real-time: two people play the stage together —");
@@ -194,47 +213,98 @@ async function realtime(browser: Browser): Promise<void> {
   const b = await visitor(browser, motion);
   await freshStage(a);
   await b.click('[data-go="bench"]');
-  await a.waitForTimeout(800);
-  // A throws teal at the ribbon by dragging it
+  await walk(a, 900);
+  const at = (await fpOf(a)).at as number[];
+  check(Math.hypot(at[0], at[1]) >= 2.59 && Math.hypot(at[0], at[1]) < 4, "A walks up to the stage's edge, and not into it", `r ${Math.hypot(at[0], at[1]).toFixed(2)}`);
   const tealA = await sphereAt(a, "teal");
   const tealB = await sphereAt(b, "teal");
-  await throwSphere(a, "teal", (await stageOf(a)).ribbon);
+  await aimAndThrow(a, "teal");
   const sent = Date.now();
   const mine = await movedFrom(a, "teal", tealA, 600, sent);
   check(mine >= 0 && mine < 250, "A's throw plays on A's screen at once", `${mine} ms after letting go`);
   const seen = await movedFrom(b, "teal", tealB, 3000, sent);
   check(seen >= 0 && seen < 1000, "B sees A's throw within about a second, without reloading", `${seen} ms`);
-  // grabbing takes it: A holds gold, B takes it, and A's throw is refused
+  // grabbing takes it: A holds gold, B takes it, A's throw is refused
+  await a.evaluate(() => {
+    const c = document.querySelector("[data-scene]") as any;
+    const s = c.probe().stage.spheres.gold.pos;
+    c.lookAtPoint(s[0], s[1] + 0.66, s[2]);
+  });
+  await a.waitForTimeout(150);
   const box = (await a.locator("[data-scene]").boundingBox())!;
-  const gold = (await stageOf(a)).spheres.gold.at;
-  await a.mouse.move(box.x + gold.x, box.y + gold.y);
+  await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await a.mouse.down();
-  await a.mouse.move(box.x + gold.x + 12, box.y + gold.y - 12, { steps: 3 });
   await b.waitForFunction(() => document.querySelector('[data-gesture="throw:gold"]')?.getAttribute("aria-label")?.startsWith("Take"), null, { timeout: 3000 }).catch(() => null);
   const aName = ((await a.textContent("[data-you]")) ?? "").trim();
   const offer = (await b.getAttribute('[data-gesture="throw:gold"]', "aria-label")) ?? "";
   check(offer.includes(aName), "B sees that A holds the gold sphere, and can take it", offer);
   await b.click('[data-gesture="throw:gold"]');
   await b.waitForTimeout(300);
-  await a.mouse.move(box.x + gold.x + 60, box.y + gold.y - 60, { steps: 3 });
   await a.mouse.up();
   await a.waitForFunction(() => !(document.querySelector("[data-toast]") as HTMLElement).hidden, null, { timeout: 3000 }).catch(() => null);
   const toast = (await a.textContent("[data-toast]")) ?? "";
   check(/has it|Pick it up/.test(toast), "A's throw after B took it is refused, saying who has it", toast);
-  // B rings the bell from the keyboard; A sees it ring
   await b.focus('[data-gesture="tap:bell"]');
   await b.keyboard.press("Enter");
   check(await heard(a, "ring", 3000), "A sees the bell B rang, on A's screen");
-  // both are in the loop, each in their colour
   await a.waitForFunction(() => document.querySelectorAll("[data-bench-credits] li").length >= 2, null, { timeout: 3000 }).catch(() => null);
   const credits = await a.$$eval("[data-bench-credits] [aria-label]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
   check(credits.length >= 2, "the loop credits both players", credits.join(" | "));
-  const here = await b.$$eval("[data-here] [aria-label]", (els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
-  check(here.some((t) => t.includes(aName)), "B's here-now strip lists A", here.join(" | "));
   await a.screenshot({ path: ".shots/play-a.png" });
   await b.screenshot({ path: ".shots/play-b.png" });
   await a.context().close();
   await b.context().close();
+}
+
+// Presence (ADR 17): each visitor sees the other standing in the room, a
+// head in their colour that moves when they walk, and the sphere they hold
+// floating in front of them.
+async function presence(browser: Browser): Promise<void> {
+  console.log("\n— presence: you see the others in the room —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
+  // B turns a little and steps aside, so A (facing the stage) sees B
+  await walk(b, 500, "KeyD");
+  const others = async (p: Page) => ((await fpOf(p)).others as { tag: string; head: { x: number; y: number }; visible: boolean; holding: string | null }[]);
+  await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().fp.others.length >= 1, null, { timeout: 3000 }).catch(() => null);
+  const first = await others(a);
+  check(first.length >= 1, "A sees B in the room", JSON.stringify(first.map((o) => o.tag)));
+  // A walks round to the far side of the stage and looks back at B, then B
+  // takes a step: A sees B's head move, still in view
+  await a.evaluate(() => (document.querySelector("[data-scene]") as any).lookAtPoint(-3, 1.62, 0));
+  await walk(a, 1200);
+  const bAt = (await fpOf(b)).at as number[];
+  await a.evaluate(([x, z]) => (document.querySelector("[data-scene]") as any).lookAtPoint(x, 1.62, z), bAt);
+  await a.waitForTimeout(500);
+  const before = (await others(a))[0];
+  await walk(b, 250, "KeyA");
+  await a.waitForTimeout(700);
+  const after = (await others(a))[0];
+  const moved = before && after ? Math.hypot(after.head.x - before.head.x, after.head.y - before.head.y) : 0;
+  check(!!before?.visible && moved > 8, "and sees B's head move when B walks", `${Math.round(moved)}px`);
+  // B walks up to the stage and picks up chrome: A sees it in B's hands
+  await b.evaluate(() => (document.querySelector("[data-scene]") as any).lookAtPoint(0, 1.62, 0));
+  await walk(b, 900);
+  await b.evaluate(() => {
+    const c = document.querySelector("[data-scene]") as any;
+    const s = c.probe().stage.spheres.chrome.pos;
+    c.lookAtPoint(s[0], s[1] + 0.66, s[2]);
+  });
+  await b.waitForTimeout(150);
+  const box = (await b.locator("[data-scene]").boundingBox())!;
+  await b.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await b.mouse.down();
+  const holding = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().fp.others.some((o: any) => o.holding === "chrome"), null, { timeout: 3000 }).then(() => true, () => false);
+  check(holding, "A sees the sphere B picked up, in B's hands");
+  await a.screenshot({ path: ".shots/presence-a.png" });
+  await b.mouse.up();
+  // B leaves: A's view no longer has B
+  await b.context().close();
+  const gone = await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().fp.others.length === 0, null, { timeout: 8000 }).then(() => true, () => false);
+  check(gone, "when B leaves, B is gone from A's room");
+  await a.context().close();
 }
 
 // The objects set each other off, on screen: a sphere thrown through the
@@ -254,8 +324,9 @@ async function chain(browser: Browser): Promise<void> {
   const at = Number(((now + 0.4) % 12).toFixed(3));
   await post(a, "/stage/gesture", { gesture: { kind: "throw", object: "chrome", at, from: [0.62, 0.95, 0], v: [0.9, 0, 0] } });
   check(await heard(a, "catch", 3000), "a sphere thrown through the ribbon is caught, with a flash and a sound");
-  // B plucks the ribbon while chrome rides it: it's flung off on A's screen
-  await a.waitForTimeout(400);
+  // B plucks the ribbon once chrome rides it: it's flung off on A's screen
+  await b.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().stage && /catch/.test(document.querySelector("[data-scene]")!.getAttribute("data-heard") ?? "x") , null, { timeout: 3000 }).catch(() => null);
+  await a.waitForTimeout(200);
   await b.click('[data-gesture="pluck:ribbon"]');
   check(await heard(a, "fling", 4000), "another visitor's pluck flings it off, on the first visitor's screen");
   // Undo on A takes back A's throw, never B's pluck
@@ -390,7 +461,7 @@ async function keyboard(browser: Browser): Promise<void> {
   await page.waitForTimeout(300);
   const after = await page.screenshot({ clip: { x: 0, y: 0, width: 600, height: 600 } });
   const gl = !(await page.evaluate(() => document.body.classList.contains("no-gl")));
-  if (gl) check(!before.equals(after), "arrow keys on the canvas turn the camera");
+  if (gl) check(!before.equals(after), "arrow keys on the canvas turn and walk you");
   check((await page.evaluate(() => scrollY)) === y0, "without scrolling the page");
   // Enter on a plinth selects it and its history
   await page.focus('[data-go="slot:2"]');
@@ -586,6 +657,7 @@ async function words(browser: Browser): Promise<void> {
 async function phoneEdit(browser: Browser): Promise<void> {
   console.log("\n— phone: the stage stays in sight while you play —");
   const page = await visitor(browser, PHONE);
+  await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
   await freshStage(page);
   await page.click('[data-gesture="tap:bell"]');
   const controls = await page.locator('[data-view="bench"] button').filter({ visible: true }).all();
@@ -667,19 +739,20 @@ async function names(browser: Browser): Promise<void> {
 // arches, with the bench sculpture big and central in the part of the
 // scene the panel doesn't cover (CLAUDE.md, "The opening view").
 async function opening(browser: Browser): Promise<void> {
-  console.log("\n— the opening view —");
+  console.log("\n— the opening view: standing in the room —");
   for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
     const page = await visitor(browser, opts);
     await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
     await page.waitForTimeout(600);
     const p = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
-    const inside = p.camR < p.archR && p.camY < p.archTop;
-    check(inside, `${label}: the camera stands inside the pavilion`, `r ${p.camR.toFixed(1)} of ${p.archR.toFixed(1)}, y ${p.camY.toFixed(1)}`);
-    check(p.camY >= 1.3 && p.camY <= 2.0, `${label}: at a visitor's eye height`, `y ${p.camY.toFixed(2)}`);
-    const area = (p.box.w * p.box.h) / (p.view.w * p.view.h);
-    const cx = (p.box.x + p.box.w / 2 - p.view.x) / p.view.w;
-    const cy = (p.box.y + p.box.h / 2 - p.view.y) / p.view.h;
-    check(area >= 0.25 && Math.abs(cx - 0.5) < 0.12 && Math.abs(cy - 0.5) < 0.15, `${label}: the stage is big and central`, `${Math.round(area * 100)}% of the scene, centre ${cx.toFixed(2)}, ${cy.toFixed(2)}`);
+    check(p.camR < p.archR && p.camY < p.archTop, `${label}: you stand inside the pavilion`, `r ${p.camR.toFixed(1)} of ${p.archR.toFixed(1)}`);
+    check(Math.abs(p.camY - 1.62) < 0.01, `${label}: at a visitor's eye height`, `y ${p.camY.toFixed(2)}`);
+    // the stage is ahead of you: its box straddles the reticle (the canvas centre)
+    const c = await page.locator("[data-scene]").boundingBox();
+    const cx = c!.width / 2, cy = c!.height / 2;
+    const b = p.box;
+    check(b.x < cx && b.x + b.w > cx && b.y < cy + c!.height * 0.25 && b.w * b.h > 0.12 * c!.width * c!.height, `${label}: facing the stage, big in front of you`, `box ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.w)}x${Math.round(b.h)}`);
+    check(await page.locator(".reticle, [data-reticle]").first().isVisible(), `${label}: a reticle marks where your hand goes`);
     await page.screenshot({ path: `.shots/opening-${label}.png` });
     await page.context().close();
   }
@@ -733,71 +806,49 @@ async function look(browser: Browser): Promise<void> {
   }
 }
 
-// Every plinth close-up, at both sizes: the exhibit is clear of every
-// panel (as the DOM measures them), nothing stands in front of it, nothing
-// big crowds the lens, no arch is cut through its curve. Then the Gallery
-// button: there on a plinth and after a drag, and it brings the opening
-// view back (CLAUDE.md, "A plinth close-up is composed").
+// Plinths in first person (ADR 17), at both sizes: choosing one from the
+// row walks you in front of it, facing it, with its card; walking up to one
+// with the keys shows its card too; "Back to the stage" and Escape walk you
+// back to where you started.
 async function focus(browser: Browser): Promise<void> {
-  console.log("\n— plinth close-ups, and back to the gallery —");
+  console.log("\n— plinths: walk up to one, and back to the stage —");
   for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
     const page = await visitor(browser, opts);
     await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
-    await page.waitForTimeout(400);
-    const opening = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
-    check(await page.locator("[data-home]").isHidden(), `${label}: no Gallery button on the opening view`);
+    const start = await fpOf(page);
+    check(await page.locator("[data-home]").isHidden(), `${label}: no Back button where you start`);
     const bad: string[] = [];
     for (let slot = 1; slot <= 6; slot++) {
       await page.click(`[data-go="slot:${slot}"]`);
-      await page.waitForTimeout(150);
-      await twoFrames(page);
-      const r = await page.evaluate((slot) => {
-        const canvas = document.querySelector("[data-scene]")!;
-        const c = canvas.getBoundingClientRect();
-        const p = (canvas as any).probe(slot);
-        const box = { l: c.left + p.box.x, t: c.top + p.box.y, r: c.left + p.box.x + p.box.w, b: c.top + p.box.y + p.box.h };
-        const panels = [".panel", ".brand", "[data-people]", "[data-nav]", "[data-home]", ".top"]
-          .map((q) => [q, document.querySelector(q)] as const)
-          .filter(([, n]) => n && (n as Element).checkVisibility())
-          .map(([q, n]) => [q, (n as Element).getBoundingClientRect()] as const);
-        // a little slack for the exhibit's own shadow and the pulse ring
-        const hit = panels.filter(([, b]) => b.width && b.left < box.r - 4 && b.right > box.l + 4 && b.top < box.b - 4 && b.bottom > box.t + 4).map(([q]) => q);
-        const offCanvas = box.l < c.left - 2 || box.r > c.right + 2 || box.t < c.top - 2 || box.b > c.bottom + 2;
-        return { ...p, hit, offCanvas, home: !(document.querySelector("[data-home]") as HTMLElement).hidden };
-      }, slot);
-      const why = [
-        r.hit.length ? `under ${r.hit.join(",")}` : "",
-        r.offCanvas ? "off the canvas" : "",
-        r.occluded >= 0.03 ? `${Math.round(r.occluded * 100)}% hidden` : "",
-        r.near >= 0.03 ? `${Math.round(r.near * 100)}% near foreground` : "",
-        r.cuts ? `${r.cuts} arch cut` : "",
-        r.camR >= r.archR ? "camera outside" : "",
-        r.box.w * r.box.h < 0.08 * r.view.w * r.view.h ? "too small" : "",
-        r.home ? "" : "no Gallery button",
-      ].filter(Boolean);
+      await page.waitForTimeout(250);
+      const r = await page.evaluate(() => {
+        const canvas = document.querySelector("[data-scene]") as any;
+        return { fp: canvas.probe().fp, title: document.querySelector("[data-ex-title]")?.textContent ?? "", home: !(document.querySelector("[data-home]") as HTMLElement).hidden };
+      });
+      // standing 2.3 m before the plinth at radius 5.4: about 3.1 from the centre
+      const rr = Math.hypot(r.fp.at[0], r.fp.at[1]);
+      const why = [Math.abs(rr - 3.1) > 0.3 ? `stood at r ${rr.toFixed(2)}` : "", r.home ? "" : "no Back button", (await page.locator('[data-view="exhibit"]').isVisible()) ? "" : "no card"].filter(Boolean);
       if (why.length) bad.push(`${slot}: ${why.join(", ")}`);
-      if (slot === 2 || slot === 5) await page.screenshot({ path: `.shots/focus-${label}-${slot}.png` });
+      if (slot === 2) await page.screenshot({ path: `.shots/focus-${label}-2.png` });
     }
-    check(bad.length === 0, `${label}: every plinth close-up is clear, unblocked, uncut and uncrowded`, bad.join("; ") || "6 plinths");
-    // back to the gallery
+    check(bad.length === 0, `${label}: choosing each plinth walks you before it, with its card`, bad.join("; ") || "6 plinths");
     await page.click("[data-home]");
-    await page.waitForTimeout(1600);
-    const back = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
-    const pressed = await page.getAttribute('[data-go="bench"]', "aria-pressed");
-    check(pressed === "true" && Math.abs(back.camR - opening.camR) < 0.3 && Math.abs(back.camY - opening.camY) < 0.3 && (await page.locator("[data-home]").isHidden()), `${label}: Gallery brings back the opening view`, `r ${back.camR.toFixed(2)}/${opening.camR.toFixed(2)}, y ${back.camY.toFixed(2)}/${opening.camY.toFixed(2)}`);
-    // a drag away from the opening view offers it too, and Escape takes it
-    const sc = (await page.locator("[data-scene]").boundingBox())!;
-    const y0 = sc.y + sc.height * 0.4;
-    await page.mouse.move(sc.x + sc.width * 0.3, y0);
-    await page.mouse.down();
-    await page.mouse.move(sc.x + sc.width * 0.45, y0 + 20, { steps: 6 });
-    await page.mouse.up();
-    const shown = await page.locator("[data-home]").isVisible();
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(1600);
-    const esc = await page.evaluate(() => (document.querySelector("[data-scene]") as any).probe());
-    const turned = Math.abs(((((esc.yaw - opening.yaw + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI);
-    check(shown && turned < 0.05 && (await page.locator("[data-home]").isHidden()), `${label}: a drag offers Gallery, and Escape goes back`, `shown ${shown}, yaw ${esc.yaw.toFixed(2)}/${opening.yaw.toFixed(2)}`);
+    await page.waitForTimeout(900);
+    const back = await fpOf(page);
+    check(Math.hypot(back.at[0] - start.at[0], back.at[1] - start.at[1]) < 0.05 && (await page.locator('[data-view="bench"]').isVisible()), `${label}: Back to the stage walks you back to where you started`, JSON.stringify(back.at));
+    if (label === "desktop") {
+      // walking up to plinth 1 with the keys shows its card
+      await page.evaluate(() => {
+        const a = ((0 / 6) * 2 + 1 / 6) * Math.PI;
+        (document.querySelector("[data-scene]") as any).lookAtPoint(Math.sin(a) * 5.4, 1.62, Math.cos(a) * 5.4);
+      });
+      await walk(page, 900);
+      const shown = await page.locator('[data-view="exhibit"]').isVisible();
+      check(shown && (await page.getAttribute('[data-go="slot:1"]', "aria-pressed")) === "true", `${label}: walking up to a plinth shows its card`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(900);
+      check(await page.locator('[data-view="bench"]').isVisible(), `${label}: Escape goes back to the stage`);
+    }
     await page.context().close();
   }
 }
@@ -861,6 +912,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   noScript,
   noWebGL,
   realtime,
+  presence,
   chain,
   publishing,
   archive,

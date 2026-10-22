@@ -750,9 +750,13 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   const heldBall = new THREE.Mesh(new THREE.SphereGeometry(SETS.orbit.sphereR, 32, 20), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.2 }));
   heldBall.visible = false;
   scene.add(heldBall);
+  // held in your right hand: ahead, a little low and to the right, so it
+  // never covers the reticle you aim with
   const heldPoint = () => {
     const d = lookDir(me.look);
-    return [me.at[0] + d[0] * 0.7, EYE - 0.12 + d[1] * 0.7, me.at[1] + d[2] * 0.7];
+    const right = [-d[2], 0, d[0]];
+    const n = Math.hypot(right[0], right[2]) || 1;
+    return [me.at[0] + d[0] * 0.8 + (right[0] / n) * 0.32, EYE - 0.3 + d[1] * 0.8, me.at[1] + d[2] * 0.8 + (right[2] / n) * 0.32];
   };
   function pressHand() {
     if (!playable || press) return;
