@@ -954,6 +954,89 @@ async function wrap(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
+// The page draws only when something visibly changes (a cool laptop):
+// on a quiet stage nobody is touching, frames stop; a gesture sets them
+// going until the sphere settles, then they stop again; and a gesture
+// waiting later in the loop still plays on time while the page idles.
+// Frames are counted where WebGL draws them (the first clear in a task),
+// so the count is what the GPU was asked to do, whatever the loop says.
+async function idle(browser: Browser): Promise<void> {
+  console.log("\n— nothing moving, nothing drawn —");
+  const ctx = await browser.newContext({ ...DESKTOP, reducedMotion: "no-preference" });
+  await ctx.addInitScript(() => {
+    const w = window as any;
+    w.__drawn = 0;
+    let inTask = false;
+    for (const P of [WebGL2RenderingContext.prototype, WebGLRenderingContext.prototype] as any[]) {
+      const clear = P.clear;
+      P.clear = function (...a: unknown[]) {
+        if (!inTask) {
+          inTask = true;
+          w.__drawn++;
+          queueMicrotask(() => (inTask = false));
+        }
+        return clear.apply(this, a);
+      };
+    }
+  });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => check(false, "no script errors", e.message));
+  await page.goto(`${APP}/?v=${Date.now()}`);
+  await live(page);
+  await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 10_000 });
+  await freshStage(page);
+  const drawn = (): Promise<number> => page.evaluate(() => (window as any).__drawn as number);
+  const moment = async (): Promise<number> => (await stageOf(page)).moment as number;
+  // run early in a loop, clear of the glide home and the ring of light at
+  // the wrap, which are meant to draw
+  let m = await moment();
+  if (m < 1 || m > 5) await page.waitForTimeout((((31 - m) % 30) + 0.2) * 1000);
+  // 1. quiet: once the opening glide settles, (almost) nothing is drawn
+  await page.waitForTimeout(1500);
+  let d0 = await drawn();
+  await page.waitForTimeout(3000);
+  const quiet = (await drawn()) - d0;
+  check(quiet <= 10, "on a quiet stage nobody touches, the page stops drawing", `${quiet} frames in 3 s`);
+  // 2. a hop: frames run while the sphere floats up, then stop
+  m = await moment();
+  const from = await sphereAt(page, "gold");
+  await post(page, "/stage/grab", { object: "gold" });
+  d0 = await drawn();
+  const at = Number(((m + 0.3) % 30).toFixed(3));
+  await post(page, "/stage/gesture", { gesture: { kind: "throw", object: "gold", at, from: [0.42, 0.32, -0.18], v: [0, 1.4, 0] } });
+  const took = await movedFrom(page, "gold", from, 2500);
+  await page.waitForTimeout(800);
+  const playing = (await drawn()) - d0;
+  check(took >= 0 && playing >= 30, "a gesture sets the page drawing: the sphere visibly moves", `moved after ${took} ms, ${playing} frames in its first second or so`);
+  await page.waitForTimeout(6500);
+  d0 = await drawn();
+  await page.waitForTimeout(2000);
+  const after = (await drawn()) - d0;
+  check(after <= 8, "and once it settles the page stops drawing again", `${after} frames in 2 s`);
+  // 3. a gesture waiting later in the loop plays on time while idle
+  m = await moment();
+  const later = Number(((m + 3) % 30).toFixed(3));
+  await post(page, "/stage/gesture", { gesture: { kind: "pluck", object: "ribbon", at: later, u: 0.25 } });
+  await page.waitForTimeout(1200);
+  d0 = await drawn();
+  const timing = await page.evaluate(async (later) => {
+    const c = document.querySelector("[data-scene]") as any;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 4000) {
+      if (/\bpluck\b/.test(c.dataset.heard ?? "")) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // how late it was heard: the loop moment then, less the gesture's own
+    const heardAt = Number(c.dataset.heardAt ?? 0);
+    const lateBy = (c.probe().stage.moment - later - (Date.now() - heardAt) / 1000 + 30) % 30;
+    return { heard: /\bpluck\b/.test(c.dataset.heard ?? ""), lateBy: lateBy > 15 ? lateBy - 30 : lateBy };
+  }, later);
+  const waiting = (await drawn()) - d0;
+  check(waiting <= 12, "while a gesture waits later in the loop, the page idles", `${waiting} frames before it came round`);
+  check(timing.heard && Math.abs(timing.lateBy) <= 0.3, "and it still plays on time", timing.heard ? `heard ${(timing.lateBy * 1000).toFixed(0)} ms from its moment` : "never heard");
+  await ctx.close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -976,6 +1059,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   "phone-edit": phoneEdit,
   names,
   engines,
+  idle,
 };
 
 // HEADED=1 runs a real, GPU-backed window parked off-screen: headless can

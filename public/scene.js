@@ -10,7 +10,7 @@
 // carries on without it.
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { BELL, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
+import { BELL, GLIDE, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
 import { createStageView } from "./stageview.js";
 import { clearFrame } from "./ui-logic.js";
 import { EYE, REACH, START, clampPitch, collide, forward, lookDir, nearestHit, plinthNear, standBefore, step, throwVelocity } from "./walk.js";
@@ -1115,25 +1115,164 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     return "#fff3d6";
   }
 
-  // ---- the loop: renders while anything moves, idles otherwise
+  // ---- the loop: draws only when something visibly changes (a cool
+  // laptop). While anything in view moves it runs at the display's rate;
+  // when only distant plinths move, at about 30 a second; when nothing
+  // moves it stops, and a timer wakes it for the next thing the loop has
+  // scheduled (a gesture's moment, the glide home, the wrap) so
+  // performances still play on time. Input, a state or poses event, a
+  // gesture, a resize and the tab coming back wake it too.
   let raf = 0;
+  let timer = 0;
   let still = reducedMotion.matches;
   reducedMotion.addEventListener("change", (e) => {
     still = e.matches;
     wake();
   });
   function wake() {
-    if (!raf) raf = requestAnimationFrame(frame);
+    if (timer) {
+      clearTimeout(timer);
+      timer = 0;
+    }
+    // a backgrounded tab draws nothing; it wakes when it comes back
+    if (!raf && !document.hidden) raf = requestAnimationFrame(frame);
   }
+  const wakeIn = (ms) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = 0;
+      wake();
+    }, ms);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) wake();
+  });
+  // your pose stays fresh for the others while the loop idles (the server
+  // forgets a pose after 5 s; sendPose sends at most every 2 s when
+  // nothing changed)
+  setInterval(() => {
+    if (!raf && !document.hidden) sendPose(performance.now());
+  }, 1000);
   // the time sculptures are drawn at: the shared clock, or 0 when still
   const drawTime = () => (still ? 0 : time());
+
+  // what the camera can see of each performance: whether it's in the view
+  // at all, and how far away (a plinth's play is small: far off, it
+  // needn't drive frames)
+  const frustum = new THREE.Frustum();
+  const viewSphere = new THREE.Sphere();
+  const projView = new THREE.Matrix4();
+  const aimFrustum = () => frustum.setFromProjectionMatrix(projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  function sight(key, v) {
+    v.holder.getWorldPosition(viewSphere.center);
+    const isStage = key === "bench";
+    viewSphere.center.y += isStage ? 0.8 : 0.4;
+    viewSphere.radius = isStage ? 2.4 : 1.0;
+    return { seen: frustum.intersectsSphere(viewSphere), dist: viewSphere.center.distanceTo(camera.position) };
+  }
+  const NEAR_PLINTH = 4; // closer than this, a plinth plays at full rate
+  const FAR_PLINTH = 9; // further than this, it doesn't drive frames
+  const isSelected = (key) => (key === "bench" ? selected.kind === "bench" : key === `slot:${selected.slot}`);
+  // whose loop wakes the idle page: what's in view and near enough, and
+  // the selected performance, whose sound plays wherever you look
+  function watched(key, v) {
+    if (isSelected(key)) return true;
+    const { seen, dist } = sight(key, v);
+    return seen && (key === "bench" || dist <= FAR_PLINTH);
+  }
+  const perfOf = (key, v) => (key === "bench" && pending.length ? { ...v.perf, gestures: [...v.perf.gestures, ...pending] } : v.perf);
+
+  // Plays every performance to now (without drawing): the views step on,
+  // and what happened is heard. Called by each frame, and by probe() when
+  // the loop is idle, so a check always reads the present.
+  function playViews() {
+    const moment = loopMoment(drawTime());
+    for (const [key, v] of views) {
+      const isStage = key === "bench";
+      const events = v.view.update(perfOf(key, v), moment, { colourOf, held: isStage && holding ? [holding] : [], still });
+      // sound for what's in view: the stage, or the chosen plinth
+      if (events.length && isSelected(key)) {
+        onEvents(events);
+        // for the browser check: what this screen just saw happen, and when
+        if (isStage) {
+          canvas.dataset.heard = events.map((e) => e.kind).join(" ");
+          canvas.dataset.heardAt = String(Date.now());
+        }
+      }
+    }
+    // claim rings follow the spheres they mark
+    if (stageView) {
+      const balls = stageView.objects().balls;
+      for (const ring of wb.leases.children) {
+        const b = balls[ring.userData.sphere];
+        if (b) ring.position.copy(b.position).setY(b.position.y - SETS.orbit.sphereR - 0.02);
+      }
+    }
+  }
+
+  // How soon the next frame: "full" (the display's rate), "half" (about
+  // 30 a second: only plinths some way off move), "listen" (only the
+  // selected performance moves, out of sight: stepped for its sounds,
+  // never drawn), or "idle".
+  function pace(walking, avatarsBusy) {
+    if (walking || glide || press || drag || avatarsBusy) return "full";
+    aimFrustum();
+    let half = false;
+    let listen = false;
+    for (const [key, v] of views) {
+      if (!v.view.moving()) continue;
+      const { seen, dist } = sight(key, v);
+      if (seen && (key === "bench" || dist <= NEAR_PLINTH)) return "full";
+      if (seen && dist <= FAR_PLINTH) half = true;
+      else if (isSelected(key)) listen = true;
+    }
+    return half ? "half" : listen ? "listen" : "idle";
+  }
+  // after a frame or a listen: when to come back
+  function schedule(p) {
+    if (p === "full") wake();
+    else if (p === "half") wakeIn(26);
+    else if (p === "listen") {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = 0;
+        if (raf || document.hidden) return;
+        playViews();
+        schedule(pace(false, false));
+      }, 33);
+    } else {
+      const next = nextScheduled();
+      if (next !== null) wakeIn(next * 1000 + 12);
+    }
+  }
+
+  // Seconds until the next scheduled thing in a watched loop: a gesture's
+  // moment, the start of the glide home, or the wrap. From the gestures'
+  // moments and the loop clock alone; no simulation.
+  function nextScheduled() {
+    if (still) return null;
+    const m = loopMoment(drawTime());
+    let soonest = Infinity;
+    const consider = (x) => {
+      const d = x > m + 1e-3 ? x - m : x + LOOP - m;
+      if (d < soonest) soonest = d;
+    };
+    for (const [key, v] of views) {
+      if (!watched(key, v)) continue;
+      for (const g of perfOf(key, v).gestures) consider(g.at);
+      consider(LOOP - GLIDE);
+      consider(LOOP);
+    }
+    return Number.isFinite(soonest) ? soonest : null;
+  }
+
   let lastFrame = performance.now();
   function frame() {
     raf = 0;
+    if (document.hidden) return;
     const now = performance.now();
     const dt = Math.min(0.05, (now - lastFrame) / 1000);
     lastFrame = now;
-    const t = drawTime();
     // walk and turn
     const inp = input();
     const walking = inp.fwd !== 0 || inp.side !== 0 || inp.yawRate !== 0;
@@ -1155,46 +1294,27 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     }
     heldBall.visible = !!holding;
     if (holding) heldBall.position.fromArray(heldPoint());
-    const moment = loopMoment(t);
-    let busy = false;
-    for (const [key, v] of views) {
-      const isStage = key === "bench";
-      const perf = isStage && pending.length ? { ...v.perf, gestures: [...v.perf.gestures, ...pending] } : v.perf;
-      const events = v.view.update(perf, moment, { colourOf, held: isStage && holding ? [holding] : [], still });
-      busy ||= v.view.busy();
-      // sound for what's in view: the stage, or the chosen plinth
-      if (events.length && ((isStage && selected.kind === "bench") || key === `slot:${selected.slot}`)) {
-        onEvents(events);
-        // for the browser check: what this screen just saw happen, and when
-        if (isStage) {
-          canvas.dataset.heard = events.map((e) => e.kind).join(" ");
-          canvas.dataset.heardAt = String(Date.now());
-        }
-      }
-    }
-    // claim rings follow the spheres they mark
-    if (stageView) {
-      const balls = stageView.objects().balls;
-      for (const ring of wb.leases.children) {
-        const b = balls[ring.userData.sphere];
-        if (b) ring.position.copy(b.position).setY(b.position.y - SETS.orbit.sphereR - 0.02);
-      }
-    }
+    playViews();
     reticle = aim();
     showReticle();
-    busy = avatars.update(dt, camera, canvas.clientWidth, canvas.clientHeight, still) || busy;
+    const avatarsBusy = avatars.update(dt, camera, canvas.clientWidth, canvas.clientHeight, still);
     renderer.render(scene, camera);
     sendPose(now);
-    // keep going while anything moves; when still, a slow tick keeps the
-    // pose fresh and others' heads arriving
-    if (!still || walking || glide || busy || press || drag) wake();
-    else setTimeout(wake, 250);
+    // keep going while anything in sight moves; otherwise sleep until the
+    // loop's next scheduled moment (just after it, so its step has come)
+    schedule(pace(walking, avatarsBusy));
   }
 
   // For the browser check: where the camera stands, the uncovered part of
   // the canvas, and what the camera now shows of a target ("bench" or a
   // slot), all in canvas px; and the first-person state (ADR 17).
   canvas.probe = (t = "bench") => {
+    // idle, the meshes stand where they were last drawn: bring them to now
+    // first, and wake if that set anything going
+    if (!raf) {
+      playViews();
+      if ([...views.values()].some((v) => v.view.moving())) wake();
+    }
     placeCamera();
     const target = targetOf(t);
     const m = measure(camera, target, obstacles(target.skip), 7);
@@ -1321,6 +1441,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   placeCamera();
   wake();
 
+  let othersKey = "";
   const spotFor = (sel) => (sel.kind === "slot" ? standBefore(sel.slot) : sel.kind === "bench" ? START : null);
   return {
     /** walk back to the starting spot, facing the stage */
@@ -1338,6 +1459,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     /** others' heads, hands and held spheres, from a `poses` event */
     setPoses(ev, youTag) {
       avatars.set(ev, youTag);
+      // the stream echoes your own keep-alive pose back: only someone
+      // else's change needs drawing (their heads ease in over frames)
+      const key = JSON.stringify((ev?.poses ?? []).filter((p) => p && p.tag !== youTag));
+      if (key === othersKey) return;
+      othersKey = key;
       wake();
     },
     update(state, sel) {

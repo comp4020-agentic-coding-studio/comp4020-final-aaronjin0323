@@ -113,6 +113,13 @@ export function createStageView() {
   let runKey = "";
   let lastT = -1;
   let bellSwing = 0;
+  // whether anything visibly moved in the last update: a sphere that went
+  // somewhere (riding, flying, gliding home), a pulse, the bell swinging.
+  // Read off what update() already worked out; the scene stops drawing
+  // when nothing in view moves.
+  const lastPos = {};
+  let movedAt = -Infinity;
+  let live = [];
 
   // Every flash is a thin ring that grows and fades in under half a
   // second: it marks where and by whom, without hiding the objects.
@@ -154,6 +161,11 @@ export function createStageView() {
       const s = stage.spheres[id];
       const b = balls[id];
       b.visible = !held.includes(id);
+      const was = lastPos[id];
+      if (!was || was[0] !== s.pos[0] || was[1] !== s.pos[1] || was[2] !== s.pos[2]) {
+        lastPos[id] = s.pos;
+        if (was) movedAt = performance.now();
+      }
       b.position.fromArray(s.pos);
       const sh = shadows[id];
       sh.visible = b.visible;
@@ -167,7 +179,7 @@ export function createStageView() {
     else bellSwing = 0;
     bell.rotation.z = Math.sin(stage.t * 18) * 0.22 * bellSwing;
     // pulses: a bright bead running each way round the ribbon
-    const live = stage.pulses.filter((q) => q.age < 0.6);
+    live = stage.pulses.filter((q) => q.age < 0.6);
     while (pulseMeshes.length < live.length * 2) {
       const pm = new THREE.Mesh(m.pulseGeo, new THREE.MeshBasicMaterial({ color: "#fff3d6" }));
       root.add(pm);
@@ -220,7 +232,11 @@ export function createStageView() {
     for (const pm of pulseMeshes) pm.material.dispose();
   }
 
-  return { root, update, objects, dispose, busy: () => flashes.length > 0 };
+  // A sphere stepped at 60 Hz may sit still for a frame on a faster
+  // screen, so "moved" holds for a moment after the last change.
+  const moving = () => flashes.length > 0 || live.length > 0 || bellSwing > 0 || performance.now() - movedAt < 60;
+
+  return { root, update, objects, dispose, busy: () => flashes.length > 0, moving };
 }
 
 export { LOOP, RIBBON, VISITOR_COLOURS };
