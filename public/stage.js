@@ -28,7 +28,10 @@ export const PALETTE = [
 export const VISITOR_COLOURS = ["#e2553f", "#2e8f8a", "#7b5cc4", "#d98a1c", "#3c7bd1", "#c2477e", "#5a9a3a", "#8a6a4a"];
 
 /** The loop, in seconds: every gesture replays once per loop. */
-export const LOOP = 12;
+export const LOOP = 30;
+/** For this long at the end of each loop, every sphere eases back to where
+ * it rests, so the loop comes round without a jump. */
+export const GLIDE = 1.2;
 /** The fixed step every screen simulates with. */
 export const STEP = 1 / 60;
 /** At most this many gestures in a loop, and this many from one visitor. */
@@ -82,7 +85,7 @@ export const RIBBON = { radius: 1, height: 0.95, swing: 0.42, turns: 2, breathe:
  * @typedef {{ kind: string, object: string, at: number, from?: number[], v?: number[], u?: number, by?: string }} Gesture
  * @typedef {{ set: string, gestures: Gesture[] }} Performance
  * @typedef {{ pos: number[], riding: boolean, anchored: boolean, u: number }} SphereView
- * @typedef {{ t: number, spheres: Record<string, SphereView>, pulses: { u: number, age: number }[], lastRing: number | null, lastRingBy: string | null }} StageView
+ * @typedef {{ t: number, spheres: Record<string, SphereView>, pulses: { u: number, age: number }[], lastRing: number | null, lastRingBy: string | null, home?: number }} StageView
  * @typedef {{ kind: string, object: string, t: number, pos: number[], by?: string, u?: number, other?: string }} StageEvent
  */
 
@@ -506,6 +509,32 @@ function view(st) {
 /** The stage at loop moment t.
  * @param {Performance} p @param {number} t @returns {StageView} */
 export const simulate = (p, t) => createRun(p).at(t).stage;
+
+/**
+ * What a screen shows of a stage at loop moment t: the stage itself, except
+ * in the last GLIDE of the loop, where each sphere eases from where it is
+ * back to where it rests, so the next loop starts where this one ended.
+ * Smoothstep on + - * only, so every engine shows the same.
+ * @param {StageView} stage @param {string} set @param {number} t @returns {StageView}
+ */
+export function ease(stage, set, t) {
+  const from = LOOP - GLIDE;
+  if (t < from) return stage;
+  const k = Math.min(1, (t - from) / GLIDE);
+  const e = k * k * (3 - 2 * k);
+  const rest = SETS[set].rest;
+  const spheres = {};
+  for (const id of SPHERES) {
+    const s = stage.spheres[id];
+    const r = rest[id];
+    spheres[id] = { ...s, riding: false, pos: [s.pos[0] + (r[0] - s.pos[0]) * e, s.pos[1] + (r[1] - s.pos[1]) * e, s.pos[2] + (r[2] - s.pos[2]) * e] };
+  }
+  return { ...stage, spheres, home: e };
+}
+
+/** What a screen shows at loop moment t (see ease).
+ * @param {Performance} p @param {number} t @returns {StageView} */
+export const shownAt = (p, t) => ease(simulate(p, t), p.set, t);
 
 /** Everything that happened from loop moment t0 up to t1.
  * @param {Performance} p @param {number} t0 @param {number} t1 @returns {StageEvent[]} */

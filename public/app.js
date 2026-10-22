@@ -6,7 +6,7 @@
 // textContent. Small decisions (connection, publish flow, input rules) live
 // in ui-logic.js, where a test can hold them; the stage's rules are
 // stage.js.
-import { LOOP, PALETTE, SETS, SPHERES, VISITOR_COLOURS, loopMoment, simulate } from "./stage.js";
+import { LOOP, PALETTE, SETS, SPHERES, VISITOR_COLOURS, loopMoment, shownAt } from "./stage.js";
 import { isMuted, play as playSounds, setMuted, unlock } from "./sound.js";
 import {
   INITIAL_CONN,
@@ -402,7 +402,7 @@ $("[data-gestures]").addEventListener("click", async (e) => {
   const [kind, object] = b.dataset.gesture.split(":");
   const at = Number(moment().toFixed(3));
   if (kind === "throw") {
-    const now = simulate(state.draft.parts, at).spheres[object].pos;
+    const now = shownAt(state.draft.parts, at).spheres[object].pos;
     const r = await post("/stage/grab", { object });
     if (!r.ok) return toast(refusalText(r.status, r.body));
     const inward = [-now[0], 0, -now[2]].map((x) => Number((x * 0.9).toFixed(3)));

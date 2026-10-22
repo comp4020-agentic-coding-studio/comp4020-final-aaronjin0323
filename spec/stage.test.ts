@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BELL,
   CAP,
+  GLIDE,
   CAP_EACH,
   LOOP,
   SETS,
@@ -13,6 +14,7 @@ import {
   emptyPerformance,
   events,
   keepNewest,
+  shownAt,
   simulate,
   type Gesture,
 } from "../public/stage.js";
@@ -256,7 +258,44 @@ describe("every browser plays the same performance", () => {
     }
     let h = 0n;
     for (const c of text) h = (h * 131n + BigInt(c.charCodeAt(0))) % (2n ** 61n - 1n);
-    expect(h.toString()).toBe("368604101253897324");
+    expect(h.toString()).toBe("236435486642795239");
     expect(events(perf(g), 0, LOOP)).toHaveLength(15);
+  });
+});
+
+describe("the loop comes round gently", () => {
+  // a busy loop: spheres flung far from where they rest by the end
+  const busy = perf([
+    throwAt("teal", 1, [-0.62, 0.95, 0], [-0.9, 0, 0]),
+    throwAt("gold", 2, [-0.6, 0.3, -0.2], [2.2, 0.2, 0.1]),
+    { kind: "pluck", object: "ribbon", at: 6, u: 0.5, by: "bbbbbb" },
+    throwAt("dusk", 20, [0, 0.15, 0], [0, 1.8, 0]),
+    throwAt("chrome", LOOP - 3, [1.2, 0.3, 0.6], [-2, 0.3, -0.6]),
+  ]);
+  const frame = 1 / 60;
+  const jump = (t0: number, t1: number) => Math.max(...SPHERES.map((id) => dist(shownAt(busy, t0).spheres[id].pos, shownAt(busy, t1).spheres[id].pos)));
+
+  it("is 30 seconds long", () => {
+    expect(LOOP).toBe(30);
+  });
+
+  it("no sphere jumps between the last frame of a loop and the first of the next", () => {
+    // as far as a fast throw moves in one frame, at most
+    const limit = 6 * frame;
+    expect(jump(LOOP - frame, 0)).toBeLessThan(limit);
+    for (let t = LOOP - GLIDE - 0.5; t < LOOP - frame; t += frame) expect(jump(t, t + frame), `t ${t.toFixed(3)}`).toBeLessThan(limit);
+  });
+
+  it("before the glide, what's shown is the performance itself", () => {
+    for (const t of [0, 5, 12.5, LOOP - GLIDE - 0.01]) expect(shownAt(busy, t)).toEqual(simulate(busy, t));
+  });
+
+  it("by the end of the glide every sphere is back where it rests, as the next loop starts", () => {
+    const end = shownAt(busy, LOOP - 1e-6);
+    for (const id of SPHERES) expect(dist(end.spheres[id].pos, SETS.orbit.rest[id]), id).toBeLessThan(0.01);
+  });
+
+  it("is the same on every screen: a pure function of the loop moment", () => {
+    expect(shownAt(busy, LOOP - 0.6)).toEqual(shownAt(JSON.parse(JSON.stringify(busy)), LOOP - 0.6));
   });
 });

@@ -321,7 +321,7 @@ async function chain(browser: Browser): Promise<void> {
   // thrown straight through the ribbon, a moment from now in the loop
   const now = (await stageOf(a)).moment as number;
   await post(a, "/stage/grab", { object: "chrome" });
-  const at = Number(((now + 0.4) % 12).toFixed(3));
+  const at = Number(((now + 0.4) % 30).toFixed(3));
   await post(a, "/stage/gesture", { gesture: { kind: "throw", object: "chrome", at, from: [0.62, 0.95, 0], v: [0.9, 0, 0] } });
   check(await heard(a, "catch", 3000), "a sphere thrown through the ribbon is caught, with a flash and a sound");
   // B plucks the ribbon once chrome rides it: it's flung off on A's screen
@@ -903,6 +903,57 @@ for(var i=0;i<480;i++)out.push(ribbonPoint(i/480).join(","));
   check(chrome.length > 400 && at < 0, "every sphere position and the ribbon's path are identical, bit for bit", at < 0 ? `${chrome.length} values` : `first differs at value ${at}: ${chrome[at]} vs ${safari[at]}`);
 }
 
+// The loop comes round gently (CLAUDE.md): a sphere flung across the stage
+// glides home over the loop's last moments instead of snapping back, and
+// the next loop starts where it ended, with a ring of light for "from the
+// top". Watched frame by frame across the wrap, on the real page.
+async function wrap(browser: Browser): Promise<void> {
+  console.log("\n— the loop comes round gently —");
+  const page = await visitor(browser, { ...DESKTOP, reducedMotion: "no-preference" });
+  await freshStage(page);
+  // gold thrown hard across the stage a little before the loop ends
+  const st = await stageOf(page);
+  const loop = st.loop as number;
+  const wait = (loop - st.moment + loop - 6) % loop;
+  if (wait > 0.5) await page.waitForTimeout((wait - 0.4) * 1000);
+  const now = (await stageOf(page)).moment as number;
+  await post(page, "/stage/grab", { object: "gold" });
+  await post(page, "/stage/gesture", { gesture: { kind: "throw", object: "gold", at: Number(((now + 0.3) % loop).toFixed(3)), from: [-0.6, 0.3, -0.2], v: [2.2, 0.2, 0.1] } });
+  // watch every frame from just before the glide until just after the wrap
+  const samples = await page.evaluate(async (loop) => {
+    const c = document.querySelector("[data-scene]") as any;
+    const out: { m: number; p: number[] }[] = [];
+    const frame = () => new Promise((r) => requestAnimationFrame(r));
+    while (c.probe().stage.moment < loop - 2) await frame();
+    for (let i = 0; i < 240; i++) {
+      await frame();
+      const s = c.probe().stage;
+      out.push({ m: s.moment, p: s.spheres.gold.pos });
+      if (i > 10 && s.moment < 1 && out.at(-2)!.m > loop - 1) break;
+    }
+    for (let i = 0; i < 20; i++) {
+      await frame();
+      const s = c.probe().stage;
+      out.push({ m: s.moment, p: s.spheres.gold.pos });
+    }
+    return out;
+  }, loop);
+  // as a speed, not a step: headless Chrome draws far fewer frames than a
+  // screen does, so a smooth glide still takes big steps per frame. A snap
+  // back is a speed no sphere has (it crosses the stage in one frame); a
+  // throw is at most about 6 m/s.
+  let worst = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1].p, b = samples[i].p;
+    const dt = (samples[i].m - samples[i - 1].m + loop) % loop || 1 / 60;
+    worst = Math.max(worst, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / dt);
+  }
+  const wrapped = samples.some((s, i) => i > 0 && s.m < samples[i - 1].m);
+  check(wrapped && worst < 6, "a flung sphere never jumps as the loop comes round: it glides home", `fastest ${worst.toFixed(1)} m/s over ${samples.length} frames${wrapped ? "" : ", never wrapped"}`);
+  check(await heard(page, "top", 2000), "and a ring of light marks the start of the next loop");
+  await page.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -914,6 +965,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   realtime,
   presence,
   chain,
+  wrap,
   publishing,
   archive,
   disconnect,

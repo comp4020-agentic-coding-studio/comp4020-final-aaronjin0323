@@ -50,7 +50,7 @@ describe("the stage", { concurrent: false }, () => {
     await fresh();
     const a = visitor();
     for (const gesture of [
-      { kind: "tap", object: "bell", at: 12 },
+      { kind: "tap", object: "bell", at: 30 },
       { kind: "tap", object: "bell", at: -1 },
       { kind: "kick", object: "bell", at: 1 },
       { kind: "throw", object: "teal", at: 1, from: [0, 0, 0], v: [0, 99, 0] },

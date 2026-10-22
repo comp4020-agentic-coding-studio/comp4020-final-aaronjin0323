@@ -60,7 +60,14 @@ export function play(events) {
   // at most a few at once, or a busy loop turns into noise
   for (const e of events.slice(0, 4)) {
     const p = PITCH[e.object] ?? 1;
-    if (e.kind === "ring") {
+    if (e.kind === "home") {
+      // the glide home: a soft falling pair, like a breath out
+      tone({ freq: 523, dur: 0.9, gain: 0.07, slide: 0.75 });
+      tone({ freq: 784, dur: 0.9, gain: 0.04, slide: 0.75, delay: 0.08 });
+    } else if (e.kind === "top") {
+      // from the top: a soft chime
+      for (const [f, d] of [[784, 0], [1047, 0.09]]) tone({ freq: f, dur: 0.8, gain: 0.06, type: "triangle", delay: d });
+    } else if (e.kind === "ring") {
       // a bell: inharmonic partials, long tail
       for (const [mult, gain] of [[1, 0.22], [2.76, 0.1], [5.4, 0.05]]) tone({ freq: 660 * mult, dur: 1.6, gain });
     } else if (e.kind === "catch") tone({ freq: 520 * p, dur: 0.25, gain: 0.18, slide: 1.5, type: "triangle" });

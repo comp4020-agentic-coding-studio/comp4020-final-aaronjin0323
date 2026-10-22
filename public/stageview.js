@@ -3,7 +3,7 @@
 // player's colour on everything that happens. It only draws; the scene
 // (scene.js) handles touch and the page (app.js) sends gestures.
 import * as THREE from "three";
-import { BELL, LOOP, PALETTE, RIBBON, SETS, SPHERES, VISITOR_COLOURS, createRun, ribbonPoint } from "./stage.js";
+import { BELL, GLIDE, LOOP, PALETTE, RIBBON, SETS, SPHERES, VISITOR_COLOURS, createRun, ease, ribbonPoint } from "./stage.js";
 
 const hex = (i) => new THREE.Color(PALETTE[i]?.hex ?? "#ccc");
 
@@ -120,8 +120,9 @@ export function createStageView() {
     const mat = new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(m.ringGeo, mat);
     mesh.position.fromArray(pos);
-    // a bell's ring lies flat round it; the rest face up and outward
-    mesh.rotation.x = kind === "ring" ? Math.PI / 2 : Math.PI / 3;
+    // a bell's ring and the loop's "from the top" lie flat; the rest face
+    // up and outward
+    mesh.rotation.x = kind === "ring" || kind === "floor" ? Math.PI / 2 : Math.PI / 3;
     flashGroup.add(mesh);
     flashes.push({ mesh, born: performance.now(), size, kind });
   }
@@ -134,11 +135,20 @@ export function createStageView() {
       lastT = -1;
     }
     const replayed = lastT < 0;
-    const { stage, events } = run.at(still ? 0 : t);
+    const moment = still ? 0 : t;
+    const played = run.at(moment);
+    // the last moments of the loop: every sphere eases home (stage.js, ease)
+    const stage = ease(played.stage, p.set, moment);
+    const events = played.events;
     // A new run replays the loop from its start up to now: only what's
     // happening right now is news (a gesture just made shows at once).
     // When the loop comes round, everything since its start is.
     const fresh = replayed ? events.filter((e) => e.t >= t - 0.12) : events;
+    // "from the top": the loop came round, or the glide home began
+    if (!replayed && !still) {
+      if (t < lastT) fresh.push({ kind: "top", object: "stage", t, pos: [0, 0.02, 0] });
+      else if (lastT < LOOP - GLIDE && t >= LOOP - GLIDE) fresh.push({ kind: "home", object: "stage", t, pos: [0, 0.02, 0] });
+    }
     lastT = t;
     for (const id of SPHERES) {
       const s = stage.spheres[id];
@@ -174,7 +184,9 @@ export function createStageView() {
     // a flash for each thing that happened, in its player's colour
     for (const e of fresh) {
       const c = e.by ? colourOf(e.by) : e.object && SETS.orbit.colour[e.object] !== undefined ? PALETTE[SETS.orbit.colour[e.object]].hex : "#fff";
-      if (e.kind === "ring") flash("ring", BELL.pos, c, 0.45);
+      if (e.kind === "top") flash("floor", e.pos, "#fff1dc", SETS.orbit.radius);
+      else if (e.kind === "home") continue;
+      else if (e.kind === "ring") flash("ring", BELL.pos, c, 0.45);
       else if (e.kind === "catch") flash("halo", e.pos, PALETTE[SETS.orbit.colour[e.object]].hex, 0.26);
       else if (e.kind === "knock") flash("halo", e.pos, "#ffffff", 0.22);
       else if (e.kind === "fling" || e.kind === "hop") flash("halo", e.pos, c, 0.24);
@@ -184,14 +196,14 @@ export function createStageView() {
     const now = performance.now();
     for (let i = flashes.length - 1; i >= 0; i--) {
       const f = flashes[i];
-      const age = (now - f.born) / 450;
+      const age = (now - f.born) / (f.kind === "floor" ? 900 : 450);
       if (age >= 1) {
         flashGroup.remove(f.mesh);
         f.mesh.material.dispose();
         flashes.splice(i, 1);
         continue;
       }
-      f.mesh.scale.setScalar(f.size * (0.5 + age * 1.2));
+      f.mesh.scale.setScalar(f.kind === "floor" ? f.size * (0.15 + age * 0.85) : f.size * (0.5 + age * 1.2));
       f.mesh.material.opacity = 0.9 * (1 - age) ** 2;
     }
     return fresh;
