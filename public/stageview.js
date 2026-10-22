@@ -3,7 +3,7 @@
 // player's colour on everything that happens. It only draws; the scene
 // (scene.js) handles touch and the page (app.js) sends gestures.
 import * as THREE from "three";
-import { BELL, GLIDE, LOOP, PALETTE, RIBBON, SETS, SPHERES, VISITOR_COLOURS, createRun, ease, ribbonPoint } from "./stage.js";
+import { BELL, GLIDE, LOOP, PALETTE, RIBBON, SETS, SPHERES, VISITOR_COLOURS, ease, follow, ribbonPoint } from "./stage.js";
 
 const hex = (i) => new THREE.Color(PALETTE[i]?.hex ?? "#ccc");
 
@@ -109,8 +109,9 @@ export function createStageView() {
   // pulses running round the ribbon
   const pulseMeshes = [];
 
-  let run = null;
-  let runKey = "";
+  // one run, replayed only when the gestures change, from the latest
+  // moment the change can't have touched (stage.js, follow)
+  const playing = follow();
   let lastT = -1;
   let bellSwing = 0;
 
@@ -128,12 +129,8 @@ export function createStageView() {
   }
 
   function update(p, t, { colourOf = () => "#ffffff", held = [], still = false } = {}) {
-    const key = JSON.stringify(p.gestures);
-    if (key !== runKey) {
-      run = createRun(p);
-      runKey = key;
-      lastT = -1;
-    }
+    const { run, fresh: changed } = playing(p);
+    if (changed) lastT = -1;
     const replayed = lastT < 0;
     const moment = still ? 0 : t;
     const played = run.at(moment);

@@ -352,8 +352,14 @@ function tick(st, set, emit) {
     // fall upward, through air
     s.v[1] += T.lift * STEP;
     const keep = 1 - T.drag * STEP;
-    s.v = [s.v[0] * keep, s.v[1] * keep, s.v[2] * keep];
-    s.pos = [s.pos[0] + s.v[0] * STEP, s.pos[1] + s.v[1] * STEP, s.pos[2] + s.v[2] * STEP];
+    // in place: the same sums as making new vectors, without the garbage
+    // (a sphere's pos and v are its own; anything handed out is a copy)
+    s.v[0] = s.v[0] * keep;
+    s.v[1] = s.v[1] * keep;
+    s.v[2] = s.v[2] * keep;
+    s.pos[0] = s.pos[0] + s.v[0] * STEP;
+    s.pos[1] = s.pos[1] + s.v[1] * STEP;
+    s.pos[2] = s.pos[2] + s.v[2] * STEP;
     // the ceiling, the floor and the round wall
     if (s.pos[1] > top) {
       s.pos[1] = top;
@@ -455,45 +461,156 @@ function tick(st, set, emit) {
   }
 }
 
+// A deep copy of the stage's state, for a snapshot: copying moves no bits.
+function copyState(st) {
+  const spheres = {};
+  for (const id of SPHERES) {
+    const s = st.spheres[id];
+    spheres[id] = { pos: [s.pos[0], s.pos[1], s.pos[2]], v: [s.v[0], s.v[1], s.v[2]], anchored: s.anchored, riding: s.riding, u: s.u, dir: s.dir, free: s.free };
+  }
+  return { step: st.step, spheres, pulses: st.pulses.map((q) => ({ u: q.u, t: q.t, hit: [...q.hit] })), lastRing: st.lastRing, lastRingBy: st.lastRingBy };
+}
+
+/** A snapshot of the stage is kept every this many steps (1 s). */
+const SNAP_EVERY = 60;
+const LAST_STEP = Math.round(LOOP / STEP) - 1;
+
+/**
+ * @typedef {{ snaps: { st: any, n: number }[], log: StageEvent[] }} RunBase
+ * @typedef {{ at(t: number): { stage: StageView, events: StageEvent[] }, base(k: number): RunBase }} Run
+ */
+
 /**
  * A performance being played: `at(t)` advances to loop moment t (0 to
- * LOOP), stepping on from where it was when it can, and starts again from
- * rest when t goes back (the loop came round). It returns the stage and the
- * events since the last call, for flashes and sounds.
+ * LOOP), stepping on from where it was when it can, and when t goes back
+ * (the loop came round) starts again from the latest snapshot at or before
+ * it. It returns the stage and the events since the last call, for flashes
+ * and sounds; after going back, every event since the start of the loop,
+ * as a fresh replay would.
+ *
+ * Every SNAP_EVERY steps the run keeps a copy of the stage. `base(k)` hands
+ * on the snapshots (and the stage now) from before step k, with the events
+ * up to each: a performance whose gestures differ from this one's only at
+ * step k or later starts from them (`createRun(p, base)`), since nothing
+ * before step k can tell the two apart. Either way every stage and event
+ * is exactly what a replay from rest gives, bit for bit.
  */
-/** @param {Performance} p @returns {{ at(t: number): { stage: StageView, events: StageEvent[] } }} */
-export function createRun(p) {
+/** @param {Performance} p @param {RunBase} [from] @returns {Run} */
+export function createRun(p, from) {
   const sched = schedule(p);
-  let st = startState(p.set);
-  let pending = [];
-  const emitAt = (e) => pending.push({ ...e, t: st.step * STEP });
-  const steps = (k) => {
+  /** @type {any} */
+  let st = null;
+  const snaps = from ? [...from.snaps] : [];
+  const log = from ? [...from.log] : [];
+  // how much of the log has been handed out
+  let told = 0;
+  const emitAt = (e) => log.push({ ...e, t: st.step * STEP });
+  const land = () => {
     for (const g of sched.get(st.step) ?? []) apply(st, g, st.step * STEP, emitAt);
+  };
+  const steps = (k) => {
     while (st.step < k) {
       st.step++;
       tick(st, p.set, emitAt);
-      for (const g of sched.get(st.step) ?? []) apply(st, g, st.step * STEP, emitAt);
+      land();
+      if (st.step % SNAP_EVERY === 0) snaps.push({ st: copyState(st), n: log.length });
     }
   };
-  let started = false;
+  // back to the latest snapshot at or before step k (or rest, before any)
+  const restore = (k) => {
+    let j = snaps.length - 1;
+    while (j >= 0 && snaps[j].st.step > k) j--;
+    if (j < 0) {
+      snaps.length = 0;
+      log.length = 0;
+      st = startState(p.set);
+      // gestures at step 0 land before anything moves
+      land();
+      snaps.push({ st: copyState(st), n: log.length });
+    } else {
+      snaps.length = j + 1;
+      log.length = snaps[j].n;
+      st = copyState(snaps[j].st);
+    }
+    told = 0;
+  };
   return {
     at(t) {
-      const k = Math.max(0, Math.min(Math.floor(t / STEP + 1e-9), Math.round(LOOP / STEP) - 1));
-      if (!started || k < st.step) {
-        st = startState(p.set);
-        started = true;
-        // gestures at step 0 land before anything moves
-        for (const g of sched.get(0) ?? []) apply(st, g, 0, emitAt);
-        st.step = 0;
-        const zero = sched.get(0);
-        sched.delete(0);
-        steps(k);
-        if (zero) sched.set(0, zero);
-      } else steps(k);
-      const events = pending;
-      pending = [];
+      const k = Math.max(0, Math.min(Math.floor(t / STEP + 1e-9), LAST_STEP));
+      if (st === null || k < st.step) restore(k);
+      steps(k);
+      const events = log.slice(told);
+      told = log.length;
       return { stage: view(st), events };
     },
+    base(k) {
+      const out = { snaps: snaps.filter((s) => s.st.step < k), log: [] };
+      if (st !== null && st.step < k && st.step > (out.snaps.at(-1)?.st.step ?? -1)) out.snaps.push({ st: copyState(st), n: log.length });
+      out.log = log.slice(0, out.snaps.at(-1)?.n ?? 0);
+      return out;
+    },
+  };
+}
+
+// Two gestures are the same when every field is (what JSON would show).
+function sameGesture(a, b) {
+  let n = 0;
+  for (const key in a) {
+    n++;
+    const x = a[key];
+    const y = b[key];
+    if (Array.isArray(x)) {
+      if (!Array.isArray(y) || x.length !== y.length) return false;
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    } else if (x !== y) return false;
+  }
+  for (const _ in b) n--;
+  return n === 0;
+}
+const copyGesture = (g) => {
+  const out = {};
+  for (const key in g) out[key] = Array.isArray(g[key]) ? [...g[key]] : g[key];
+  return out;
+};
+
+// The first step at which two loops' gestures differ (in what lands, or
+// the order it lands in), or Infinity if they're the same.
+function firstChange(a, b) {
+  const sa = schedule({ gestures: a });
+  const sb = schedule({ gestures: b });
+  let first = Infinity;
+  for (const [k, ga] of sa) {
+    const gb = sb.get(k);
+    if (!gb || gb.length !== ga.length || ga.some((g, i) => !sameGesture(g, gb[i]))) first = Math.min(first, k);
+  }
+  for (const k of sb.keys()) if (!sa.has(k)) first = Math.min(first, k);
+  return first;
+}
+
+/**
+ * Follows one performance as its gestures change, for a screen that plays
+ * it every frame: `follow()(p)` gives the run to play `p` with, and whether
+ * it's a fresh one (the gestures changed). Gestures are compared by value,
+ * however they arrive (a new array, the same array changed, the server's
+ * copy), and a fresh run starts from the latest snapshot the change can't
+ * have touched, never replaying more than it must.
+ */
+/** @returns {(p: Performance) => { run: Run, fresh: boolean }} */
+export function follow() {
+  /** @type {Run | null} */
+  let run = null;
+  let set = "";
+  /** @type {Gesture[]} */
+  let seen = [];
+  return (p) => {
+    const g = p.gestures;
+    const same = run !== null && p.set === set && g.length === seen.length && g.every((x, i) => sameGesture(x, seen[i]));
+    if (same && run) return { run, fresh: false };
+    const k = run !== null && p.set === set ? firstChange(seen, g) : 0;
+    run = createRun(p, run && k > 0 ? run.base(k) : undefined);
+    set = p.set;
+    seen = g.map(copyGesture);
+    return { run, fresh: true };
   };
 }
 

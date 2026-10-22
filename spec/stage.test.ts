@@ -11,8 +11,10 @@ import {
   STEP,
   checkGesture,
   checkPerformance,
+  createRun,
   emptyPerformance,
   events,
+  follow,
   keepNewest,
   shownAt,
   simulate,
@@ -297,5 +299,135 @@ describe("the loop comes round gently", () => {
 
   it("is the same on every screen: a pure function of the loop moment", () => {
     expect(shownAt(busy, LOOP - 0.6)).toEqual(shownAt(JSON.parse(JSON.stringify(busy)), LOOP - 0.6));
+  });
+});
+
+// a seeded mix of throws, plucks and taps, each checked and snapped
+const mix = (seed: number, n: number): Gesture[] => {
+  let x = seed;
+  const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
+  const r3 = (v: number) => Number(v.toFixed(3));
+  return Array.from({ length: n }, () => {
+    const at = r3(rnd() * (LOOP - 0.01));
+    const k = rnd();
+    const g =
+      k < 0.6
+        ? { kind: "throw", object: SPHERES[Math.floor(rnd() * 4)], at, from: [r3(rnd() * 2 - 1), r3(0.2 + rnd()), r3(rnd() * 2 - 1)], v: [r3(rnd() * 4 - 2), r3(rnd() * 2), r3(rnd() * 4 - 2)] }
+        : k < 0.8
+          ? { kind: "pluck", object: "ribbon", at, u: r3(rnd() * 0.99) }
+          : { kind: "tap", object: "bell", at };
+    const c = checkGesture("orbit", g);
+    if (!c.ok) throw new Error(c.reason);
+    return { ...c.gesture, by: "aaaaaa" };
+  });
+};
+
+// Playing a performance frame by frame, as every screen does, has to be
+// the rule itself: at every frame the stage is simulate's, bit for bit,
+// whatever the frame rate, and everything that happens is heard once.
+// (Seen red: each call re-applied the gestures of the step it stood on, so
+// at 60 Hz a pluck sent two pulses and a throw flashed three times, and a
+// screen held still at 0 added a pulse every frame.)
+describe("frame by frame is the rule itself", () => {
+  const busy = [throwAt("chrome", 1, [0.62, 0.95, 0], [0.9, 0, 0]), { kind: "pluck", object: "ribbon", at: 3.2, u: 0, by: "bbbbbb" }, { kind: "tap", object: "bell", at: 5, by: "aaaaaa" }];
+
+  it("at 60 Hz, 120 Hz and 47 Hz, every frame is simulate's and every event comes once", () => {
+    for (const gestures of [busy, mix(11, 12), mix(29, 30)]) {
+      const p = perf(gestures);
+      for (const hz of [60, 120, 47]) {
+        const run = createRun(p);
+        const heard: unknown[] = [];
+        for (let f = 0; f / hz < LOOP; f++) {
+          const t = f / hz;
+          const a = run.at(t);
+          heard.push(...a.events);
+          // a frame asked for twice hears nothing new
+          if (f % 7 === 0) heard.push(...run.at(t).events);
+          if (f % 5 === 0) expect(a.stage, `${hz} Hz at ${t}`).toEqual(simulate(p, t));
+        }
+        expect(heard, `${hz} Hz`).toEqual(createRun(p).at(LOOP).events);
+      }
+    }
+  });
+
+  it("held still at the start, the stage doesn't change", () => {
+    const p = perf([{ kind: "pluck", object: "ribbon", at: 0, u: 0.3, by: "aaaaaa" }]);
+    const run = createRun(p);
+    const first = run.at(0).stage;
+    for (let i = 0; i < 30; i++) expect(run.at(0).stage).toEqual(first);
+  });
+
+  it("across the wrap, the next loop plays exactly as the first", () => {
+    const p = perf(mix(5, 20));
+    const run = createRun(p);
+    for (let f = 0; f < 70 * 60; f++) {
+      const t = (LOOP - 3 + f / 60) % LOOP;
+      const a = run.at(t).stage;
+      if (f % 11 === 0) expect(a, `t ${t}`).toEqual(simulate(p, t));
+    }
+  });
+});
+
+// A screen keeps one run per performance and replays only when the
+// gestures change (stageview's update), from the latest moment that the
+// change can't have touched. The check must never miss a change, however
+// the gestures arrive: a new array, the same array pushed to, an element
+// swapped, an undo; and the server's copy of the same gestures needs none.
+describe("a screen follows a performance as it changes", () => {
+  it("replays exactly when the gestures change, and plays what a fresh run would", () => {
+    const follower = follow();
+    let x = 3;
+    const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
+    let n = 0;
+    const make = () => mix(100 + n++, 1)[0];
+    let gestures: Gesture[] = mix(1, 6);
+    let shown = "";
+    let replays = 0;
+    let changes = 0;
+    for (let step = 0; step < 300; step++) {
+      const k = rnd();
+      if (k < 0.15) gestures = [...gestures, make()]; // a new gesture
+      else if (k < 0.25) gestures.push(make()); // pushed onto the same array
+      else if (k < 0.35 && gestures.length) gestures[Math.floor(rnd() * gestures.length)] = make(); // swapped in place
+      else if (k < 0.45 && gestures.length) gestures = gestures.slice(1); // the oldest dropped
+      else if (k < 0.6) gestures = JSON.parse(JSON.stringify(gestures)); // the server's copy
+      else if (k < 0.7) gestures = [...gestures]; // a new array, the same gestures
+      if (gestures.length > CAP) gestures = gestures.slice(-CAP);
+      const p = perf(gestures);
+      const now = JSON.stringify(gestures);
+      if (now !== shown) changes++;
+      shown = now;
+      const r = follower(p);
+      if (r.fresh) replays++;
+      // a few frames on from a random moment, as a screen plays
+      const t0 = rnd() * (LOOP - 1);
+      for (let f = 0; f < 3; f++) {
+        const t = t0 + f / 60;
+        const a = r.run.at(t);
+        expect(a.stage, `step ${step} at ${t}`).toEqual(simulate(p, t));
+        // a fresh run hears what a full replay hears
+        if (r.fresh && f === 0) expect(a.events, `step ${step}`).toEqual(createRun(p).at(t).events);
+      }
+    }
+    expect(changes).toBeGreaterThan(50);
+    expect(replays).toBe(changes);
+  });
+
+  it("a change on a whole second, where a snapshot is kept, or on the moment being shown, plays as a fresh run", () => {
+    const base = mix(77, 10);
+    for (const at of [0, 1, 2, 5, 12, 12.017, 20, LOOP - 1]) {
+      for (const shownAt of [at, at + 0.5, at + 3]) {
+        const follower = follow();
+        const before = perf(base);
+        const r0 = follower(before);
+        // played on past the change, across a wrap, and back to it
+        for (const t of [0, shownAt, LOOP - 0.1, 0.2, shownAt]) r0.run.at(Math.min(t, LOOP - 0.01));
+        const extra = [...base, { kind: "throw", object: "gold", at, from: [-0.6, 0.3, -0.2], v: [2.2, 0.2, 0.1], by: "bbbbbb" }];
+        const after = perf(extra);
+        const r1 = follower(after);
+        expect(r1.fresh).toBe(true);
+        for (const t of [shownAt, shownAt + 1.5, LOOP - 0.5, 1]) expect(r1.run.at(Math.min(t, LOOP - 0.01)).stage, `at ${at}, shown ${shownAt}, t ${t}`).toEqual(simulate(after, Math.min(t, LOOP - 0.01)));
+      }
+    }
   });
 });
