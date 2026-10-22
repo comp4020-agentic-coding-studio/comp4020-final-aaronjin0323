@@ -1123,6 +1123,67 @@ async function setRow(browser: Browser): Promise<void> {
   await b.context().close();
 }
 
+// Swap Doors (ADR 18): picked from the set row, a ball thrown by its
+// button goes through one door and out of the other, and a door turned by
+// the reticle (walk up, look at it, click) turns on a second visitor's
+// screen within a second. Ends back on Orbit.
+async function doorsSection(browser: Browser): Promise<void> {
+  console.log("\n— Swap Doors: through one door, out of the other —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
+  await b.click('[data-go="bench"]');
+  await a.click('[data-sets] [data-set="doors"]');
+  if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
+  const onB = await b.waitForFunction(() => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === "doors", null, { timeout: 3000 }).then(() => true, () => false);
+  check(onB, "doors: chosen from the set row, a second visitor's stage shows the doors");
+  const objs = Object.keys((await stageOf(a))?.spheres ?? {});
+  check(["apricot", "lemon", "plum", "coraldoor", "tealdoor"].every((id) => objs.includes(id)), "doors: three balls and two door frames on the stage", objs.join(", "));
+  // by button: the apricot ball is lobbed into a door; B sees it move
+  // within a second and both screens see it pass through
+  const from = await sphereAt(b, "apricot");
+  const t0 = Date.now();
+  await a.click('[data-gesture="throw:apricot"]');
+  const seen = await movedFrom(b, "apricot", from, 1500, t0);
+  check(seen >= 0 && seen <= 1000, "doors: a throw by button shows on a second visitor's screen within a second", `${seen} ms`);
+  check(await heard(a, "exit", 3000), "doors: the ball goes in one door and comes out of the other (thrower's screen)");
+  check(await heard(b, "exit", 3000), "doors: and on the second visitor's screen");
+  // by reticle: walk up to the stage, look at the coral door, click it
+  await a.evaluate(() => (document.querySelector("[data-scene]") as any).lookAtPoint(0, 1.62, 0));
+  await walk(a, 700);
+  await a.evaluate(() => {
+    const c = document.querySelector("[data-scene]") as any;
+    const d = c.probe().stage.spheres.coraldoor.pos;
+    c.lookAtPoint(d[0], d[1] + 0.66 + 0.7, d[2]);
+  });
+  await a.waitForTimeout(200);
+  const on = (await fpOf(a)).reticle.id;
+  check(on === "coraldoor", "doors: the reticle rests on the coral door", String(on));
+  const turnBefore = await b.evaluate(() => (document.querySelector("[data-scene]") as any).probe().stage.spheres.coraldoor);
+  const box = (await a.locator("[data-scene]").boundingBox())!;
+  await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const t1 = Date.now();
+  await a.mouse.down();
+  await a.waitForTimeout(60);
+  await a.mouse.up();
+  const turned = await b
+    .waitForFunction(() => /\bturn\b/.test(document.querySelector("[data-scene]")!.getAttribute("data-heard") ?? ""), null, { timeout: 1500 })
+    .then(() => Date.now() - t1, () => -1);
+  check(turned >= 0 && turned <= 1000, "doors: a door tapped by the reticle turns on a second visitor's screen within a second", `${turned} ms`);
+  await b.waitForTimeout(500);
+  const after = await b.evaluate(() => (document.querySelector("[data-scene]") as any).probe().stage.spheres.coraldoor);
+  check(Math.hypot(after.at.x - turnBefore.at.x, after.at.y - turnBefore.at.y) < 2, "doors: it turns where it stands");
+  const ticks = await a.locator("[data-loop-ticks] .tick").count();
+  check(ticks === 2, "doors: both gestures are in the loop", `${ticks} ticks`);
+  await a.screenshot({ path: ".shots/doors-a.png" });
+  // A has walked up to the stage, so B's view from the edge is clear
+  await b.screenshot({ path: ".shots/doors-b.png" });
+  await freshStage(a, "orbit");
+  await a.context().close();
+  await b.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1146,6 +1207,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   names,
   engines,
   setrow: setRow,
+  doors: doorsSection,
   gpu,
   idle,
 };
