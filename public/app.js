@@ -125,7 +125,11 @@ function connect() {
   });
   es.addEventListener("state", (e) => {
     const next = JSON.parse(e.data);
+    const was = offset;
     offset = clockOffset(next.serverTime, Date.now());
+    // the loop strip's head follows the shared clock: re-sync it when the
+    // clock moved by more than a frame
+    if (Math.abs(offset - was) > 20) runHead();
     state = next;
     conn = connection(conn, "state");
     render();
@@ -360,11 +364,22 @@ function renderTicks() {
   };
   box.replaceChildren(...gestures.map((g) => el("span", { class: "tick", style: { left: `${(g.at / LOOP) * 100}%`, "--who": colour(g.by) } })));
 }
+// The head runs as a CSS animation, which the browser drives on its own
+// (no script per frame, no layout): one sweep per loop, started at the
+// loop's moment now, and set again only when the clock offset or motion
+// preference changes.
 function runHead() {
   const head = $("[data-loop-head]");
-  head.style.left = `${(moment() / LOOP) * 100}%`;
-  requestAnimationFrame(runHead);
+  const still = reducedMotion.matches;
+  head.style.animationDuration = `${LOOP}s`;
+  head.style.animationDelay = `${-moment()}s`;
+  head.style.animationPlayState = still ? "paused" : "running";
+  // restart the animation so the new delay takes effect
+  head.style.animationName = "none";
+  void head.offsetWidth;
+  head.style.animationName = "";
 }
+reducedMotion.addEventListener("change", runHead);
 
 // ---- gestures: from the scene (touch) and from the buttons (keyboard)
 

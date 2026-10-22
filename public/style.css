@@ -555,10 +555,25 @@ select {
   position: absolute;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 2px;
   margin-left: -1px;
   background: var(--ink);
   opacity: 0.55;
+  /* one sweep per loop; duration and start are set from the shared clock */
+  animation: loop-sweep 30s linear infinite;
+  will-change: transform;
+}
+@keyframes loop-sweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(var(--loop-w, 100cqw)));
+  }
+}
+.loop {
+  container-type: inline-size;
 }
 
 /* one button per gesture: the four spheres as balls, the ribbon, the bell */

@@ -707,7 +707,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   // ---- the reticle: what your hand would touch, straight ahead
   const reticleEl = canvas.parentElement?.querySelector("[data-reticle]") ?? null;
   let reticle = null; // { id, point: [x, y, z] (world), t }
-  const RIBBON_U = [...Array(240)].map((_, i) => i / 240);
+  // the ribbon's path, sampled once: it never changes, so the reticle and a
+  // pluck look points up here instead of recomputing the curve every frame
+  const RIBBON_PATH = [...Array(240)].map((_, i) => ({ u: i / 240, q: ribbonPoint(i / 240) }));
   function aim() {
     if (!stageView || !playable) return null;
     const eye = [me.at[0], EYE, me.at[1]];
@@ -726,8 +728,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     // the line of sight. It loops round the bell and spheres, so it only
     // wins over one the dot is on when it's clearly in front of it
     const before = best ? best.t - 0.3 : REACH;
-    for (const u of RIBBON_U) {
-      const q = ribbonPoint(u);
+    for (const { q } of RIBBON_PATH) {
       const px = q[0] - eye[0], py = q[1] + lift - eye[1], pz = q[2] - eye[2];
       const t = px * dir[0] + py * dir[1] + pz * dir[2];
       if (t < 0 || t > before || (best?.id === "ribbon" && t >= best.t)) continue;
@@ -821,12 +822,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       const local = toStage(new THREE.Vector3().fromArray(p.point));
       let best = 0;
       let bestD = Infinity;
-      for (let i = 0; i < 240; i++) {
-        const q = ribbonPoint(i / 240);
+      for (const { u, q } of RIBBON_PATH) {
         const d = (q[0] - local.x) ** 2 + (q[1] - local.y) ** 2 + (q[2] - local.z) ** 2;
         if (d < bestD) {
           bestD = d;
-          best = i / 240;
+          best = u;
         }
       }
       onGesture({ kind: "pluck", object: "ribbon", at, u: Number(best.toFixed(3)) });
