@@ -30,8 +30,6 @@
     <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-throw" viewBox="0 0 24 24"><circle cx="9" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 11l6-6M14 5h5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="i-pluck" viewBox="0 0 24 24"><path d="M3 12c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-mouse" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-keys" viewBox="0 0 24 24"><path d="M9 4h6v6H9zM3 12h6v6H3zM9 12h6v6H9zM15 12h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
@@ -96,14 +94,10 @@
       </div>
       <p class="sr-only" data-bench-about></p>
       <div class="loop" data-loop aria-hidden="true"><span class="loop-ticks" data-loop-ticks></span><span class="loop-head" data-loop-head></span></div>
-      <div class="gestures" role="group" aria-label="Play the stage" data-gestures>
-        <button type="button" class="gesture" data-gesture="throw:chrome" data-edit aria-label="Throw the chrome sphere" title="Throw the chrome sphere"><span class="ball" style="--ball:#c9d1d6"></span></button>
-        <button type="button" class="gesture" data-gesture="throw:teal" data-edit aria-label="Throw the teal sphere" title="Throw the teal sphere"><span class="ball" style="--ball:#3fa7a3"></span></button>
-        <button type="button" class="gesture" data-gesture="throw:gold" data-edit aria-label="Throw the gold sphere" title="Throw the gold sphere"><span class="ball" style="--ball:#e3b65b"></span></button>
-        <button type="button" class="gesture" data-gesture="throw:dusk" data-edit aria-label="Throw the dusk sphere" title="Throw the dusk sphere"><span class="ball" style="--ball:#7a6aa8"></span></button>
-        <button type="button" class="gesture" data-gesture="pluck:ribbon" data-edit aria-label="Pluck the ribbon" title="Pluck the ribbon"><svg aria-hidden="true"><use href="#i-pluck"/></svg></button>
-        <button type="button" class="gesture" data-gesture="tap:bell" data-edit aria-label="Ring the bell" title="Ring the bell"><svg aria-hidden="true"><use href="#i-bell"/></svg></button>
-      </div>
+      <!-- one button per object, from the set on the stage (public/sets/<id>-view.js, `buttons`) -->
+      <div class="gestures" role="group" aria-label="Play the stage" data-gestures></div>
+      <!-- the sets: one icon each, the current one pressed; hidden while there is only one -->
+      <div class="sets" role="group" aria-label="Choose what's on the stage" data-sets hidden></div>
       <div class="bench-actions">
         <button type="button" class="primary" data-publish-open data-edit aria-label="Leave it: put this performance on a plinth for others to find" title="Put this performance on a plinth">Leave it</button>
         <button type="button" class="quiet undo" data-undo data-edit aria-label="Undo your last gesture" title="Undo your last gesture">Undo</button>

@@ -382,8 +382,11 @@ Routes (every `POST` takes JSON, answers JSON, and refuses a cross-site
   `draft_credits`, `leases` (now sphere claims: part = sphere id),
   `exhibits`, `versions` (immutable, with a trigger), `version_credits`.
 - **Page: Three.js 0.186.1** from a pinned CDN URL (import map), plain ES
-  modules in `public/`, no build step. `public/stage.js` is the rules and
-  builds nothing 3D; `public/stageview.js` draws a performance;
+  modules in `public/`, no build step. `public/stage.js` is the shared
+  rules and builds nothing 3D; each set is `public/sets/<id>.js` (rules)
+  and `public/sets/<id>-view.js` (look, touch, buttons, sounds), described
+  in `public/sets/README.md`; `public/stageview.js` draws a performance
+  through its set's view;
   `public/scene.js` is the room and the touch; `public/app.js` holds the
   UI and the stream. Sound is Web Audio, synthesized, no files.
 - **Logs:** one line per event on stdout, `event key=value`, a person as

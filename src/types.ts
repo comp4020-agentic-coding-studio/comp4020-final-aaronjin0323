@@ -93,6 +93,8 @@ export type ExhibitView = {
 export type ArchivedDraftView = {
   id: number;
   recipe: string;
+  /** the set a loop was played on; null for an old sculpture */
+  set: string | null;
   archivedAt: string;
   reason: "replaced" | "cleared";
   archivedBy: VisitorView | null;

@@ -6,7 +6,8 @@
 // textContent. Small decisions (connection, publish flow, input rules) live
 // in ui-logic.js, where a test can hold them; the stage's rules are
 // stage.js.
-import { LOOP, PALETTE, SETS, SPHERES, VISITOR_COLOURS, loopMoment, shownAt } from "./stage.js";
+import { LOOP, PALETTE, SETS, VISITOR_COLOURS, isHoldable, loopMoment, shownAt } from "./stage.js";
+import { objectName, viewOf } from "./sets/views.js";
 import { isMuted, play as playSounds, setMuted, unlock } from "./sound.js";
 import {
   INITIAL_CONN,
@@ -65,9 +66,11 @@ function dot(v, { you = false, note = "" } = {}) {
  * gestures touched, in order; the old sculptures (storeroom only) get
  * their own muted ring. */
 function swatchOf(recipe, parts) {
-  if (recipe !== "stage" || !parts) return el("span", { class: `thumb${recipe ? " is-old" : " is-empty"}`, "aria-hidden": "true" });
-  const objs = parts.gestures.length ? [...new Set(parts.gestures.map((g) => g.object))] : ["ribbon"];
-  const cols = objs.map((o) => PALETTE[SETS.orbit.colour[o]]?.hex ?? PALETTE[0].hex);
+  const view = parts && viewOf(parts.set);
+  if (recipe !== "stage" || !view) return el("span", { class: `thumb${recipe ? " is-old" : " is-empty"}`, "aria-hidden": "true" });
+  // the set's view picks the colours (its `swatch`)
+  const cols = view.swatch(parts);
+  if (!cols.length) cols.push(PALETTE[0].hex);
   const stops = cols.map((c, i) => `${c} ${Math.round((i / cols.length) * 360)}deg ${Math.round(((i + 1) / cols.length) * 360)}deg`).join(", ");
   return el("span", { class: `thumb${parts.gestures.length ? "" : " is-quiet"}`, style: { "--thumb": `conic-gradient(${stops})` }, "aria-hidden": "true" });
 }
@@ -231,7 +234,6 @@ function applyEnabled() {
   for (const c of $$("[data-edit]")) c.disabled = !on || c.dataset.blocked === "1";
 }
 
-const sphereName = (id) => (SPHERES.includes(id) ? `the ${id} sphere` : id === "ribbon" ? "the ribbon" : "the bell");
 
 function renderPeople() {
   const you = $("[data-you]");
@@ -240,7 +242,7 @@ function renderPeople() {
   here.replaceChildren(
     ...state.present.map((p) => {
       const you = p.tag === state.you.tag;
-      const holding = p.holding.map(sphereName);
+      const holding = p.holding.map(objectName);
       return el("li", { class: holding.length ? "is-editing" : "" }, dot(p, { you, note: holding.length ? `holding ${holding.join(", ")}` : "" }));
     }),
   );
@@ -329,7 +331,7 @@ function renderStage() {
   $("[data-bench-title]").textContent = d.basedOn ? d.basedOn.title : "The stage";
   $("[data-bench-about]").textContent = gestures.length
     ? `${plural(gestures.length, "gesture")} in a ${LOOP}-second loop${d.basedOn ? `, joined from "${d.basedOn.title}" version ${d.basedOn.n}` : ""}.`
-    : "Quiet. Throw a sphere, pluck the ribbon or ring the bell.";
+    : `Quiet. Play the ${SETS[d.parts?.set ?? ""]?.name ?? "stage"} with the buttons below.`;
   $("[data-bench-credits]").replaceChildren(...d.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "gesture") }))));
   // Undo has something to take back only if you're in the loop; Leave it
   // and Start over only if anyone is
@@ -337,17 +339,72 @@ function renderStage() {
   $("[data-undo]").dataset.blocked = mine ? "0" : "1";
   $("[data-publish-open]").dataset.blocked = gestures.length ? "0" : "1";
   $("[data-clear]").dataset.blocked = gestures.length ? "0" : "1";
-  // the spheres someone else holds wear their colour on the buttons
+  renderGestures();
+  renderSets();
+  // what someone else holds wears their colour on its button
+  const setView = viewOf(d.parts?.set);
   for (const b of $$("[data-gesture^='throw:']")) {
     const id = b.dataset.gesture.split(":")[1];
     const claim = state.claims.find((c) => c.part === id && !c.mine && Date.parse(c.expiresAt) > Date.now() + offset - 1000);
     b.style.setProperty("--held", claim ? colourOf(claim.holder) : "transparent");
-    b.setAttribute("aria-label", claim ? `Take the ${id} sphere from ${claim.holder.name} and throw it` : `Throw the ${id} sphere`);
+    b.setAttribute("aria-label", claim ? setView.heldLabel(id, claim.holder.name) : b.dataset.label);
     b.title = b.getAttribute("aria-label");
   }
   renderTicks();
   if (!$("[data-publish]").hidden) renderTargets();
 }
+
+// The gesture buttons: one per object of the set on the stage, as its view
+// lists them (`buttons`), rebuilt only when the set changes. Icons and
+// swatches are the view's own markup, never a visitor's text.
+function renderGestures() {
+  const box = $("[data-gestures]");
+  const set = state.draft.parts?.set ?? "";
+  if (box.dataset.set === set) return;
+  box.dataset.set = set;
+  const view = viewOf(set);
+  box.replaceChildren(
+    ...(view?.buttons ?? []).map((b) => {
+      const btn = el("button", { type: "button", class: "gesture", "data-edit": true, "aria-label": b.label, title: b.title ?? b.label, dataset: { gesture: b.gesture, label: b.label } });
+      if (b.ball) btn.append(el("span", { class: "ball", style: { "--ball": b.ball } }));
+      else btn.insertAdjacentHTML("beforeend", `<svg aria-hidden="true" viewBox="0 0 24 24">${b.icon ?? ""}</svg>`);
+      return btn;
+    }),
+  );
+  box.style.setProperty("--n", String(Math.max(1, view?.buttons.length ?? 1)));
+  applyEnabled();
+}
+
+// The set row (ADR 18): an icon per set, the one on the stage pressed.
+// Shown once there's more than one set to choose from.
+function renderSets() {
+  const box = $("[data-sets]");
+  const ids = Object.keys(SETS);
+  box.hidden = ids.length < 2;
+  const set = state.draft.parts?.set ?? "";
+  if (!box.children.length) {
+    box.replaceChildren(
+      ...ids.map((id) => {
+        const label = `Play the ${SETS[id].name}`;
+        const btn = el("button", { type: "button", class: "set-btn", "data-edit": true, "aria-label": label, title: label, "aria-pressed": "false", dataset: { set: id } });
+        btn.insertAdjacentHTML("beforeend", `<svg aria-hidden="true" viewBox="0 0 24 24">${viewOf(id)?.icon ?? ""}</svg>`);
+        return btn;
+      }),
+    );
+    applyEnabled();
+  }
+  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.set === set));
+}
+
+$("[data-sets]").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-set]");
+  if (!b || b.disabled || !state) return;
+  const set = b.dataset.set;
+  if (set === state.draft.parts?.set) return;
+  const busy = (state.draft.parts?.gestures.length ?? 0) > 0;
+  if (busy && !(await ask(`Play the ${SETS[set].name}? This loop is kept in Archived loops, and anyone can bring it back.`, "Play it"))) return;
+  act("/stage/clear", { set });
+});
 
 // The loop as a strip: a tick for each gesture, in its player's colour, and
 // a head running along it. You can see the conversation, and when it'll
@@ -409,22 +466,23 @@ async function onGesture(ev) {
   gesture(ev);
 }
 
-// The buttons: each one an ordinary gesture at this moment of the loop.
-// A sphere is thrown up and inward, from where it is now, as a hand would.
+// The buttons: each one an ordinary gesture at this moment of the loop,
+// as the set's view makes it from the stage as shown now (`fromButton`).
+// A throw grabs what it throws first.
 $("[data-gestures]").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-gesture]");
-  if (!b || b.disabled) return;
+  if (!b || b.disabled || !state?.draft.parts) return;
   const [kind, object] = b.dataset.gesture.split(":");
+  const parts = state.draft.parts;
+  const view = viewOf(parts.set);
+  if (!view) return;
   const at = Number(moment().toFixed(3));
-  if (kind === "throw") {
-    const now = shownAt(state.draft.parts, at).spheres[object].pos;
+  const g = view.fromButton(kind, object, at, shownAt(parts, at));
+  if (kind === "throw" && isHoldable(parts.set, object)) {
     const r = await post("/stage/grab", { object });
     if (!r.ok) return toast(refusalText(r.status, r.body));
-    const inward = [-now[0], 0, -now[2]].map((x) => Number((x * 0.9).toFixed(3)));
-    return gesture({ kind, object, at, from: now.map((x) => Number(x.toFixed(3))), v: [inward[0], 1.6, inward[2]] });
   }
-  if (kind === "pluck") return gesture({ kind, object, at, u: Number(((at / LOOP) % 1).toFixed(3)) });
-  return gesture({ kind, object, at });
+  return gesture(g);
 });
 
 $("[data-undo]").addEventListener("click", async () => {
@@ -750,7 +808,7 @@ function renderDrawers() {
             el("span", { class: "shelf-meta", "aria-hidden": "true", title: `${a.reason} ${when(a.archivedAt)}` }, `${a.reason} ${when(a.archivedAt)}`),
             a.contributors.length ? el("ul", { class: "dots" }, ...a.contributors.map((c) => el("li", {}, dot(c)))) : null,
             a.recipe === "stage"
-              ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": "Bring this loop back to the stage", title: "Back to the stage", onclick: () => restoreArchived(a) }, swatchOf("stage", { gestures: [{ object: "ribbon" }] }))
+              ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": "Bring this loop back to the stage", title: "Back to the stage", onclick: () => restoreArchived(a) }, swatchOf("stage", { set: a.set, gestures: [] }))
               : null,
           ),
         )

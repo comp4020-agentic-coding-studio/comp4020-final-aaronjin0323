@@ -1,7 +1,9 @@
 // Short synthesized sounds for what happens on the stage (CLAUDE.md, "Sound
 // follows what's in view"): Web Audio only, no files. Silent until the
 // visitor first touches something (browsers require it anyway), and one
-// button mutes it. Each sound is a few oscillators with a quick envelope.
+// button mutes it. Each sound is a few oscillators with a quick envelope;
+// what each set's events sound like is its view's (public/sets/<id>-view.js).
+import { viewOf } from "./sets/views.js";
 
 let ctx = null;
 let master = null;
@@ -35,7 +37,9 @@ export function setMuted(m) {
   if (master) master.gain.setTargetAtTime(m ? 0 : 0.5, ctx.currentTime, 0.02);
 }
 
-function tone({ freq, type = "sine", dur = 0.3, gain = 0.3, slide = 1, delay = 0 }) {
+/** One short synthesized note: an oscillator through a quick envelope.
+ * Every set's view plays its sounds with this (`sounds(events, tone)`). */
+export function tone({ freq, type = "sine", dur = 0.3, gain = 0.3, slide = 1, delay = 0 }) {
   const t = ctx.currentTime + delay;
   const o = ctx.createOscillator();
   const g = ctx.createGain();
@@ -51,15 +55,14 @@ function tone({ freq, type = "sine", dur = 0.3, gain = 0.3, slide = 1, delay = 0
   o.stop(t + dur + 0.02);
 }
 
-// a different pitch per sphere, so a chain of events is a little tune
-const PITCH = { chrome: 1, teal: 1.26, gold: 1.5, dusk: 0.84 };
-
-/** Plays the sounds for a batch of stage events (from stageview.update). */
-export function play(events) {
+/** Plays the sounds for a batch of stage events (from a view's update), on
+ * set `set`: the loop's own marks here, everything else the set's view's
+ * `sounds`. */
+export function play(events, set) {
   if (!ctx || muted || ctx.state !== "running" || !events.length) return;
   // at most a few at once, or a busy loop turns into noise
-  for (const e of events.slice(0, 4)) {
-    const p = PITCH[e.object] ?? 1;
+  const some = events.slice(0, 4);
+  for (const e of some) {
     if (e.kind === "home") {
       // the glide home: a soft falling pair, like a breath out
       tone({ freq: 523, dur: 0.9, gain: 0.07, slide: 0.75 });
@@ -67,17 +70,7 @@ export function play(events) {
     } else if (e.kind === "top") {
       // from the top: a soft chime
       for (const [f, d] of [[784, 0], [1047, 0.09]]) tone({ freq: f, dur: 0.8, gain: 0.06, type: "triangle", delay: d });
-    } else if (e.kind === "ring") {
-      // a bell: inharmonic partials, long tail
-      for (const [mult, gain] of [[1, 0.22], [2.76, 0.1], [5.4, 0.05]]) tone({ freq: 660 * mult, dur: 1.6, gain });
-    } else if (e.kind === "catch") tone({ freq: 520 * p, dur: 0.25, gain: 0.18, slide: 1.5, type: "triangle" });
-    else if (e.kind === "fling") tone({ freq: 700 * p, dur: 0.3, gain: 0.16, slide: 0.45, type: "triangle" });
-    else if (e.kind === "knock") tone({ freq: 220 * p, dur: 0.12, gain: 0.25, type: "square", slide: 0.7 });
-    else if (e.kind === "hop") tone({ freq: 380 * p, dur: 0.18, gain: 0.14, slide: 1.8 });
-    else if (e.kind === "throw") tone({ freq: 300 * p, dur: 0.22, gain: 0.12, slide: 2.2 });
-    else if (e.kind === "pluck") {
-      tone({ freq: 196, dur: 0.6, gain: 0.2, type: "sawtooth", slide: 0.98 });
-      tone({ freq: 392, dur: 0.4, gain: 0.08, type: "triangle" });
     }
   }
+  viewOf(set)?.sounds(some.filter((e) => e.kind !== "home" && e.kind !== "top"), tone);
 }

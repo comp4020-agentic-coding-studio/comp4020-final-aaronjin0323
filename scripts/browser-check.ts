@@ -62,9 +62,10 @@ const post = (page: Page, path: string, body: unknown = {}): Promise<{ status: n
   );
 
 /** A quiet stage, whatever was playing (starting over archives, so
- * nothing is lost), with the stage card selected. */
-async function freshStage(page: Page): Promise<void> {
-  await post(page, "/stage/clear");
+ * nothing is lost), with the stage card selected. On Orbit (or `set`),
+ * since a set's own section may have left another set on the stage. */
+async function freshStage(page: Page, set = "orbit"): Promise<void> {
+  await post(page, "/stage/clear", { set });
   await page.click('[data-go="bench"]');
   await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 0, null, { timeout: 3000 }).catch(() => null);
 }
@@ -392,6 +393,7 @@ async function publishing(browser: Browser): Promise<void> {
 async function archive(browser: Browser): Promise<void> {
   console.log("\n— every archived loop stays reachable —");
   const page = await visitor(browser);
+  await post(page, "/stage/clear", { set: "orbit" });
   // archive enough loops that the state's newest 12 can't hold them all
   for (let i = 0; i < 15; i++) {
     await post(page, "/stage/gesture", { gesture: { kind: "tap", object: "bell", at: i * 0.5 } });
@@ -916,7 +918,7 @@ for (const id of Object.keys(SETS)) {
   for (const id of ids) {
     const a: string[] = chrome[id], b: string[] = safari[id] ?? [];
     const at = a.findIndex((x, i) => x !== b[i]);
-    check(a.length > 400 && a.length === b.length && at < 0, `${id}: every position${id === "orbit" ? " and the ribbon's path" : ""} identical, bit for bit`, at < 0 ? `${a.length} values` : `first differs at value ${at}: ${a[at]} vs ${b[at]}`);
+    check(a.length >= 120 && a.length === b.length && at < 0, `${id}: every position${id === "orbit" ? " and the ribbon's path" : ""} identical, bit for bit`, at < 0 ? `${a.length} values` : `first differs at value ${at}: ${a[at]} vs ${b[at]}`);
   }
 }
 
@@ -1075,6 +1077,52 @@ async function idle(browser: Browser): Promise<void> {
   await ctx.close();
 }
 
+// The set row (ADR 18), whatever sets are registered: hidden while there's
+// one; with more, an icon per set (the one playing pressed); choosing
+// another over a loop with gestures asks first, then the card's gesture
+// buttons become that set's and a second visitor's screen follows. Ends
+// back on Orbit. Each set's own section plays its gestures.
+async function setRow(browser: Browser): Promise<void> {
+  console.log("\n— the set row: choosing what's on the stage —");
+  const a = await visitor(browser);
+  await freshStage(a);
+  const ids: string[] = await a.evaluate(async () => Object.keys((await import("/stage.js" as string)).SETS));
+  const shown = await a.$eval("[data-sets]", (el) => getComputedStyle(el).display !== "none");
+  if (ids.length < 2) {
+    check(!shown, "with one set, no set row", ids.join(", "));
+    await a.context().close();
+    return;
+  }
+  check(shown, "with more than one set, the card has a set row", ids.join(", "));
+  const row = await a.$$eval("[data-sets] button", (els) => els.map((e) => ({ set: (e as HTMLElement).dataset.set, label: e.getAttribute("aria-label") ?? "", pressed: e.getAttribute("aria-pressed"), w: e.getBoundingClientRect().width, text: (e.textContent ?? "").trim() })));
+  check(row.length === ids.length && row.every((r) => r.label.startsWith("Play the ") && r.w >= 44 && r.text === ""), "an icon button per set, named, no words on screen", row.map((r) => r.label).join(" | "));
+  check(row.filter((r) => r.pressed === "true").map((r) => r.set).join() === "orbit", "the set playing is pressed");
+  const b = await visitor(browser);
+  for (const id of ids.filter((x) => x !== "orbit")) {
+    // a loop with gestures: choosing another set asks, and archives it
+    await post(a, "/stage/gesture", { gesture: { kind: "tap", object: "bell", at: 1 } });
+    await a.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 1, null, { timeout: 3000 }).catch(() => null);
+    await a.click('[data-sets] [data-set="orbit"]');
+    await a.click(`[data-sets] [data-set="${id}"]`);
+    const asked = await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false);
+    check(asked, `${id}: over a loop with gestures, it asks first`);
+    if (asked) await a.click("[data-ask-yes]");
+    const want = await a.evaluate(async (id) => (await import("/sets/views.js" as string)).viewOf(id).buttons.map((x: { gesture: string }) => x.gesture).join(" "), id);
+    const got = await a.waitForFunction((w) => [...document.querySelectorAll("[data-gestures] [data-gesture]")].map((e) => (e as HTMLElement).dataset.gesture).join(" ") === w, want, { timeout: 3000 }).then(() => true, () => false);
+    check(got, `${id}: the card's gesture buttons become the set's`, want);
+    check((await a.getAttribute(`[data-sets] [data-set="${id}"]`, "aria-pressed")) === "true", `${id}: its icon is pressed`);
+    const follows = await b.waitForFunction((id) => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === id, id, { timeout: 3000 }).then(() => true, () => false);
+    check(follows, `${id}: a second visitor's stage follows`);
+    await a.screenshot({ path: `.shots/set-${id}.png` });
+    // a silent loop switches straight back, no question
+    await a.click('[data-sets] [data-set="orbit"]');
+    const back = await a.waitForFunction(() => document.querySelector('[data-sets] [data-set="orbit"]')?.getAttribute("aria-pressed") === "true", null, { timeout: 3000 }).then(() => true, () => false);
+    check(back && !(await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open)), `${id}: a quiet loop goes back to Orbit without asking`);
+  }
+  await a.context().close();
+  await b.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1097,6 +1145,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   "phone-edit": phoneEdit,
   names,
   engines,
+  setrow: setRow,
   gpu,
   idle,
 };

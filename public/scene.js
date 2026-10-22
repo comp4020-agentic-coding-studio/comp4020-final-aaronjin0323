@@ -11,8 +11,9 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { BELL, GLIDE, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
+import { GLIDE, LOOP, STAGE, THROW, VISITOR_COLOURS, isHoldable, loopMoment, setOf } from "./stage.js";
 import { createStageView } from "./stageview.js";
+import { heldLook } from "./sets/views.js";
 import { clearFrame } from "./ui-logic.js";
 import { EYE, REACH, START, clampPitch, collide, forward, lookDir, nearestHit, plinthNear, standBefore, step, throwVelocity } from "./walk.js";
 import { createAvatars } from "./avatars.js";
@@ -387,11 +388,11 @@ function numberTexture(n) {
 }
 
 /** The stage at the centre: a wide round glass top on a stone drum, as
- * big as the space the spheres can fly in, with a faint ring of light at
- * the wall they bounce off. */
+ * big as the space every set plays in, with a faint ring of light at the
+ * wall things bounce off. */
 function bench() {
   const g = new THREE.Group();
-  const R = SETS.orbit.radius;
+  const R = STAGE.radius;
   const base = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.05, R + 0.3, 0.55, 72), new THREE.MeshStandardMaterial({ color: "#f8efe0", roughness: 0.78 }));
   base.position.y = 0.275;
   base.castShadow = true;
@@ -498,7 +499,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   renderer.shadowMap.type = THREE.PCFShadowMap;
   // Only the room casts the sun's shadows, and the room never moves: the
   // shadow map is drawn once, on the first frame, not every frame (the
-  // spheres' shadows are the soft blobs stageview.js lays under them).
+  // spheres' shadows are the soft blobs each set's view lays under them).
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.needsUpdate = true;
 
@@ -589,7 +590,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
 
   const box = new THREE.Box3();
   // what the stage's on-screen box is measured from, in its holder's frame:
-  // where the play mostly is (the ribbon, the bell and the spheres at rest)
+  // where the play mostly is, on any set: the middle of the stage, low
   const STAGE_BOX = new THREE.Box3(new THREE.Vector3(-1.4, 0.05, -1.4), new THREE.Vector3(1.4, 1.5, 1.4));
 
   // ---- measuring what the camera shows, for the browser check
@@ -706,36 +707,17 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
 
   // ---- the reticle: what your hand would touch, straight ahead
   const reticleEl = canvas.parentElement?.querySelector("[data-reticle]") ?? null;
-  let reticle = null; // { id, point: [x, y, z] (world), t }
-  // the ribbon's path, sampled once: it never changes, so the reticle and a
-  // pluck look points up here instead of recomputing the curve every frame
-  const RIBBON_PATH = [...Array(240)].map((_, i) => ({ u: i / 240, q: ribbonPoint(i / 240) }));
+  let reticle = null; // { id, point: [x, y, z] (world), local: (stage frame), t }
+  // The set's view says what the dot can rest on (its `aim`), in the
+  // stage's own frame: the holder is only lifted, never turned or scaled.
   function aim() {
     if (!stageView || !playable) return null;
-    const eye = [me.at[0], EYE, me.at[1]];
-    const dir = lookDir(me.look);
-    const o = stageView.objects();
     const lift = wb.holder.position.y;
-    const targets = [];
-    for (const [id, b] of Object.entries(o.balls)) {
-      if (!b.visible && id !== holding) continue;
-      if (id === holding) continue;
-      targets.push({ id, kind: "sphere", c: [b.position.x, b.position.y + lift, b.position.z], r: SETS.orbit.sphereR * 1.35 });
-    }
-    targets.push({ id: "bell", kind: "sphere", c: [BELL.pos[0], BELL.pos[1] + lift, BELL.pos[2]], r: BELL.r * 1.35 });
-    let best = nearestHit(eye, dir, targets, REACH);
-    // the ribbon: the nearest point of its path within a hand's width of
-    // the line of sight. It loops round the bell and spheres, so it only
-    // wins over one the dot is on when it's clearly in front of it
-    const before = best ? best.t - 0.3 : REACH;
-    for (const { q } of RIBBON_PATH) {
-      const px = q[0] - eye[0], py = q[1] + lift - eye[1], pz = q[2] - eye[2];
-      const t = px * dir[0] + py * dir[1] + pz * dir[2];
-      if (t < 0 || t > before || (best?.id === "ribbon" && t >= best.t)) continue;
-      const dx = px - dir[0] * t, dy = py - dir[1] * t, dz = pz - dir[2] * t;
-      if (dx * dx + dy * dy + dz * dz < 0.08 * 0.08) best = { id: "ribbon", t, point: [q[0], q[1] + lift, q[2]] };
-    }
-    return best;
+    const origin = [me.at[0], EYE - lift, me.at[1]];
+    const dir = lookDir(me.look);
+    const hit = stageView.view().aim(origin, dir, REACH, holding, nearestHit);
+    if (!hit) return null;
+    return { id: hit.id, t: hit.t, local: hit.point, point: [hit.point[0], hit.point[1] + lift, hit.point[2]] };
   }
   // a soft halo round what the reticle rests on
   const halo = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: "#fff6e0", transparent: true, opacity: 0.4, side: THREE.BackSide, depthWrite: false }));
@@ -745,17 +727,9 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   function showReticle() {
     halo.visible = !!reticle;
     if (reticle) {
-      const o = stageView.objects();
-      if (SPHERES.includes(reticle.id)) {
-        o.balls[reticle.id].getWorldPosition(halo.position);
-        halo.scale.setScalar(SETS.orbit.sphereR * 1.45);
-      } else if (reticle.id === "bell") {
-        halo.position.fromArray(BELL.pos).add(wb.holder.position);
-        halo.scale.setScalar(BELL.r * 1.9);
-      } else {
-        halo.position.fromArray(reticle.point);
-        halo.scale.setScalar(0.09);
-      }
+      const h = stageView.view().haloOf(reticle.id, reticle.local);
+      halo.position.fromArray(h.c).applyMatrix4(stageFrame());
+      halo.scale.setScalar(h.r);
     }
     const on = reticle ? reticle.id : "";
     if (reticleEl && reticleEl.dataset.on !== on) {
@@ -764,15 +738,18 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     }
   }
 
-  // ---- the hand: hold to pick up a sphere, release to throw it where you
-  // look; a quick press hops a sphere, plucks the ribbon, rings the bell.
+  // ---- the hand: hold to pick up what the set lets you hold, release to
+  // throw it where you look; a quick press plays whatever the set's view
+  // says (`press`: Orbit hops a sphere, plucks the ribbon, rings the bell).
   // The scene only says what the gesture was (onGesture); the page sends it.
   const HOLD_MS = 180;
   let press = null; // { object, point, t0 }
-  let holding = null; // the sphere floating in front of you
-  const heldBall = new THREE.Mesh(new THREE.SphereGeometry(SETS.orbit.sphereR, 32, 20), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.2 }));
+  let holding = null; // the object floating in front of you
+  const heldBall = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 20), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.2 }));
   heldBall.visible = false;
   scene.add(heldBall);
+  const liveSet = () => last?.draft.parts?.set ?? "";
+  const canHold = (id) => !!id && isHoldable(liveSet(), id);
   // held in your right hand: ahead, a little low and to the right, so it
   // never covers the reticle you aim with
   const heldPoint = () => {
@@ -784,8 +761,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   function pressHand() {
     if (!playable || press) return;
     const t = reticle;
-    press = { object: t?.id ?? null, point: t?.point ?? null, t0: performance.now() };
-    if (press.object && SPHERES.includes(press.object)) onGesture({ kind: "grab", object: press.object });
+    press = { object: t?.id ?? null, point: t?.local ?? null, t0: performance.now() };
+    if (canHold(press.object)) onGesture({ kind: "grab", object: press.object });
     if (press.object) canvas.dataset.touching = press.object;
     wake();
   }
@@ -795,43 +772,29 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     delete canvas.dataset.touching;
     if (!p || !p.object) return;
     const at = loopMoment(drawTime());
-    if (SPHERES.includes(p.object)) {
-      if (holding === p.object) {
-        // thrown where you look, harder the longer you held; from where it
-        // floated, kept inside the stage's flying room
-        const S = SETS.orbit;
-        const local = toStage(new THREE.Vector3().fromArray(heldPoint()));
-        const R = S.radius - S.sphereR;
-        const rr = Math.hypot(local.x, local.z);
-        if (rr > R) {
-          local.x *= R / rr;
-          local.z *= R / rr;
-        }
-        local.y = THREE.MathUtils.clamp(local.y, S.sphereR, S.ceiling - S.sphereR);
-        const v = throwVelocity(lookDir(me.look), performance.now() - p.t0).map((x) => THREE.MathUtils.clamp(x, -5.9, 5.9));
-        onGesture({ kind: "throw", object: p.object, at, from: r3(local.toArray()), v });
-      } else {
-        // a quick press: a little hop straight up from where it is
-        const pos = toStage(stageView.objects().balls[p.object].getWorldPosition(new THREE.Vector3()));
-        onGesture({ kind: "throw", object: p.object, at, from: r3(pos.toArray()), v: [0, 1.4, 0] });
+    if (holding && holding === p.object) {
+      // thrown where you look, harder the longer you held; from where it
+      // floated, kept inside the stage's room (less the held thing's size)
+      const r = heldLook(holding)?.r ?? 0.17;
+      const local = toStage(new THREE.Vector3().fromArray(heldPoint()));
+      const R = STAGE.radius - r;
+      const rr = Math.hypot(local.x, local.z);
+      if (rr > R) {
+        local.x *= R / rr;
+        local.z *= R / rr;
       }
+      local.y = THREE.MathUtils.clamp(local.y, r, STAGE.ceiling - r);
+      const vm = THROW.vMax - 0.1;
+      const v = throwVelocity(lookDir(me.look), performance.now() - p.t0).map((x) => THREE.MathUtils.clamp(x, -vm, vm));
+      onGesture({ kind: "throw", object: p.object, at, from: r3(local.toArray()), v });
+    } else if (stageView) {
+      // a quick press: whatever the set's view says it plays
+      const g = stageView.view().press(p.object, p.point);
+      if (g) onGesture({ ...g, at });
+    }
+    if (holding === p.object) {
       holding = null;
       heldBall.visible = false;
-    } else if (p.object === "ribbon") {
-      // plucked where you touched it: the nearest point of its path
-      const local = toStage(new THREE.Vector3().fromArray(p.point));
-      let best = 0;
-      let bestD = Infinity;
-      for (const { u, q } of RIBBON_PATH) {
-        const d = (q[0] - local.x) ** 2 + (q[1] - local.y) ** 2 + (q[2] - local.z) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          best = u;
-        }
-      }
-      onGesture({ kind: "pluck", object: "ribbon", at, u: Number(best.toFixed(3)) });
-    } else if (p.object === "bell") {
-      onGesture({ kind: "tap", object: "bell", at });
     }
     wake();
   }
@@ -1073,7 +1036,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   let playable = false;
   function place(key, holder, perf) {
     let v = views.get(key);
-    const isPerf = perf && Object.hasOwn(SETS, perf.set);
+    const isPerf = perf && !!setOf(perf.set);
     if (!isPerf) {
       if (v) {
         holder.remove(v.view.root);
@@ -1084,9 +1047,12 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     }
     if (!v) {
       const view = createStageView({ small: key !== "bench" });
-      view.root.traverse((o) => {
-        if (o.isMesh) o.userData.pick = key;
-      });
+      // every view root built for this performance, now and on a new set
+      view.each((root) =>
+        root.traverse((o) => {
+          if (o.isMesh) o.userData.pick = key;
+        }),
+      );
       holder.add(view.root);
       v = { view, holder, perf };
       views.set(key, v);
@@ -1111,7 +1077,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     stageView = place("bench", wb.holder, last.draft.parts);
     playable = !!stageView;
     wb.ghost.visible = false;
-    // a ring on the stage floor in each holder's colour, for each sphere
+    // a ring on the stage floor in each holder's colour, for each object
     // someone has in hand
     wb.leases.clear();
     const now = Date.now();
@@ -1214,7 +1180,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       const events = v.view.update(perfOf(key, v), moment, { colourOf, held: isStage && holding ? [holding] : [], still });
       // sound for what's in view: the stage, or the chosen plinth
       if (events.length && isSelected(key)) {
-        onEvents(events);
+        onEvents(events, v.view.set());
         // for the browser check: what this screen just saw happen, and when
         if (isStage) {
           canvas.dataset.heard = events.map((e) => e.kind).join(" ");
@@ -1222,12 +1188,12 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
         }
       }
     }
-    // claim rings follow the spheres they mark
+    // claim rings follow the objects they mark, just under each
     if (stageView) {
-      const balls = stageView.objects().balls;
+      const objs = stageView.objects();
       for (const ring of wb.leases.children) {
-        const b = balls[ring.userData.sphere];
-        if (b) ring.position.copy(b.position).setY(b.position.y - SETS.orbit.sphereR - 0.02);
+        const b = Object.hasOwn(objs, ring.userData.sphere) ? objs[ring.userData.sphere] : null;
+        if (b) ring.position.copy(b.position).setY(b.position.y - (heldLook(ring.userData.sphere)?.r ?? 0.17) - 0.02);
       }
     }
   }
@@ -1306,13 +1272,15 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     const yaw = me.look[0].toFixed(3);
     if (canvas.dataset.yaw !== yaw) canvas.dataset.yaw = yaw;
     noticePlinths();
-    // a press held long enough on a sphere picks it up
-    if (press && !holding && SPHERES.includes(press.object) && now - press.t0 >= HOLD_MS) {
+    // a press held long enough on something holdable picks it up; it
+    // looks as the set's view says (`held`)
+    if (press && !holding && canHold(press.object) && now - press.t0 >= HOLD_MS) {
       holding = press.object;
-      const mat = stageView.objects().balls[holding].material;
-      heldBall.material.color.copy(mat.color);
-      heldBall.material.metalness = mat.metalness;
-      heldBall.material.roughness = mat.roughness;
+      const look = heldLook(holding);
+      heldBall.scale.setScalar(look?.r ?? 0.17);
+      heldBall.material.color.set(look?.colour ?? "#ccc");
+      heldBall.material.metalness = look?.metalness ?? 0.6;
+      heldBall.material.roughness = look?.roughness ?? 0.2;
     }
     heldBall.visible = !!holding;
     if (holding) heldBall.position.fromArray(heldPoint());
@@ -1388,15 +1356,17 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       const p = v.clone().project(camera);
       return { x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h };
     };
-    const o = stageView.objects();
+    // every object of the set by id (`spheres` keeps its old name for the
+    // checks: Orbit's spheres are there), and the view's fixed marks
+    const set = stageView.set();
     const spheres = {};
-    for (const [id, b] of Object.entries(o.balls)) {
+    for (const [id, b] of Object.entries(stageView.objects())) {
       const world = b.getWorldPosition(new THREE.Vector3());
       spheres[id] = { at: px(world), pos: toStage(world).toArray(), visible: b.visible };
     }
-    const onRibbon = new THREE.Vector3().fromArray(ribbonPoint(0.125)).applyMatrix4(stageFrame());
-    const bell = new THREE.Vector3().fromArray(BELL.pos).applyMatrix4(stageFrame());
-    return { spheres, ribbon: px(onRibbon), bell: px(bell), rings: wb.leases.children.length, moment: loopMoment(drawTime()), loop: LOOP };
+    const marks = {};
+    for (const [k, q] of Object.entries(stageView.view().marks())) marks[k] = px(new THREE.Vector3().fromArray(q).applyMatrix4(stageFrame()));
+    return { set, spheres, ...marks, rings: wb.leases.children.length, moment: loopMoment(drawTime()), loop: LOOP };
   }
 
   // For the browser check's `look` section: the arches' build, the depth

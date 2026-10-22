@@ -16,11 +16,9 @@
 // same in every browser; no Math.sin or **, which engines may each
 // approximate in their own way.
 import { GLIDE, LOOP, STAGE, STEP, THROW, turnCos, turnSin } from "./sets/kit.js";
-import orbit, { BELL, RIBBON, SPHERES, ribbonPoint } from "./sets/orbit.js";
+import orbit from "./sets/orbit.js";
 
 export { GLIDE, LOOP, STAGE, STEP, THROW, turnCos, turnSin };
-// Orbit's own shapes, for the Orbit view and older callers.
-export { BELL, RIBBON, SPHERES, ribbonPoint };
 
 /** The colours an object can wear, by index: the gallery's palette. */
 export const PALETTE = [

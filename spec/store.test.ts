@@ -178,7 +178,7 @@ describe("choosing a set", () => {
     expect(r.archivedId).toBeTruthy();
     const s = store.snapshot(at(1000));
     expect(s.draft.parts).toEqual({ set: "blocks", gestures: [] });
-    expect(s.archivedDrafts[0]).toMatchObject({ id: r.archivedId, reason: "cleared" });
+    expect(s.archivedDrafts[0]).toMatchObject({ id: r.archivedId, reason: "cleared", set: "orbit" });
     expect(store.claims(at(1000))).toEqual([]);
   });
 

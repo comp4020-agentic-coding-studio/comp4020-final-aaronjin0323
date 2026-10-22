@@ -679,6 +679,7 @@ export function openStore(path: string, { claimMs = CLAIM_MS }: { claimMs?: numb
   const archivedView = (d: DraftRow): ArchivedDraftView => ({
     id: d.id,
     recipe: d.recipe,
+    set: d.recipe === "stage" ? ((JSON.parse(d.parts) as Performance | null)?.set ?? null) : null,
     archivedAt: d.archived_at!,
     reason: d.archive_reason!,
     archivedBy: d.archived_by === null ? null : viewOf(d.archived_by),

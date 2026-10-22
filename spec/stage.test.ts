@@ -1,13 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  BELL,
   CAP,
   GLIDE,
   CAP_EACH,
   LOOP,
   SETS,
-  SPHERES,
   STEP,
   checkGesture,
   checkPerformance,
@@ -20,6 +18,7 @@ import {
   simulate,
   type Gesture,
 } from "../public/stage.js";
+import { BELL, SPHERES } from "../public/sets/orbit.js";
 import { holdsTheSetContract } from "./set-helpers.ts";
 
 // The Loop Stage's rules (CLAUDE.md, "The museum"; ADR 16). What happens on

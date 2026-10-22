@@ -105,6 +105,7 @@ export function nameProblem(name) {
   return null;
 }
 
+// a gesture kind in the past tense; a kind a set adds reads "played"
 const PAST = { throw: "thrown", pluck: "plucked", tap: "rung" };
 
 /** A gesture in at most four words, for a toast: "Undid: teal thrown". */
@@ -112,7 +113,8 @@ export function gestureLine(g, verb) {
   return `${verb}: ${g.object} ${PAST[g.kind] ?? "played"}`;
 }
 
-const NOUN = { bell: "Bell", ribbon: "Ribbon", chrome: "Chrome", teal: "Teal", gold: "Gold", dusk: "Dusk" };
+// an object as a title word: its id, capitalised ("bell" -> "Bell")
+const NOUN = (id) => (/^[a-z]+$/.test(id) ? id[0].toUpperCase() + id.slice(1) : "Sphere");
 const MOOD = ["Panic", "Waltz", "Rodeo", "Quarrel", "Lullaby", "Fanfare", "Tantrum", "Picnic", "Shuffle", "Duet"];
 const CROWD = ["", "", " for Two", " for Three", " for Four", " for a Crowd"];
 
@@ -126,12 +128,12 @@ const CROWD = ["", "", " for Two", " for Three", " for Four", " for a Crowd"];
 export function playfulTitle(p) {
   const count = new Map();
   for (const g of p.gestures) count.set(g.object, (count.get(g.object) ?? 0) + 1);
-  const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "bell";
+  const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
   const players = new Set(p.gestures.map((g) => g.by)).size;
   // a small stable hash of the loop picks the mood
   let h = 7;
   for (const g of p.gestures) h = (h * 31 + Math.round(g.at * 1000) + g.object.length) % 9973;
-  const name = `${NOUN[top] ?? "Sphere"} ${MOOD[h % MOOD.length]}${CROWD[Math.min(players, CROWD.length - 1)]}`;
+  const name = `${top ? NOUN(top) : "Bell"} ${MOOD[h % MOOD.length]}${CROWD[Math.min(players, CROWD.length - 1)]}`;
   return name.slice(0, 40);
 }
 

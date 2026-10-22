@@ -1,10 +1,12 @@
 // The other visitors in the room (ADR 17): each a soft floating head in
 // their colour with a small visor for where they look, their name above it,
-// a hand orb where they reach, and the sphere they hold floating in front.
+// a hand orb where they reach, and what they hold floating in front (as its
+// set's view says it looks).
 // Drawn from the `poses` event; names reach the canvas only through
 // fillText, never as markup.
 import * as THREE from "three";
-import { PALETTE, SETS, SPHERES, VISITOR_COLOURS } from "./stage.js";
+import { VISITOR_COLOURS } from "./stage.js";
+import { heldLook } from "./sets/views.js";
 import { EYE, lookDir } from "./walk.js";
 
 const HEAD_R = 0.18;
@@ -14,7 +16,7 @@ const wrap = (a) => ((((a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
 const headGeo = new THREE.SphereGeometry(HEAD_R, 32, 20);
 const visorGeo = new THREE.SphereGeometry(1, 24, 12);
 const handGeo = new THREE.SphereGeometry(0.06, 16, 10);
-const ballGeo = new THREE.SphereGeometry(SETS.orbit.sphereR, 24, 16);
+const ballGeo = new THREE.SphereGeometry(1, 24, 16);
 
 /** A name on a little rounded card, as a sprite that always faces you. */
 function nameSprite(name, colour) {
@@ -143,11 +145,12 @@ export function createAvatars(scene) {
         a.reach = null;
         a.hand.visible = false;
       }
-      // a sphere they hold floats in front of them, a little low
-      const holding = SPHERES.includes(p.holding) ? p.holding : null;
-      a.ball.visible = !!holding;
-      if (holding) {
-        a.ball.material.color.set(PALETTE[SETS.orbit.colour[holding]]?.hex ?? "#ccc");
+      // what they hold floats in front of them, a little low
+      const look = heldLook(p.holding);
+      a.ball.visible = !!look;
+      if (look) {
+        a.ball.scale.setScalar(look.r);
+        a.ball.material.color.set(look.colour);
         const d = lookDir(a.look);
         a.ball.position.set(a.at[0] + d[0] * 0.55, EYE - 0.18 + d[1] * 0.55, a.at[1] + d[2] * 0.55);
       }
@@ -163,7 +166,7 @@ export function createAvatars(scene) {
   }
 
   function others() {
-    return [...people].filter(([, a]) => !a.leaving).map(([tag, a]) => ({ tag, head: { x: a.screen.x, y: a.screen.y }, visible: a.visible, holding: SPHERES.includes(a.goal.holding) ? a.goal.holding : null }));
+    return [...people].filter(([, a]) => !a.leaving).map(([tag, a]) => ({ tag, head: { x: a.screen.x, y: a.screen.y }, visible: a.visible, holding: heldLook(a.goal.holding) ? a.goal.holding : null }));
   }
 
   return { set, update, others };
