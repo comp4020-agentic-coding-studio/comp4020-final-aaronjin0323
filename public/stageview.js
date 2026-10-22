@@ -15,8 +15,7 @@ class RibbonCurve extends THREE.Curve {
 }
 
 /** A flat band along the curve, twisting gently, both sides lit. */
-function ribbonGeometry(curve) {
-  const N = 360;
+function ribbonGeometry(curve, N = 360) {
   const W = 0.07;
   const frames = curve.computeFrenetFrames(N, true);
   const pos = [];
@@ -48,23 +47,42 @@ function materials() {
   shared.pulseGeo = new THREE.SphereGeometry(0.06, 12, 8);
   shared.ringGeo = new THREE.TorusGeometry(1, 0.035, 8, 48);
   shared.shadowGeo = new THREE.CircleGeometry(1, 32);
+  shared.bellGeo = bellGeometry(40, 16, 10);
+  // the same objects with fewer facets, for a performance shrunk onto a
+  // plinth (0.4 scale), where the extra detail is under a pixel
+  shared.small = {
+    ...shared,
+    ballGeo: new THREE.SphereGeometry(SETS.orbit.sphereR, 16, 10),
+    ribbonGeo: ribbonGeometry(new RibbonCurve(), 160),
+    shadowGeo: new THREE.CircleGeometry(1, 16),
+    bellGeo: bellGeometry(16, 8, 6),
+  };
   return shared;
 }
 
-/** The bell: a dome with a lip and a clapper, hanging from nothing. */
-function bellMesh(m) {
-  const g = new THREE.Group();
+/** The bell's dome, clapper and knob, at a given detail. */
+function bellGeometry(around, sphereW, sphereH) {
   const pts = [];
   for (let i = 0; i <= 16; i++) {
     const t = i / 16;
     pts.push(new THREE.Vector2(BELL.r * (0.25 + 0.75 * Math.sin((t * Math.PI) / 2) ** 0.8) * (t > 0.92 ? 1.12 : 1), BELL.r * (1.1 - 1.6 * t)));
   }
-  const dome = new THREE.Mesh(new THREE.LatheGeometry(pts, 40), m.bell);
+  return {
+    dome: new THREE.LatheGeometry(pts, around),
+    clapper: new THREE.SphereGeometry(BELL.r * 0.28, sphereW, sphereH),
+    knob: new THREE.SphereGeometry(BELL.r * 0.22, sphereW, sphereH),
+  };
+}
+
+/** The bell: a dome with a lip and a clapper, hanging from nothing. */
+function bellMesh(m) {
+  const g = new THREE.Group();
+  const dome = new THREE.Mesh(m.bellGeo.dome, m.bell);
   dome.material.side = THREE.DoubleSide;
-  dome.castShadow = true;
-  const clapper = new THREE.Mesh(new THREE.SphereGeometry(BELL.r * 0.28, 16, 10), m.bell);
+  // no live shadow: the sun's shadow map is baked once for the still room
+  const clapper = new THREE.Mesh(m.bellGeo.clapper, m.bell);
   clapper.position.y = -BELL.r * 0.55;
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(BELL.r * 0.22, 16, 10), m.bell);
+  const knob = new THREE.Mesh(m.bellGeo.knob, m.bell);
   knob.position.y = BELL.r * 1.15;
   g.add(dome, clapper, knob);
   for (const o of [dome, clapper, knob]) o.userData.object = "bell";
@@ -76,12 +94,13 @@ function bellMesh(m) {
  * performance `p` to loop moment `t` and returns what happened since the
  * last call (for sounds). `opts.colourOf(tag)` names a player's colour;
  * `opts.held` lists spheres being dragged (drawn by the scene instead).
+ * `small` builds it with fewer facets, for a plinth.
  */
-export function createStageView() {
-  const m = materials();
+export function createStageView({ small = false } = {}) {
+  const m = small ? materials().small : materials();
   const root = new THREE.Group();
   const ribbon = new THREE.Mesh(m.ribbonGeo, m.ribbon);
-  ribbon.castShadow = true;
+  // no live shadow: the sun's map is baked once, for the still room
   ribbon.userData.object = "ribbon";
   const bell = bellMesh(m);
   bell.position.fromArray(BELL.pos);
@@ -90,7 +109,7 @@ export function createStageView() {
   const shadows = {};
   for (const id of SPHERES) {
     const b = new THREE.Mesh(m.ballGeo, m.spheres[id]);
-    b.castShadow = true;
+    // no live shadow (the sun's map is baked): the blob below does it
     b.userData.object = id;
     // a soft round shadow on the stage floor under each sphere, so how high
     // it floats reads at a glance

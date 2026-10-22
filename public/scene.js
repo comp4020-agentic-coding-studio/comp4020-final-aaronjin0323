@@ -10,6 +10,7 @@
 // carries on without it.
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { BELL, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
 import { createStageView } from "./stageview.js";
 import { clearFrame } from "./ui-logic.js";
@@ -78,7 +79,9 @@ function skyDome() {
  * hazier than the last: lilac in shadow, peach where the low sun meets them. */
 function clouds() {
   const group = new THREE.Group();
-  const puff = new THREE.IcosahedronGeometry(1, 3);
+  // a puff far off, under haze, needs few facets: the near layer keeps
+  // more (1400 puffs at detail 3 were 450k triangles a frame)
+  const puffs = { near: new THREE.IcosahedronGeometry(1, 2), far: new THREE.IcosahedronGeometry(1, 1) };
   let seed = 7;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   const m = new THREE.Matrix4();
@@ -93,7 +96,7 @@ function clouds() {
     // each cloud a heap of puffs: a big one in the middle, smaller ones
     // round and on top, so they read as billows, not flat discs
     const per = 5;
-    const inst = new THREE.InstancedMesh(puff, mat, L.count * per);
+    const inst = new THREE.InstancedMesh(L.y > -10 ? puffs.near : puffs.far, mat, L.count * per);
     let k = 0;
     for (let i = 0; i < L.count; i++) {
       const a = rnd() * TAU;
@@ -276,45 +279,54 @@ function arches() {
   const shaftGeo = new THREE.CylinderGeometry(0.3, 0.34, H - 0.5, 24);
   const baseGeo = new THREE.BoxGeometry(0.86, 0.26, 0.86);
   const capGeo = new THREE.BoxGeometry(0.8, 0.24, 0.8);
+  // one stone and one trim material for the whole ring; each bay's shaft
+  // and arch merged into one mesh (kept per bay so raycasts still cull bay
+  // by bay), and every base and capital into one: seventeen draw calls
+  // instead of sixty-four
+  const mat = new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.82 });
+  const trim = new THREE.MeshStandardMaterial({ color: C.ivoryDeep, roughness: 0.85 });
+  const shade = new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false });
+  const trimParts = [];
+  const place = (geo, x, y, z, ry) => geo.clone().applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry), new THREE.Vector3(1, 1, 1)));
+  // ExtrudeGeometry is non-indexed and grouped, the cylinders and boxes
+  // indexed: bring every part to the same plain shape before merging
+  const strip = (geo) => {
+    const out = geo.index ? geo.toNonIndexed() : geo;
+    for (const k of Object.keys(out.attributes)) if (!["position", "normal", "uv"].includes(k)) out.deleteAttribute(k);
+    out.clearGroups();
+    return out;
+  };
   const bays = [];
   for (let i = 0; i < n; i++) {
     const a = (i / n) * TAU;
-    const mat = new THREE.MeshStandardMaterial({ color: C.ivory, roughness: 0.82, transparent: true });
-    const trim = new THREE.MeshStandardMaterial({ color: C.ivoryDeep, roughness: 0.85, transparent: true });
-    const shade = new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false });
     const bay = new THREE.Group();
     const px = Math.sin(a) * R, pz = Math.cos(a) * R;
-    const base = new THREE.Mesh(baseGeo, trim);
-    base.position.set(px, 0.13, pz);
-    const shaft = new THREE.Mesh(shaftGeo, mat);
-    shaft.position.set(px, 0.26 + (H - 0.5) / 2, pz);
-    const cap = new THREE.Mesh(capGeo, trim);
-    cap.position.set(px, H - 0.12, pz);
-    for (const m of [base, shaft, cap]) {
-      m.rotation.y = a;
-      m.castShadow = true;
-      m.receiveShadow = true;
-    }
+    trimParts.push(place(baseGeo, px, 0.13, pz, a), place(capGeo, px, H - 0.12, pz, a));
     const foot = contactShadow(0.85, shade);
     foot.position.set(px, 0.006, pz);
     // the arch to the next pillar, tangent to the ring, its feet on the
     // two capitals
     const mid = a + Math.PI / n;
-    const arc = new THREE.Mesh(archGeo, mat);
+    const arc = new THREE.Object3D();
     arc.position.set(Math.sin(mid) * inset, H, Math.cos(mid) * inset);
     arc.rotation.y = mid;
-    arc.castShadow = true;
-    arc.receiveShadow = true;
-    bay.add(base, shaft, cap, foot, arc);
-    // points along the curve, for telling when a frame cuts through it
     arc.updateMatrix();
+    const stone = new THREE.Mesh(mergeGeometries([place(shaftGeo, px, 0.26 + (H - 0.5) / 2, pz, a), archGeo.clone().applyMatrix4(arc.matrix)].map(strip)), mat);
+    stone.castShadow = true;
+    stone.receiveShadow = true;
+    bay.add(stone, foot);
+    // points along the curve, for telling when a frame cuts through it
     const curve = [...Array(9)].map((_, k) => new THREE.Vector3(Math.cos((k / 8) * Math.PI) * half, Math.sin((k / 8) * Math.PI) * half, 0).applyMatrix4(arc.matrix));
     const feet = [curve[0], curve[8]];
     const top = new THREE.Vector3(px, H, pz);
-    bay.userData = { angle: mid, mid: arc.position.clone(), mats: [mat, trim], shades: [shade], curve, feet, top };
+    bay.userData = { angle: mid, mid: arc.position.clone(), curve, feet, top };
     bays.push(bay);
     g.add(bay);
   }
+  const trims = new THREE.Mesh(mergeGeometries(trimParts.map(strip)), trim);
+  trims.castShadow = true;
+  trims.receiveShadow = true;
+  g.add(trims);
   g.userData.bays = bays;
   g.userData.R = R;
   g.userData.H = H;
@@ -386,7 +398,10 @@ function bench() {
   base.receiveShadow = true;
   const glassTop = new THREE.Mesh(
     new THREE.CylinderGeometry(R + 0.12, R + 0.12, 0.1, 72),
-    new THREE.MeshPhysicalMaterial({ color: "#bfe6e2", transmission: 0.9, roughness: 0.08, thickness: 0.3, ior: 1.4, attenuationColor: C.teal, attenuationDistance: 0.8 }),
+    // teal glass without transmission, which would draw the whole scene a
+    // second time every frame: see-through by opacity, glossy by clearcoat
+    // and the room's reflections
+    new THREE.MeshPhysicalMaterial({ color: "#62bdb5", emissive: C.teal, emissiveIntensity: 0.18, transparent: true, opacity: 0.68, roughness: 0.08, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.06, ior: 1.4, envMapIntensity: 1.3 }),
   );
   glassTop.position.y = 0.6;
   glassTop.receiveShadow = true;
@@ -473,12 +488,19 @@ function plants() {
 
 export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {}, onGesture = () => {}, onEvents = () => {}, onPose = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  // 1.5 is as sharp as the eye tells apart in a soft pastel room, at
+  // little more than half the pixels of 2
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  // Only the room casts the sun's shadows, and the room never moves: the
+  // shadow map is drawn once, on the first frame, not every frame (the
+  // spheres' shadows are the soft blobs stageview.js lays under them).
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog("#efcfcf", 90, 420);
@@ -1061,7 +1083,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       return null;
     }
     if (!v) {
-      const view = createStageView();
+      const view = createStageView({ small: key !== "bench" });
       view.root.traverse((o) => {
         if (o.isMesh) o.userData.pick = key;
       });
@@ -1222,6 +1244,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       },
     };
   };
+  canvas.renderInfo = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries, pixelRatio: renderer.getPixelRatio(), shadowsEveryFrame: renderer.shadowMap.autoUpdate }); // GPU cost of the last frame, for the browser check's `gpu`
   // For the browser check only: point the eyes somewhere, as a mouse would.
   canvas.lookAtPoint = (x, y, z) => {
     const dx = x - me.at[0], dy = y - EYE, dz = z - me.at[1];

@@ -954,6 +954,27 @@ async function wrap(browser: Browser): Promise<void> {
   await page.context().close();
 }
 
+// The GPU's bill for one frame of the opening view on a 2x laptop screen
+// (a cool laptop, not a hot one). Measured at 1440x900 @2x before the cut:
+// 272 draw calls, 1.04M triangles, pixel ratio 2 and the sun's shadow map
+// redrawn every frame (plus a whole second scene pass for the glass top's
+// transmission), about 10 ms of GPU a frame. After: about 90 calls and
+// 190k triangles, 2.4 ms. The budget leaves room to grow but not to slide
+// back: under 60% of the old calls, under 40% of the old triangles.
+async function gpu(browser: Browser): Promise<void> {
+  console.log("\n— the GPU's bill for a frame —");
+  const page = await visitor(browser, { ...DESKTOP, deviceScaleFactor: 2 });
+  // a quiet stage, so the bill is the room's and not a busy loop's flashes
+  await freshStage(page);
+  await page.waitForTimeout(1500);
+  const info = await page.evaluate(() => (document.querySelector("[data-scene]") as any).renderInfo?.() ?? null);
+  check(!!info && info.calls > 0 && info.calls < 160, "a frame of the opening view takes under 160 draw calls", `${info?.calls} calls`);
+  check(!!info && info.triangles > 0 && info.triangles < 400_000, "and under 400k triangles", `${info?.triangles} triangles`);
+  check(!!info && info.pixelRatio <= 1.5, "drawn at most 1.5 pixels per CSS pixel", `ratio ${info?.pixelRatio}`);
+  check(!!info && info.shadowsEveryFrame === false, "the still room's shadows are drawn once, not every frame");
+  await page.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -976,6 +997,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   "phone-edit": phoneEdit,
   names,
   engines,
+  gpu,
 };
 
 // HEADED=1 runs a real, GPU-backed window parked off-screen: headless can
