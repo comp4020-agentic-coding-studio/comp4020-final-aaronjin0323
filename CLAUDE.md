@@ -58,7 +58,7 @@ Settled; change them here first, then in the code.
   at the centre holding the live one. No rooms, no free-roaming avatars.
 - **A performance is a set and a loop of gestures** (ADR 16). The set
   names the objects (`orbit`: four spheres, a ribbon, a bell); the loop is
-  up to 40 gestures, each at a moment (0 to 12 s) of a 12 s loop. The sets,
+  up to 40 gestures, each at a moment (0 to 30 s) of a 30 s loop. The sets,
   the gesture shapes and every bound live in `public/stage.js`, the one
   copy, imported by the server (to refuse) and the page (to play). An
   out-of-range or unknown value is a `400`, never clamped.
@@ -80,6 +80,16 @@ Settled; change them here first, then in the code.
   engine) and in Node (Chrome's) and compares every position bit for bit
   (seen red against the old Math.sin rules: 4 s in, a sphere a last digit
   apart).
+- **The loop comes round gently, never with a jump.** In the last
+  `GLIDE` (1.2 s) of each loop every sphere eases back to where it rests,
+  so the first frame of the next loop is where the last one ended; a soft
+  chime and a ring of light across the stage floor mark "from the top".
+  The easing is a pure function of the loop moment (`shownAt` in
+  `public/stage.js`), so every screen still shows the same thing. Held by
+  `spec/stage.test.ts` (no sphere moves further between two frames across
+  the wrap than a thrown one does in flight) and the browser check's `wrap`
+  section. (At 12 s with a hard reset, the spheres visibly snapped back,
+  which read as the sculpture glitching.)
 - **The objects set each other off.** A thrown sphere floats upward,
   bounces off the ceiling and other spheres; passing close to the ribbon
   it's caught and rides it. Plucking the ribbon sends a pulse round it that
@@ -154,7 +164,7 @@ Settled; change them here first, then in the code.
   play only after the first `state` event of the new connection.
 - **The shared clock.** Each event carries `serverTime`; the page keeps an
   offset against its own clock, and the loop's moment is the shared time
-  modulo 12 s, so two screens show the same moment of the same performance.
+  modulo 30 s, so two screens show the same moment of the same performance.
 
 ### Show, don't tell (ADR 13)
 
@@ -378,7 +388,7 @@ goals, rate limiting.
 
 - **What "good" means, argued with sources**: the README, 400--600 words,
   saying which claims are tested and which are judged.
-- **The loop length** (12 s), the gesture cap (40) and the claim (10 s) are
+- **The loop length** (30 s), the gesture cap (40) and the claim (10 s) are
   first guesses; watch two or three people play before the showcase.
 - **More sets** (glass that tints what passes behind it, a door that swaps
   objects) once the first is fun.

@@ -39,7 +39,9 @@ objects. A performance is a loop of gestures that anyone can add to.**
     near it hops away. A sphere that hits it rings it too.
   So objects set each other off: your throw rings the bell, the bell hops
   my sphere, my sphere lands on the ribbon, and your pluck throws it off.
-- **The loop is 12 seconds and replays forever.** Every gesture is
+- **The loop is 30 seconds and replays forever.** (First 12; lengthened,
+  with a gentle return to rest, when the hard reset every 12 s read as a
+  glitch. See CLAUDE.md, "The loop comes round gently".) Every gesture is
   recorded at the moment in the loop it happened and plays again every
   cycle. You can answer something someone did three cycles ago, cut across
   it, or play along with it. Someone who arrives later sees the whole
