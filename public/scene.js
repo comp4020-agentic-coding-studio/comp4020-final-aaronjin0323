@@ -1,15 +1,20 @@
 // The gallery in 3D: a round floor floating above sunset clouds, stone
 // arches on pillars, six plinths in a ring, each playing a performance, and
-// the stage at the centre where visitors play together (ADR 16). Touching an
-// object on the stage is a gesture: the scene works out which (onGesture)
-// and the page sends it. Every control also lives in the DOM (app.js).
+// the stage at the centre where visitors play together (ADR 16), seen in
+// first person (ADR 17): the camera is your eyes, you walk by the rules in
+// walk.js, and the reticle in the middle of the view is your hand. Touching
+// an object on the stage is a gesture: the scene works out which
+// (onGesture) and the page sends it. Every control also lives in the DOM
+// (app.js); other visitors are drawn by avatars.js.
 // Loaded with a dynamic import, so if WebGL or the CDN is missing the page
 // carries on without it.
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { BELL, LOOP, SETS, SPHERES, VISITOR_COLOURS, loopMoment, ribbonPoint } from "./stage.js";
 import { createStageView } from "./stageview.js";
-import { clearFrame, frameHeight, viewOffsetFor } from "./ui-logic.js";
+import { clearFrame } from "./ui-logic.js";
+import { EYE, REACH, START, clampPitch, collide, forward, lookDir, nearestHit, plinthNear, standBefore, step, throwVelocity } from "./walk.js";
+import { createAvatars } from "./avatars.js";
 
 const TAU = Math.PI * 2;
 const PLINTH_R = 5.4;
@@ -249,9 +254,7 @@ function floor() {
 }
 
 /** Sixteen stone pillars round the rim, each pair carrying a solid arch
- * that spans between them along the ring. Each bay (a pillar and the arch
- * to its neighbour) has its own materials, so the bays between the camera
- * and the centre can fade out instead of walling off the view (fadeBays). */
+ * that spans between them along the ring. */
 const ARCH_THICK = 0.36;
 function arches() {
   const g = new THREE.Group();
@@ -317,26 +320,6 @@ function arches() {
   g.userData.H = H;
   g.userData.thick = ARCH_THICK;
   return g;
-}
-
-/** Fades the bays near the camera, so the arches frame the gallery from
- * behind rather than block it from in front. By distance, not by side of
- * the room: a close-up from near the centre keeps the arches behind the
- * exhibit it looks at. */
-function bayOpacity(bay, cam) {
-  const d = Math.hypot(bay.mid.x - cam.x, bay.mid.z - cam.z);
-  return 0.04 + 0.96 * THREE.MathUtils.smoothstep(d, 2.6, 4.6);
-}
-function fadeBays(bays, cam) {
-  for (const bay of bays) {
-    const o = bayOpacity(bay.userData, cam);
-    for (const m of bay.userData.mats) {
-      m.opacity = o;
-      m.depthWrite = o > 0.95;
-    }
-    for (const m of bay.userData.shades) m.opacity = o;
-    bay.visible = o > 0.06;
-  }
 }
 
 function plinth(slot) {
@@ -488,7 +471,7 @@ function plants() {
   return g;
 }
 
-export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {}, onGesture = () => {}, onEvents = () => {} }) {
+export async function createScene(canvas, { reducedMotion, time, onPick, covers = () => [], onMoved = () => {}, onGesture = () => {}, onEvents = () => {}, onPose = () => {} }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -536,77 +519,59 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   }
   const wb = bench();
   scene.add(wb.group);
+  const avatars = createAvatars(scene);
 
-  // ---- camera: orbit around a focus point; drag and arrow keys turn it
-  // the vertical field of view of the clear part of the scene
-  const CLEAR_FOV = 42;
-  const camera = new THREE.PerspectiveCamera(CLEAR_FOV, 1, 0.1, 900);
-  // yaw 0 looks in between plinths 6 and 1, so neither hides the bench;
-  // until the first state arrives, already inside the pavilion
-  const view = { yaw: 0, pitch: 0.22, dist: 7, focus: new THREE.Vector3(0, 1.3, 0) };
-  const goal = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, focus: view.focus.clone() };
-  let interacting = 0;
-  // The clear rectangle: the canvas minus whatever lies over it, in canvas
-  // px, and the offset frame that centres the picture on it.
+  // ---- the camera is your eyes (ADR 17): where you stand and look
+  const camera = new THREE.PerspectiveCamera(58, 1, 0.05, 900);
+  camera.rotation.order = "YXZ";
+  const me = { at: [...START.at], look: [...START.look] };
+  let glide = null; // { from, to, t0, dur }
+  // The part of the canvas nobody's panel covers, in canvas px: reported to
+  // the browser check; the view itself is centred on the canvas, where the
+  // reticle is.
   let clear = { x: 0, y: 0, w: 1, h: 1 };
-  let full = { fullW: 1, fullH: 1, offX: 0, offY: 0 };
-  // the half-angle tangents of the clear rectangle, and its vertical fov
-  const clearTan = () => {
-    const t = Math.tan((camera.fov * Math.PI) / 360);
-    return { v: (t * clear.h) / full.fullH, h: (t * clear.w) / full.fullH };
-  };
-  const clearFov = () => (2 * Math.atan(clearTan().v) * 180) / Math.PI;
-  // whether the visitor has turned, dragged or zoomed since the last aim
+  // whether the visitor has walked or turned away from the start
   let moved = false;
   const setMoved = (m) => {
     if (m === moved) return;
     moved = m;
     onMoved(m);
   };
+  const placeCamera = () => {
+    camera.position.set(me.at[0], EYE, me.at[1]);
+    camera.rotation.set(me.look[1], me.look[0], 0);
+    camera.updateMatrixWorld();
+  };
 
-  // the yaw equal to `a` (mod a turn) nearest the current goal, so the
-  // camera takes the short way round
-  const nearestYaw = (a) => goal.yaw + ((((a - goal.yaw + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+  function applyClear() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    const r = canvas.getBoundingClientRect();
+    clear = clearFrame({ x: r.left, y: r.top, w, h }, covers());
+    if (clear.w < 40 || clear.h < 40) clear = { x: 0, y: 0, w, h };
+    camera.aspect = w / h;
+    // a portrait view (the phone) needs a taller lens to see the stage
+    camera.fov = w / h < 1 ? 70 : 58;
+    camera.updateProjectionMatrix();
+  }
+  const resize = () => {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    renderer.setSize(w, h, false);
+    applyClear();
+    wake();
+  };
+  new ResizeObserver(resize).observe(canvas);
 
   const box = new THREE.Box3();
-  // what a camera fits of a performance, in its holder's frame: where the
-  // play mostly is (the ribbon, the bell and the spheres at rest), not the
-  // whole flying room nor where the spheres happen to be, so the camera
-  // holds still as it plays and the objects are big enough to touch
+  // what the stage's on-screen box is measured from, in its holder's frame:
+  // where the play mostly is (the ribbon, the bell and the spheres at rest)
   const STAGE_BOX = new THREE.Box3(new THREE.Vector3(-1.4, 0.05, -1.4), new THREE.Vector3(1.4, 1.5, 1.4));
 
-  // The bench view stands inside the pavilion, between plinths 6 and 1,
-  // looking slightly down at the bench sculpture as it is now: on a phone a
-  // tight close-up, on a desktop with room for the far plinths and arches
-  // round it. It re-fits only when the shared draft changes (a release, or
-  // someone else's edit), never from the local preview mid-drag, so the
-  // camera doesn't chase a slider while it moves.
-  const INSIDE_R = FLOOR_R - 1.0;
-  // a visitor's eye, standing in the gallery
-  const EYE = 1.62;
-  function benchFit(tight) {
-    box.makeEmpty();
-    // the stage's own extent, not where its spheres happen to be this frame,
-    // so the camera holds still while a performance plays
-    box.copy(STAGE_BOX).applyMatrix4(wb.holder.matrixWorld);
-    if (box.isEmpty()) return { focusY: 1.2, dist: 6.6, pitch: Math.asin((EYE - 1.2) / 6.6) };
-    // the sculpture itself, with only a sliver of glass under it
-    const lo = Math.max(box.min.y, 0.45);
-    const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
-    // fitted to the clear rectangle, not the whole canvas
-    const aspect = clear.w / clear.h;
-    const f = frameHeight(lo, box.max.y, clearFov(), aspect, tight ? 1.2 : 1.3, tight ? 2.5 : 3.2);
-    const tanH = clearTan().h;
-    const dist = Math.min(Math.max(f.dist, (w * (tight ? 1.15 : 1.25)) / 2 / tanH + w / 2), INSIDE_R);
-    // standing, not hovering: the camera at eye height, so the glass top
-    // reads as a thin lens and the arches rise round the sculpture
-    const pitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp((EYE - f.focusY) / dist, -1, 1)), -0.08, 0.3);
-    return { focusX: 0, focusY: f.focusY, dist: Math.min(dist, INSIDE_R / Math.cos(pitch)), pitch };
-  }
-
-  // ---- composing a close-up: measure what a pose would show
+  // ---- measuring what the camera shows, for the browser check
   const ray = new THREE.Raycaster();
-  const probeCam = new THREE.PerspectiveCamera();
   const ndc = new THREE.Vector2();
   const v3 = new THREE.Vector3();
   // The meshes that could get in the way: everything but the backdrop,
@@ -614,7 +579,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   function obstacles(skip) {
     const out = [];
     const walk = (o) => {
-      if (o === skip || o.userData.backdrop || o.userData.flat) return;
+      if (o === skip || o.userData.backdrop || o.userData.flat || o.userData.avatar) return;
       if (!o.visible && !o.userData.mats) return;
       if (o.isMesh) out.push(o);
       for (const c of o.children) walk(c);
@@ -627,12 +592,6 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     root.traverse((o) => o.isMesh && o.visible && out.push(o));
     return out;
   };
-  // a faded bay is see-through from this camera, so it's never in the way
-  const solid = (o, cam) => {
-    const bay = o.parent?.userData.mats ? o.parent.userData : null;
-    return !bay || bayOpacity(bay, cam) >= 0.5;
-  };
-  // the target of a close-up: what to keep clear, what to fit
   function targetOf(t) {
     const holder = t === "bench" ? wb.holder : plinths.get(t).holder;
     const root = t === "bench" ? wb.group : plinths.get(t).group;
@@ -643,7 +602,6 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       const c = t === "bench" ? new THREE.Vector3(0, 0.66, 0) : slotPos(t).setY(PLINTH_H);
       box.set(c.clone().add(new THREE.Vector3(-0.6, 0, -0.6)), c.clone().add(new THREE.Vector3(0.6, 1.3, 0.6)));
     }
-    // an empty plinth: its top is what has to be seen
     const meshes = meshesOf(holder);
     if (!meshes.length && t !== "bench") meshes.push(plinths.get(t).top);
     return { box: box.clone(), meshes, skip: root };
@@ -666,11 +624,11 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     ndc.set((sx / canvas.clientWidth) * 2 - 1, -(sy / canvas.clientHeight) * 2 + 1);
     ray.setFromCamera(ndc, c);
   };
+  const NEAR = 1.8;
   /** What camera `c` shows of a target: its rect on the canvas, the share
    * of rays to it that hit something else first, the share of the clear
    * view taken by something near the lens, and arches the top edge cuts. */
   function measure(c, target, obs, grid = 5) {
-    const cam = c.position;
     const rect = screenRect(c, target.box);
     if (!rect) return null;
     const all = [...target.meshes, ...obs];
@@ -679,7 +637,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     for (let i = 0; i < grid; i++) {
       for (let j = 0; j < grid; j++) {
         castAt(c, rect.x + ((i + 0.5) / grid) * rect.w, rect.y + ((j + 0.5) / grid) * rect.h);
-        const hits = ray.intersectObjects(all, false).filter((hh) => solid(hh.object, cam));
+        const hits = ray.intersectObjects(all, false);
         const first = hits.findIndex((hh) => mine.has(hh.object));
         if (first === 0) vis++;
         else if (first > 0) occ++;
@@ -691,17 +649,16 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       for (let j = 0; j < gy; j++) {
         castAt(c, clear.x + ((i + 0.5) / gx) * clear.w, clear.y + ((j + 0.5) / gy) * clear.h);
         rays++;
-        const hit = ray.intersectObjects(obs, false).find((hh) => solid(hh.object, cam));
+        const hit = ray.intersectObjects(obs, false)[0];
         if (hit && hit.distance < NEAR) near++;
       }
     }
     // An arch is cut when part of its curve is in the picture and part
-    // runs off the top edge or behind the lens: a stump, not an arch.
+    // runs off the top edge or behind the lens.
     let cuts = 0;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     for (const bay of rim.userData.bays) {
-      if (bayOpacity(bay.userData, cam) < 0.3) continue;
       let shown = 0, gone = 0;
       for (const p of bay.userData.curve) {
         if (v3.copy(p).applyMatrix4(c.matrixWorldInverse).z > -0.1) { gone++; continue; }
@@ -713,298 +670,129 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       }
       if (shown && gone) cuts++;
     }
-    // how far the target spills out of the clear rectangle, in px
-    const m = 10;
-    const outside = Math.max(0, clear.x + m - rect.x) + Math.max(0, rect.x + rect.w - (clear.x + clear.w - m)) + Math.max(0, clear.y + m - rect.y) + Math.max(0, rect.y + rect.h - (clear.y + clear.h - m));
-    return { rect, occluded: occ + vis ? occ / (occ + vis) : 1, near: near / rays, cuts, outside };
-  }
-  const NEAR = 1.8;
-  const posed = (c, focus, yaw, pitch, dist) => {
-    c.position.set(focus.x + Math.sin(yaw) * Math.cos(pitch) * dist, focus.y + Math.sin(pitch) * dist, focus.z + Math.cos(yaw) * Math.cos(pitch) * dist);
-    c.lookAt(focus);
-    c.updateMatrixWorld();
-    return c;
-  };
-  // inside the ring of arches, under the height of an arch's crown
-  const inside = (c) => Math.hypot(c.position.x, c.position.z) < INSIDE_R && c.position.y < 4.6 && c.position.y > 0.5;
-  const turn = (a, b) => Math.abs(((((a - b + Math.PI) % TAU) + TAU) % TAU) - Math.PI);
-  /** The close-up of plinth `slot`: of poses round it, inside the pavilion,
-   * the one with the least in front of the exhibit, nothing big at the
-   * lens, no arch cut through its curve, and the exhibit clear of every
-   * panel, preferring a nearer, more frontal view from the centre side. */
-  function compose(slot) {
-    probeCam.copy(camera);
-    const target = targetOf(slot);
-    const obs = obstacles(target.skip);
-    const b = target.box;
-    // with a little of the plinth top under it, for footing
-    b.min.y = Math.min(b.min.y, PLINTH_H - 0.15);
-    const focus = b.getCenter(new THREE.Vector3());
-    const radius = b.getSize(new THREE.Vector3()).length() / 2;
-    const t = clearTan();
-    const d0 = Math.max(2.6, (radius * 1.02) / Math.min(t.v, t.h));
-    const front = slotAngle(slot) + Math.PI + 0.35;
-    const coarse = [];
-    for (let k = 0; k < 24; k++) {
-      const yaw = (k / 24) * TAU;
-      for (const pitch of [0.12, 0.24, 0.38, 0.52, 0.66]) {
-        // the nearest distance that keeps it clear of the panels
-        for (const f of [0.8, 0.9, 1, 1.1, 1.22, 1.36, 1.52, 1.7, 1.9]) {
-          const c = posed(probeCam, focus, yaw, pitch, d0 * f);
-          if (!inside(c)) break;
-          const r = screenRect(c, b);
-          if (!r) break;
-          const m = 10;
-          if (r.x < clear.x + m || r.y < clear.y + m || r.x + r.w > clear.x + clear.w - m || r.y + r.h > clear.y + clear.h - m) continue;
-          const prior = 0.9 * (f - 0.8) + 0.6 * Math.abs(pitch - 0.24) + 0.18 * turn(yaw, front);
-          coarse.push({ yaw, pitch, dist: d0 * f, prior });
-          break;
-        }
-      }
-    }
-    const score = (q, grid) => {
-      const mm = measure(posed(probeCam, focus, q.yaw, q.pitch, q.dist), target, obs, grid);
-      if (!mm) return Infinity;
-      return 14 * mm.occluded + 10 * mm.near + 1.4 * mm.cuts + 0.05 * mm.outside + q.prior;
-    };
-    for (const q of coarse) q.score = score(q, 3);
-    coarse.sort((x, y) => x.score - y.score);
-    const best = coarse.slice(0, 8).map((q) => ({ ...q, score: score(q, 7) })).sort((x, y) => x.score - y.score)[0];
-    // nothing fits inside (a huge exhibit): the old view, from the centre side
-    return { focus, ...(best ?? { yaw: front, pitch: 0.24, dist: d0 }) };
+    return { rect, occluded: occ + vis ? occ / (occ + vis) : 1, near: near / rays, cuts };
   }
 
-  function aimAt(selected) {
-    applyClear();
-    setMoved(false);
-    if (selected.kind === "slot") {
-      const q = compose(selected.slot);
-      goal.focus.copy(q.focus);
-      goal.yaw = nearestYaw(q.yaw);
-      goal.pitch = q.pitch;
-      goal.dist = q.dist;
-    } else if (selected.kind === "bench") {
-      const f = benchFit(innerWidth < 600);
-      goal.focus.set(f.focusX ?? 0, f.focusY, 0);
-      goal.yaw = nearestYaw(0);
-      goal.dist = f.dist;
-      goal.pitch = f.pitch;
-    } else {
-      // a storeroom exhibit isn't in the room: show the room
-      goal.focus.set(0, 0.8, 0);
-      goal.dist = 21;
-      goal.pitch = 0.48;
-    }
-  }
-
-  // Measure what lies over the canvas and centre the picture on the rest:
-  // the canvas becomes a window onto a larger frame, so what's aimed at
-  // sits in the middle of the part nobody's panel covers.
-  function applyClear() {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    if (!w || !h) return;
-    const r = canvas.getBoundingClientRect();
-    clear = clearFrame({ x: r.left, y: r.top, w, h }, covers());
-    if (clear.w < 40 || clear.h < 40) clear = { x: 0, y: 0, w, h };
-    full = viewOffsetFor(w, h, clear);
-    // the aspect of the whole (offset) frame, or the picture stretches;
-    // and a lens wide enough that the clear part alone sees CLEAR_FOV
-    camera.aspect = full.fullW / full.fullH;
-    camera.fov = (2 * Math.atan((Math.tan((CLEAR_FOV * Math.PI) / 360) * full.fullH) / clear.h) * 180) / Math.PI;
-    camera.setViewOffset(full.fullW, full.fullH, full.offX, full.offY, w, h);
-    camera.updateProjectionMatrix();
-  }
-  const resize = () => {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    if (!w || !h) return;
-    renderer.setSize(w, h, false);
-    applyClear();
-    wake();
-  };
-  new ResizeObserver(resize).observe(canvas);
-
-  let drag = null;
-  canvas.addEventListener("pointerdown", (e) => {
-    if (touchDown(e)) return;
-    drag = { x: e.clientX, y: e.clientY, yaw: goal.yaw, pitch: goal.pitch, moved: 0, id: e.pointerId };
-    canvas.setPointerCapture(e.pointerId);
-    interacting = performance.now();
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (touch) return touchMove(e);
-    hover(e);
-    if (!drag) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
-    goal.yaw = drag.yaw - dx * 0.006;
-    goal.pitch = THREE.MathUtils.clamp(drag.pitch + dy * 0.004, 0.08, 1.15);
-    interacting = performance.now();
-    if (drag.moved >= 6) setMoved(true);
-    wake();
-  });
-  const endDrag = (e) => {
-    if (touch) return touchUp(e);
-    if (!drag) return;
-    const d = drag;
-    drag = null;
-    if (d.moved < 6 && e.type === "pointerup") pick(e);
-  };
-  canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", endDrag);
-  canvas.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      goal.dist = THREE.MathUtils.clamp(goal.dist * Math.exp(e.deltaY * 0.001), 4, 22);
-      interacting = performance.now();
-      setMoved(true);
-      wake();
-    },
-    { passive: false },
-  );
-  canvas.addEventListener("keydown", (e) => {
-    const step = { ArrowLeft: [-0.18, 0], ArrowRight: [0.18, 0], ArrowUp: [0, -0.08], ArrowDown: [0, 0.08] }[e.key];
-    if (!step) {
-      if (e.key === "+" || e.key === "=") goal.dist = Math.max(4, goal.dist * 0.9);
-      else if (e.key === "-") goal.dist = Math.min(22, goal.dist * 1.1);
-      else return;
-    } else {
-      goal.yaw += step[0];
-      goal.pitch = THREE.MathUtils.clamp(goal.pitch + step[1], 0.08, 1.15);
-    }
-    e.preventDefault();
-    interacting = performance.now();
-    setMoved(true);
-    wake();
-  });
-
-  function pick(e) {
-    const r = canvas.getBoundingClientRect();
-    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObjects([...[...plinths.values()].map((p) => p.group), wb.group], true).find((h) => {
-      for (let o = h.object; o; o = o.parent) if (o.userData.pick) return true;
-      return false;
-    });
-    if (!hit) return;
-    let o = hit.object;
-    while (o && !o.userData.pick) o = o.parent;
-    onPick(o.userData.pick);
-  }
-
-  // ---- touching the stage (ADR 16): which object is under the finger,
-  // and what the gesture is. Dragging a sphere picks it up and letting go
-  // throws it at the finger's speed; a tap on a sphere hops it, on the
-  // ribbon plucks it there, on the bell rings it. The scene only says what
-  // the gesture was (onGesture); the page sends it.
-  function pointerRay(e) {
-    const r = canvas.getBoundingClientRect();
-    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-  }
-  // the stage's frame, in world space: its holder sits on the bench
+  // the stage's frame, in world space: its holder sits on the bench, at
+  // y 0.66, unrotated and unscaled
   const stageFrame = () => {
     wb.holder.updateMatrixWorld();
     return wb.holder.matrixWorld;
   };
   const toStage = (v) => v.clone().applyMatrix4(stageFrame().clone().invert());
-  function objectAt(e) {
+  const r3 = (a) => a.map((x) => Number(x.toFixed(3)));
+
+  // ---- the reticle: what your hand would touch, straight ahead
+  const reticleEl = canvas.parentElement?.querySelector("[data-reticle]") ?? null;
+  let reticle = null; // { id, point: [x, y, z] (world), t }
+  const RIBBON_U = [...Array(240)].map((_, i) => i / 240);
+  function aim() {
     if (!stageView || !playable) return null;
-    pointerRay(e);
+    const eye = [me.at[0], EYE, me.at[1]];
+    const dir = lookDir(me.look);
     const o = stageView.objects();
-    const targets = [o.ribbon, ...Object.values(o.balls).filter((b) => b.visible)];
-    o.bell.traverse((m) => m.isMesh && targets.push(m));
-    // a sphere is small: a near miss on screen still counts, so it can be
-    // caught by a finger
-    const hit = ray.intersectObjects(targets, false)[0];
-    if (hit) return { object: hit.object.userData.object, point: hit.point };
-    const r = canvas.getBoundingClientRect();
-    let best = null;
+    const lift = wb.holder.position.y;
+    const targets = [];
     for (const [id, b] of Object.entries(o.balls)) {
-      if (!b.visible) continue;
-      const w = b.getWorldPosition(new THREE.Vector3());
-      const v = w.clone().project(camera);
-      const d = Math.hypot(((v.x + 1) / 2) * r.width - (e.clientX - r.left), ((1 - v.y) / 2) * r.height - (e.clientY - r.top));
-      if (d < 30 && (!best || d < best.d)) best = { d, object: id, point: w };
+      if (!b.visible && id !== holding) continue;
+      if (id === holding) continue;
+      targets.push({ id, kind: "sphere", c: [b.position.x, b.position.y + lift, b.position.z], r: SETS.orbit.sphereR * 1.35 });
+    }
+    targets.push({ id: "bell", kind: "sphere", c: [BELL.pos[0], BELL.pos[1] + lift, BELL.pos[2]], r: BELL.r * 1.35 });
+    let best = nearestHit(eye, dir, targets, REACH);
+    // the ribbon: the nearest point of its path within a hand's width of
+    // the line of sight. It loops round the bell and spheres, so it only
+    // wins over one the dot is on when it's clearly in front of it
+    const before = best ? best.t - 0.3 : REACH;
+    for (const u of RIBBON_U) {
+      const q = ribbonPoint(u);
+      const px = q[0] - eye[0], py = q[1] + lift - eye[1], pz = q[2] - eye[2];
+      const t = px * dir[0] + py * dir[1] + pz * dir[2];
+      if (t < 0 || t > before || (best?.id === "ribbon" && t >= best.t)) continue;
+      const dx = px - dir[0] * t, dy = py - dir[1] * t, dz = pz - dir[2] * t;
+      if (dx * dx + dy * dy + dz * dz < 0.08 * 0.08) best = { id: "ribbon", t, point: [q[0], q[1] + lift, q[2]] };
     }
     return best;
   }
-  let touch = null; // { object, x, y, moved, trail: [{x, y, p, at}] }
-  const grabPlane = new THREE.Plane();
-  const hitPoint = new THREE.Vector3();
+  // a soft halo round what the reticle rests on
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: "#fff6e0", transparent: true, opacity: 0.4, side: THREE.BackSide, depthWrite: false }));
+  halo.visible = false;
+  halo.renderOrder = 4;
+  scene.add(halo);
+  function showReticle() {
+    halo.visible = !!reticle;
+    if (reticle) {
+      const o = stageView.objects();
+      if (SPHERES.includes(reticle.id)) {
+        o.balls[reticle.id].getWorldPosition(halo.position);
+        halo.scale.setScalar(SETS.orbit.sphereR * 1.45);
+      } else if (reticle.id === "bell") {
+        halo.position.fromArray(BELL.pos).add(wb.holder.position);
+        halo.scale.setScalar(BELL.r * 1.9);
+      } else {
+        halo.position.fromArray(reticle.point);
+        halo.scale.setScalar(0.09);
+      }
+    }
+    const on = reticle ? reticle.id : "";
+    if (reticleEl && reticleEl.dataset.on !== on) {
+      if (on) reticleEl.dataset.on = on;
+      else delete reticleEl.dataset.on;
+    }
+  }
+
+  // ---- the hand: hold to pick up a sphere, release to throw it where you
+  // look; a quick press hops a sphere, plucks the ribbon, rings the bell.
+  // The scene only says what the gesture was (onGesture); the page sends it.
+  const HOLD_MS = 180;
+  let press = null; // { object, point, t0 }
+  let holding = null; // the sphere floating in front of you
   const heldBall = new THREE.Mesh(new THREE.SphereGeometry(SETS.orbit.sphereR, 32, 20), new THREE.MeshStandardMaterial({ metalness: 0.6, roughness: 0.2 }));
-  const heldRing = new THREE.Mesh(new THREE.TorusGeometry(SETS.orbit.sphereR * 1.6, 0.02, 8, 40), new THREE.MeshBasicMaterial({ color: "#fff" }));
-  heldBall.add(heldRing);
   heldBall.visible = false;
   scene.add(heldBall);
-  function touchDown(e) {
-    const hit = objectAt(e);
-    if (!hit) return false;
-    canvas.setPointerCapture(e.pointerId);
-    interacting = performance.now();
-    touch = { object: hit.object, x: e.clientX, y: e.clientY, moved: 0, trail: [], point: hit.point.clone() };
-    if (SPHERES.includes(hit.object)) {
-      // picked up: held on a plane facing the camera through the sphere
-      grabPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
-      const mat = stageView.objects().balls[hit.object].material;
-      heldBall.material.color.copy(mat.color);
-      heldBall.material.metalness = mat.metalness;
-      heldBall.material.roughness = mat.roughness;
-      heldBall.position.copy(hit.point);
-      onGesture({ kind: "grab", object: hit.object });
-    }
-    canvas.dataset.touching = hit.object;
-    wake();
-    return true;
-  }
-  function touchMove(e) {
-    touch.moved = Math.max(touch.moved, Math.hypot(e.clientX - touch.x, e.clientY - touch.y));
-    interacting = performance.now();
-    if (!SPHERES.includes(touch.object)) return;
-    pointerRay(e);
-    if (!ray.ray.intersectPlane(grabPlane, hitPoint)) return;
-    // kept within the stage, and above its floor
-    const local = toStage(hitPoint);
-    const R = SETS.orbit.radius - SETS.orbit.sphereR;
-    const rr = Math.hypot(local.x, local.z);
-    if (rr > R) local.multiplyScalar(R / rr).setY(local.y * (rr / R));
-    local.y = THREE.MathUtils.clamp(local.y, SETS.orbit.sphereR, SETS.orbit.ceiling - SETS.orbit.sphereR);
-    const world = local.clone().applyMatrix4(stageFrame());
-    heldBall.position.copy(world);
-    heldBall.visible = touch.moved >= 6;
-    touch.trail.push({ p: local, at: performance.now() });
-    while (touch.trail.length > 8) touch.trail.shift();
+  const heldPoint = () => {
+    const d = lookDir(me.look);
+    return [me.at[0] + d[0] * 0.7, EYE - 0.12 + d[1] * 0.7, me.at[1] + d[2] * 0.7];
+  };
+  function pressHand() {
+    if (!playable || press) return;
+    const t = reticle;
+    press = { object: t?.id ?? null, point: t?.point ?? null, t0: performance.now() };
+    if (press.object && SPHERES.includes(press.object)) onGesture({ kind: "grab", object: press.object });
+    if (press.object) canvas.dataset.touching = press.object;
     wake();
   }
-  function touchUp(e) {
-    const t = touch;
-    touch = null;
-    heldBall.visible = false;
+  function releaseHand() {
+    const p = press;
+    press = null;
     delete canvas.dataset.touching;
+    if (!p || !p.object) return;
     const at = loopMoment(drawTime());
-    const r3 = (v) => v.toArray().map((x) => Number(x.toFixed(3)));
-    if (SPHERES.includes(t.object)) {
-      if (t.moved < 6) {
-        // a tap: a little hop straight up from where it is
-        const p = toStage(stageView.objects().balls[t.object].getWorldPosition(new THREE.Vector3()));
-        onGesture({ kind: "throw", object: t.object, at, from: r3(p), v: [0, 1.4, 0] });
+    if (SPHERES.includes(p.object)) {
+      if (holding === p.object) {
+        // thrown where you look, harder the longer you held; from where it
+        // floated, kept inside the stage's flying room
+        const S = SETS.orbit;
+        const local = toStage(new THREE.Vector3().fromArray(heldPoint()));
+        const R = S.radius - S.sphereR;
+        const rr = Math.hypot(local.x, local.z);
+        if (rr > R) {
+          local.x *= R / rr;
+          local.z *= R / rr;
+        }
+        local.y = THREE.MathUtils.clamp(local.y, S.sphereR, S.ceiling - S.sphereR);
+        const v = throwVelocity(lookDir(me.look), performance.now() - p.t0).map((x) => THREE.MathUtils.clamp(x, -5.9, 5.9));
+        onGesture({ kind: "throw", object: p.object, at, from: r3(local.toArray()), v });
       } else {
-        // let go: thrown at the speed the finger was moving over its last
-        // few positions, capped to what the stage allows
-        const tr = t.trail;
-        const a = tr[0];
-        const b = tr[tr.length - 1];
-        const dt = b && a && b.at > a.at ? (b.at - a.at) / 1000 : 1;
-        const v = b && a ? b.p.clone().sub(a.p).divideScalar(Math.max(dt, 0.016)) : new THREE.Vector3();
-        if (v.length() > 5.5) v.setLength(5.5);
-        onGesture({ kind: "throw", object: t.object, at, from: r3(b?.p ?? toStage(t.point)), v: r3(v) });
+        // a quick press: a little hop straight up from where it is
+        const pos = toStage(stageView.objects().balls[p.object].getWorldPosition(new THREE.Vector3()));
+        onGesture({ kind: "throw", object: p.object, at, from: r3(pos.toArray()), v: [0, 1.4, 0] });
       }
-    } else if (t.object === "ribbon") {
-      // plucked where it was touched: the nearest point of its path
-      const local = toStage(t.point);
+      holding = null;
+      heldBall.visible = false;
+    } else if (p.object === "ribbon") {
+      // plucked where you touched it: the nearest point of its path
+      const local = toStage(new THREE.Vector3().fromArray(p.point));
       let best = 0;
       let bestD = Infinity;
       for (let i = 0; i < 240; i++) {
@@ -1016,15 +804,241 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
         }
       }
       onGesture({ kind: "pluck", object: "ribbon", at, u: Number(best.toFixed(3)) });
-    } else if (t.object === "bell") {
+    } else if (p.object === "bell") {
       onGesture({ kind: "tap", object: "bell", at });
     }
     wake();
   }
-  function hover(e) {
-    if (drag || touch) return;
-    const hit = objectAt(e);
-    canvas.style.cursor = hit ? (SPHERES.includes(hit.object) ? "grab" : "pointer") : "";
+
+  // ---- looking and walking
+  const LOOK_K = 0.0024; // radians per pixel of mouse
+  const DRAG_K = 0.005; // per pixel of finger or unlocked drag
+  function turn(dyaw, dpitch) {
+    glide = null;
+    me.look[0] += dyaw;
+    me.look[1] = clampPitch(me.look[1] + dpitch);
+    wake();
+  }
+  const locked = () => document.pointerLockElement === canvas;
+  let lockBroken = false; // this browser refused pointer lock: drag to look
+  let unlockedAt = 0;
+  function requestLock() {
+    if (lockBroken || locked() || !canvas.requestPointerLock) return;
+    try {
+      const r = canvas.requestPointerLock();
+      if (r && typeof r.catch === "function") r.catch(() => (lockBroken = true));
+    } catch {
+      lockBroken = true;
+    }
+  }
+  document.addEventListener("pointerlockerror", () => (lockBroken = true));
+  document.addEventListener("pointerlockchange", () => {
+    canvas.dataset.locked = locked() ? "1" : "";
+    // the how-to-move hint has done its job
+    if (locked()) document.body.dataset.fpUsed = "1";
+    if (!locked()) {
+      unlockedAt = performance.now();
+      if (press) releaseHand();
+    }
+    wake();
+  });
+  // Escape that only let go of the mouse isn't also "back to the stage"
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && (locked() || performance.now() - unlockedAt < 250)) e.preventDefault();
+    },
+    true,
+  );
+
+  // the mouse: under pointer lock it looks, and its button is the hand;
+  // unlocked, a press on something is the hand, a drag looks, and a click
+  // on nothing takes the pointer
+  let drag = null; // { id, x, y, moved, touch }
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") {
+      // a finger on the view drags to look
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0, touch: true };
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (e.button !== 0) return;
+    if (locked()) return pressHand();
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0, touch: false, onSomething: !!reticle };
+    canvas.setPointerCapture(e.pointerId);
+    if (reticle) pressHand();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (locked()) return turn(-e.movementX * LOOK_K, -e.movementY * LOOK_K);
+    if (!drag || drag.id !== e.pointerId) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    drag.moved += Math.hypot(dx, dy);
+    turn(-dx * DRAG_K, -dy * DRAG_K);
+  });
+  const endPointer = (e) => {
+    if (locked() && e.pointerType !== "touch") return e.type === "pointerup" && releaseHand();
+    if (!drag || drag.id !== e.pointerId) return;
+    const d = drag;
+    drag = null;
+    if (d.touch) return;
+    if (press) releaseHand();
+    else if (!d.onSomething && d.moved < 5 && e.type === "pointerup") requestLock();
+  };
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // the keyboard: WASD or the arrows walk while the view has focus or the
+  // pointer; unlocked, left and right turn, for keyboard-only visitors
+  const keys = new Set();
+  const WALK_KEYS = new Set(["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+  const keyName = (e) => (e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  window.addEventListener("keydown", (e) => {
+    const k = keyName(e);
+    if (!WALK_KEYS.has(k) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!locked() && document.activeElement !== canvas) return;
+    e.preventDefault();
+    if (!keys.has(k)) keyDownAt.set(k, performance.now());
+    keys.add(k);
+    glide = null;
+    wake();
+  });
+  // a tap is a short step or turn, not nothing: a key counts as held for
+  // at least a moment after it went down
+  const keyDownAt = new Map();
+  const TAP_MS = 140;
+  window.addEventListener("keyup", (e) => {
+    const k = keyName(e);
+    const left = TAP_MS - (performance.now() - (keyDownAt.get(k) ?? 0));
+    if (left > 0) setTimeout(() => keys.delete(k), left);
+    else keys.delete(k);
+  });
+  window.addEventListener("blur", () => keys.clear());
+  canvas.addEventListener("blur", () => {
+    keys.clear();
+    if (locked()) document.exitPointerLock();
+  });
+  // the phone: a thumb joystick and a hand button over the view
+  const joyEl = canvas.parentElement?.querySelector("[data-joy]") ?? null;
+  const handEl = canvas.parentElement?.querySelector("[data-hand]") ?? null;
+  const joy = { id: null, x: 0, y: 0, fwd: 0, side: 0 };
+  if (joyEl) {
+    const knob = joyEl.querySelector("[data-joy-knob]");
+    const set = (e) => {
+      const r = joyEl.getBoundingClientRect();
+      const R = r.width * 0.36;
+      let dx = e.clientX - (r.left + r.width / 2);
+      let dy = e.clientY - (r.top + r.height / 2);
+      const d = Math.hypot(dx, dy);
+      if (d > R) {
+        dx *= R / d;
+        dy *= R / d;
+      }
+      joy.side = dx / R;
+      joy.fwd = -dy / R;
+      if (knob) knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      glide = null;
+      wake();
+    };
+    joyEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      joy.id = e.pointerId;
+      joyEl.setPointerCapture(e.pointerId);
+      set(e);
+    });
+    joyEl.addEventListener("pointermove", (e) => e.pointerId === joy.id && set(e));
+    const end = (e) => {
+      if (e.pointerId !== joy.id) return;
+      joy.id = null;
+      joy.fwd = joy.side = 0;
+      if (knob) knob.style.transform = "";
+    };
+    joyEl.addEventListener("pointerup", end);
+    joyEl.addEventListener("pointercancel", end);
+  }
+  if (handEl) {
+    handEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      handEl.setPointerCapture(e.pointerId);
+      handEl.dataset.down = "1";
+      pressHand();
+    });
+    const up = () => {
+      delete handEl.dataset.down;
+      releaseHand();
+    };
+    handEl.addEventListener("pointerup", up);
+    handEl.addEventListener("pointercancel", up);
+    handEl.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+  function input() {
+    let fwd = joy.fwd, side = joy.side, yawRate = 0;
+    if (keys.has("w") || keys.has("ArrowUp")) fwd += 1;
+    if (keys.has("s") || keys.has("ArrowDown")) fwd -= 1;
+    if (keys.has("d")) side += 1;
+    if (keys.has("a")) side -= 1;
+    if (keys.has("ArrowRight")) locked() ? (side += 1) : (yawRate -= 1);
+    if (keys.has("ArrowLeft")) locked() ? (side -= 1) : (yawRate += 1);
+    return { fwd: THREE.MathUtils.clamp(fwd, -1, 1), side: THREE.MathUtils.clamp(side, -1, 1), yawRate };
+  }
+
+  // ---- gliding to a spot: back to the start, or in front of a plinth
+  const wrapA = (a) => ((((a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+  function glideTo(to) {
+    if (still) {
+      me.at = [...to.at];
+      me.look = [...to.look];
+      glide = null;
+    } else {
+      glide = { from: { at: [...me.at], look: [...me.look] }, to, t0: performance.now(), dur: 600 };
+    }
+    wake();
+  }
+  function stepGlide(now) {
+    if (!glide) return;
+    const k = Math.min(1, (now - glide.t0) / glide.dur);
+    const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+    const { from, to } = glide;
+    me.at = collide([from.at[0] + (to.at[0] - from.at[0]) * e, from.at[1] + (to.at[1] - from.at[1]) * e]);
+    me.look = [from.look[0] + wrapA(to.look[0] - from.look[0]) * e, from.look[1] + (to.look[1] - from.look[1]) * e];
+    if (k >= 1) glide = null;
+  }
+
+  // ---- walking up to a plinth shows its card; turning back to the stage
+  // shows the stage's. Only on a change, so the panel's own choices stand.
+  let near = "bench";
+  function noticePlinths() {
+    if (glide) return;
+    const slot = plinthNear(me.at, me.look);
+    let key = null;
+    if (slot) key = `slot:${slot}`;
+    else {
+      const f = forward(me.look[0]);
+      const d = Math.hypot(me.at[0], me.at[1]);
+      const facing = d > 1e-6 ? (-me.at[0] * f[0] - me.at[1] * f[1]) / d : 1;
+      if (d < 4 || facing > Math.cos(0.6)) key = "bench";
+    }
+    if (key && key !== near) {
+      near = key;
+      onPick(key);
+    }
+  }
+
+  // ---- your pose, for everyone else: at most 8 a second, and at least
+  // every 2 s so the server doesn't forget you
+  let poseSent = 0;
+  let poseKey = "";
+  function sendPose(now) {
+    if (now - poseSent < 125) return;
+    const reach = holding ? heldPoint() : reticle ? reticle.point : null;
+    const pose = { at: r3(me.at), look: [Number(wrapA(me.look[0]).toFixed(3)), Number(me.look[1].toFixed(3))], reach: reach ? r3(reach) : null, holding: holding ?? null };
+    const key = JSON.stringify(pose);
+    if (key === poseKey && now - poseSent < 2000) return;
+    poseKey = key;
+    poseSent = now;
+    onPose(pose);
   }
 
   // ---- performances: the stage, and one on each plinth
@@ -1056,11 +1070,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   }
 
   let last = null;
-  let aimed = false;
-  let aimedShape = null;
   let selected = { kind: "bench" };
   let pending = []; // the visitor's own gestures, drawn before the server has them
-  let held = []; // spheres this visitor has in hand, and others' claims
   function sync() {
     if (!last) return;
     for (const s of last.slots) {
@@ -1103,8 +1114,6 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   // ---- the loop: renders while anything moves, idles otherwise
   let raf = 0;
   let still = reducedMotion.matches;
-  // the pinned-scene shell in style.css starts at this width
-  const phoneLayout = matchMedia("(max-width: 860px)");
   reducedMotion.addEventListener("change", (e) => {
     still = e.matches;
     wake();
@@ -1114,30 +1123,40 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   }
   // the time sculptures are drawn at: the shared clock, or 0 when still
   const drawTime = () => (still ? 0 : time());
+  let lastFrame = performance.now();
   function frame() {
     raf = 0;
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - lastFrame) / 1000);
+    lastFrame = now;
     const t = drawTime();
-    // a slow drift around the room when nobody's touching it; never in the
-    // phone layout, where the scene sits over controls being scrolled
-    if (!still && !phoneLayout.matches && performance.now() - interacting > 6000 && !drag) goal.yaw += 0.0007;
-    const k = still ? 1 : 0.08;
-    view.yaw += (goal.yaw - view.yaw) * k;
-    view.pitch += (goal.pitch - view.pitch) * k;
-    view.dist += (goal.dist - view.dist) * k;
-    view.focus.lerp(goal.focus, k);
-    camera.position.set(view.focus.x + Math.sin(view.yaw) * Math.cos(view.pitch) * view.dist, view.focus.y + Math.sin(view.pitch) * view.dist, view.focus.z + Math.cos(view.yaw) * Math.cos(view.pitch) * view.dist);
-    camera.lookAt(view.focus);
-    // the camera's angle, for the browser check to read
-    const yaw = view.yaw.toFixed(3);
+    // walk and turn
+    const inp = input();
+    const walking = inp.fwd !== 0 || inp.side !== 0 || inp.yawRate !== 0;
+    if (inp.yawRate) me.look[0] += inp.yawRate * 1.8 * dt;
+    if (inp.fwd || inp.side) me.at = step(me.at, me.look, { fwd: inp.fwd, side: inp.side }, dt);
+    stepGlide(now);
+    placeCamera();
+    setMoved(Math.hypot(me.at[0] - START.at[0], me.at[1] - START.at[1]) > 0.6 || Math.abs(wrapA(me.look[0] - START.look[0])) > 0.2);
+    const yaw = me.look[0].toFixed(3);
     if (canvas.dataset.yaw !== yaw) canvas.dataset.yaw = yaw;
-    fadeBays(rim.userData.bays, camera.position);
+    noticePlinths();
+    // a press held long enough on a sphere picks it up
+    if (press && !holding && SPHERES.includes(press.object) && now - press.t0 >= HOLD_MS) {
+      holding = press.object;
+      const mat = stageView.objects().balls[holding].material;
+      heldBall.material.color.copy(mat.color);
+      heldBall.material.metalness = mat.metalness;
+      heldBall.material.roughness = mat.roughness;
+    }
+    heldBall.visible = !!holding;
+    if (holding) heldBall.position.fromArray(heldPoint());
     const moment = loopMoment(t);
-    const hand = touch && SPHERES.includes(touch.object) && touch.moved >= 6 ? [touch.object] : [];
     let busy = false;
     for (const [key, v] of views) {
       const isStage = key === "bench";
       const perf = isStage && pending.length ? { ...v.perf, gestures: [...v.perf.gestures, ...pending] } : v.perf;
-      const events = v.view.update(perf, moment, { colourOf, held: isStage ? hand : [], still });
+      const events = v.view.update(perf, moment, { colourOf, held: isStage && holding ? [holding] : [], still });
       busy ||= v.view.busy();
       // sound for what's in view: the stage, or the chosen plinth
       if (events.length && ((isStage && selected.kind === "bench") || key === `slot:${selected.slot}`)) {
@@ -1157,22 +1176,28 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
         if (b) ring.position.copy(b.position).setY(b.position.y - SETS.orbit.sphereR - 0.02);
       }
     }
+    reticle = aim();
+    showReticle();
+    busy = avatars.update(dt, camera, canvas.clientWidth, canvas.clientHeight, still) || busy;
     renderer.render(scene, camera);
-    const settling = Math.abs(goal.yaw - view.yaw) + Math.abs(goal.pitch - view.pitch) + Math.abs(goal.dist - view.dist) + goal.focus.distanceTo(view.focus) > 0.001;
-    if (!still || settling || busy) wake();
+    sendPose(now);
+    // keep going while anything moves; when still, a slow tick keeps the
+    // pose fresh and others' heads arriving
+    if (!still || walking || glide || busy || press || drag) wake();
+    else setTimeout(wake, 250);
   }
 
-  // For the browser check: where the camera stands, the clear rectangle,
-  // and what the camera now shows of a target ("bench" or a slot), all in
-  // canvas px, measured with a finer grid than the composer uses.
+  // For the browser check: where the camera stands, the uncovered part of
+  // the canvas, and what the camera now shows of a target ("bench" or a
+  // slot), all in canvas px; and the first-person state (ADR 17).
   canvas.probe = (t = "bench") => {
-    camera.updateMatrixWorld();
+    placeCamera();
     const target = targetOf(t);
     const m = measure(camera, target, obstacles(target.skip), 7);
     return {
       camR: Math.hypot(camera.position.x, camera.position.z),
       camY: camera.position.y,
-      yaw: view.yaw,
+      yaw: me.look[0],
       archR: FLOOR_R - 0.45,
       archTop: rim.userData.H,
       view: { ...clear },
@@ -1183,7 +1208,28 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
       moved,
       look: lookOf(),
       stage: stageOf(),
+      fp: {
+        at: [...me.at],
+        look: [...me.look],
+        reticle: { id: reticle?.id ?? null },
+        holding,
+        locked: locked(),
+        others: avatars.others(),
+      },
     };
+  };
+  // For the browser check only: point the eyes somewhere, as a mouse would.
+  canvas.lookAtPoint = (x, y, z) => {
+    const dx = x - me.at[0], dy = y - EYE, dz = z - me.at[1];
+    me.look = [Math.atan2(-dx, -dz), clampPitch(Math.atan2(dy, Math.hypot(dx, dz)))];
+    glide = null;
+    wake();
+  };
+  // For checks before or without a server: draw a `poses` event as if the
+  // stream had sent it.
+  canvas.showPoses = (ev, youTag) => {
+    avatars.set(ev, youTag);
+    wake();
   };
 
   // For the browser check's `stage` section: where each object of the
@@ -1268,37 +1314,35 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
   }
 
   resize();
+  placeCamera();
   wake();
 
+  const spotFor = (sel) => (sel.kind === "slot" ? standBefore(sel.slot) : sel.kind === "bench" ? START : null);
   return {
-    /** back to the opening pose, from wherever the visitor has turned */
+    /** walk back to the starting spot, facing the stage */
     home() {
-      aimAt({ kind: "bench" });
+      near = "bench";
+      glideTo(START);
+    },
+    /** walk to stand before what's selected: a plinth, or the start */
+    walkTo(sel) {
+      const to = spotFor(sel);
+      if (!to) return;
+      near = sel.kind === "slot" ? `slot:${sel.slot}` : "bench";
+      glideTo(to);
+    },
+    /** others' heads, hands and held spheres, from a `poses` event */
+    setPoses(ev, youTag) {
+      avatars.set(ev, youTag);
       wake();
     },
     update(state, sel) {
-      const changed = JSON.stringify(sel) !== JSON.stringify(selected);
       last = state;
       selected = sel;
       // the server has the gestures now: stop drawing them as pending
       const have = new Set(state.draft.parts?.gestures.map((g) => JSON.stringify(g)) ?? []);
       pending = pending.filter((g) => !have.has(JSON.stringify(g)) && Date.now() - (g._at ?? 0) < 4000);
       sync();
-      // re-aimed when what's selected changes, never as a performance plays
-      const shape = sel.kind === "slot" ? `slot:${sel.slot}:${!!state.slots[sel.slot - 1]?.exhibit}` : sel.kind;
-      if (changed || !aimed || shape !== aimedShape) {
-        aimAt(sel);
-        // the first view eases in a step, from just behind and to the side
-        // of where it settles, rather than swooping in from outside the room
-        if (!aimed) {
-          view.focus.copy(goal.focus);
-          view.pitch = goal.pitch + (still ? 0 : 0.05);
-          view.dist = goal.dist + (still ? 0 : 0.9);
-          view.yaw = goal.yaw - (still ? 0 : 0.22);
-        }
-        aimed = true;
-        aimedShape = shape;
-      }
     },
     /** Draw one of this visitor's gestures at once, before the server has it. */
     play(gesture) {

@@ -33,13 +33,16 @@
     <symbol id="i-pluck" viewBox="0 0 24 24"><path d="M3 12c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-mouse" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-keys" viewBox="0 0 24 24"><path d="M9 4h6v6H9zM3 12h6v6H3zM9 12h6v6H9zM15 12h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 13V6a1.5 1.5 0 0 1 3 0v5M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V5.5a1.5 1.5 0 0 1 3 0V13M17 9.5a1.5 1.5 0 0 1 3 0V15a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L4 15.5a1.6 1.6 0 0 1 2.6-1.8L8 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </svg>
   <a class="skip" href="#panel">Skip to the controls</a>
 
   <header class="top">
     <div class="brand">
       <h1>Impossible Museum</h1>
-      <p class="lede" data-lede>Throw, pluck, ring. Together.</p>
+      <p class="lede" data-lede>Walk in. Throw, pluck, ring.</p>
     </div>
     <div class="people" data-people hidden>
       <div class="you">
@@ -62,9 +65,13 @@
   </header>
 
   <div class="stage" data-stage>
-    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in 3D, with the stage at its centre. Drag a sphere to throw it, tap the ribbon or the bell; drag anywhere else, or use the arrow keys, to turn the camera. Every gesture is also a button in the panel."></canvas>
+    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in first person, with the stage in front of you. Click to look around with the mouse (Esc lets go), walk with W A S D or the arrow keys, and hold the button on a sphere to pick it up and let go to throw it; click the ribbon or the bell to play them. On a phone, the pad bottom left walks, a drag looks, and the hand button bottom right grabs and throws. Every gesture is also a button in the panel."></canvas>
+    <span class="reticle" data-reticle aria-hidden="true"></span>
+    <p class="fp-hint" data-hint title="Click to look around, W A S D to walk, hold to grab and throw"><span class="sr-only">Click to look around, W A S D to walk, hold to grab and throw</span><svg aria-hidden="true"><use href="#i-mouse"/></svg><svg aria-hidden="true"><use href="#i-keys"/></svg></p>
+    <div class="joy" data-joy aria-hidden="true"><span class="joy-knob" data-joy-knob></span></div>
+    <button type="button" class="hand" data-hand aria-label="Hand: hold to pick up what the dot is on, let go to throw" title="Hold to grab, let go to throw"><svg aria-hidden="true"><use href="#i-hand"/></svg></button>
     <p class="status" data-status role="status" hidden></p>
-    <button type="button" class="home" data-home hidden aria-label="Back to the gallery" title="Back to the gallery (Esc)"><svg aria-hidden="true"><use href="#i-back"/></svg>Gallery</button>
+    <button type="button" class="home" data-home hidden aria-label="Back to the stage" title="Back to the stage (Esc)"><svg aria-hidden="true"><use href="#i-back"/></svg>Back to the stage</button>
   </div>
 
   <nav class="plinths" aria-label="The stage and the plinths" data-nav hidden>

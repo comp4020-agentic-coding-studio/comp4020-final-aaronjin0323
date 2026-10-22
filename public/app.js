@@ -87,7 +87,7 @@ let offset = 0;
 let selected = /** @type {{kind: "bench"} | {kind: "slot", slot: number} | {kind: "exhibit", id: number}} */ ({ kind: "bench" });
 const historyCache = new Map();
 let scene = null;
-let cameraMoved = false; // the visitor turned, dragged or zoomed the camera
+let cameraMoved = false; // the visitor walked or turned away from the start
 
 // the loop moment now: the shared clock, or the start when held still
 const moment = () => (reducedMotion.matches ? 0 : loopMoment(sharedSeconds(Date.now(), offset)));
@@ -129,6 +129,15 @@ function connect() {
     state = next;
     conn = connection(conn, "state");
     render();
+  });
+  // where everyone else stands and looks (ADR 17): live, never stored
+  es.addEventListener("poses", (e) => {
+    if (!state) return;
+    try {
+      scene?.setPoses(JSON.parse(e.data), state.you.tag);
+    } catch {
+      // a malformed poses event only means no heads this time
+    }
   });
   es.addEventListener("error", () => dropped(es.readyState === EventSource.CLOSED));
 }
@@ -262,8 +271,12 @@ function renderNav() {
   if (focused) $(`[data-go="${focused}"]`)?.focus();
 }
 
-function select(next, { focusHeading = false } = {}) {
+/** Chooses what the card shows. `walk` also walks you there in the room:
+ * in front of a plinth, or back to your spot by the stage; a choice the
+ * room made itself (you walked up to a plinth) doesn't. */
+function select(next, { focusHeading = false, walk = true } = {}) {
   selected = next;
+  if (walk) scene?.walkTo(next);
   closePublish();
   render();
   if (focusHeading) $(selected.kind === "bench" ? "#bench-h" : "#exhibit-h")?.focus({ preventScroll: true });
@@ -273,14 +286,14 @@ function select(next, { focusHeading = false } = {}) {
   $("[data-plinths] [aria-pressed='true']")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion.matches ? "auto" : "smooth" });
 }
 
-// Back to the gallery: shown whenever the view isn't the opening one.
+// Back to the stage: shown whenever you've walked or turned away from
+// your starting spot, or are at a plinth.
 function renderHome() {
   $("[data-home]").hidden = !scene || (selected.kind === "bench" && !cameraMoved);
 }
 function goHome() {
-  const wasBench = selected.kind === "bench";
-  select({ kind: "bench" });
-  if (wasBench) scene?.home();
+  select({ kind: "bench" }, { walk: false });
+  scene?.home();
   $("#bench-h").focus({ preventScroll: true });
 }
 $("[data-home]").addEventListener("click", goHome);
@@ -794,8 +807,13 @@ async function startScene() {
     scene = await createScene(canvas, {
       reducedMotion,
       time: () => sharedSeconds(Date.now(), offset),
-      onPick: (pick) => select(pick === "bench" ? { kind: "bench" } : { kind: "slot", slot: Number(pick.split(":")[1]) }),
-      // what lies over the scene, so a close-up is composed in the rest
+      // walking up to a plinth shows its card; turning back, the stage's
+      onPick: (pick) => {
+        const next = pick === "bench" ? { kind: "bench" } : { kind: "slot", slot: Number(pick.split(":")[1]) };
+        if (JSON.stringify(next) === JSON.stringify(selected) || !document.querySelector("[data-publish]").hidden) return;
+        select(next, { walk: false });
+      },
+      // what lies over the scene: the uncovered part is reported to checks
       covers: () =>
         [".panel", ".brand", "[data-people]", "[data-nav]", "[data-home]"]
           .map((q) => $(q))
@@ -805,8 +823,10 @@ async function startScene() {
           .map((r) => ({ x: r.left, y: r.top, w: r.width, h: r.height })),
       onMoved: (m) => {
         cameraMoved = m;
+        if (m) document.body.dataset.fpUsed = "1";
         renderHome();
       },
+      onPose: sendPose,
       onGesture,
       onEvents: playSounds,
     });
@@ -815,6 +835,17 @@ async function startScene() {
     console.warn("no 3D:", err);
     noScene();
   }
+}
+
+// Your pose, for the others: fire and forget. A refusal or a server that
+// doesn't know the route yet only means nobody sees you move; never a toast.
+let poseInFlight = false;
+function sendPose(pose) {
+  if (poseInFlight || !editable()) return;
+  poseInFlight = true;
+  fetch("/pose", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pose) })
+    .catch(() => null)
+    .finally(() => (poseInFlight = false));
 }
 
 function noScene() {
