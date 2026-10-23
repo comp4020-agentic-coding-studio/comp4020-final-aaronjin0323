@@ -48,6 +48,11 @@ function nameSprite(name, colour) {
   return sprite;
 }
 
+// a head closer than this to your eye fades (CLAUDE.md, "Visitors are
+// there with you")
+const NEAR_IN = 0.45;
+const NEAR_OUT = 0.9;
+
 export function createAvatars(scene) {
   const root = new THREE.Group();
   scene.add(root);
@@ -154,13 +159,18 @@ export function createAvatars(scene) {
         const d = lookDir(a.look);
         a.ball.position.set(a.at[0] + d[0] * 0.55, EYE - 0.18 + d[1] * 0.55, a.at[1] + d[2] * 0.55);
       }
-      for (const m of a.mats) m.opacity = a.opacity;
+      // someone standing where you stand fades out instead of filling your
+      // view: gone under NEAR_IN, whole past NEAR_OUT
+      const dist = Math.hypot(a.at[0] - camera.position.x, EYE - camera.position.y, a.at[1] - camera.position.z);
+      const near = Math.min(1, Math.max(0, (dist - NEAR_IN) / (NEAR_OUT - NEAR_IN)));
+      for (const m of a.mats) m.opacity = a.opacity * near;
+      a.g.visible = a.label.visible = near > 0.01;
       // where the head is on your screen, for the browser check
       v.set(a.at[0], EYE, a.at[1]).applyMatrix4(camera.matrixWorldInverse);
       const front = v.z < 0;
       v.set(a.at[0], EYE, a.at[1]).project(camera);
       a.screen = { x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h };
-      a.visible = front && a.opacity > 0.5 && a.screen.x >= 0 && a.screen.x <= w && a.screen.y >= 0 && a.screen.y <= h;
+      a.visible = front && a.opacity * near > 0.5 && a.screen.x >= 0 && a.screen.x <= w && a.screen.y >= 0 && a.screen.y <= h;
     }
     return busy;
   }

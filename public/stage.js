@@ -19,6 +19,7 @@ import { GLIDE, LOOP, STAGE, STEP, THROW, turnCos, turnSin } from "./sets/kit.js
 import orbit from "./sets/orbit.js";
 import chimes from "./sets/chimes.js";
 import doors from "./sets/doors.js";
+import seesaw from "./sets/seesaw.js";
 
 export { GLIDE, LOOP, STAGE, STEP, THROW, turnCos, turnSin };
 
@@ -83,7 +84,7 @@ export const CAP_EACH = 12;
 /** The sets of objects a performance can be played on, by id (ADR 18).
  * Adding a set is one line here (public/sets/README.md).
  * @type {Record<string, StageSet>} */
-export const SETS = { orbit, chimes, doors };
+export const SETS = { orbit, chimes, doors, seesaw };
 
 /** The set with this id, or null (own keys only: never `constructor`).
  * @param {unknown} id @returns {StageSet | null} */

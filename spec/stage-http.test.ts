@@ -167,11 +167,11 @@ describe("the stage", { concurrent: false }, () => {
   it("choosing another set starts a silent loop on it, archiving one with gestures; what's holdable comes from it", async () => {
     for (const id of Object.keys(SETS)) {
       if (id === "orbit") continue;
+      // each set's turn starts from a quiet Orbit (the last turn left its
+      // own set on the stage, where Orbit's bell tap is refused)
+      await post(janitor, "/stage/clear", { set: "orbit" });
       await fresh();
       const a = visitor();
-      // back on Orbit first: the last pass left the stage on its own set,
-      // where the bell's tap would be refused
-      await post(a, "/stage/clear", { set: "orbit" });
       expect((await play(a, tap())).status, id).toBe(200);
       const r = await post(a, "/stage/clear", { set: id });
       expect(r.status, id).toBe(200);
