@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, webkit, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
@@ -1353,6 +1353,100 @@ async function chimesSection(browser: Browser): Promise<void> {
   await b.context().close();
 }
 
+// Safari's engine shows every set as Chrome does (CLAUDE.md, "Every set
+// looks the same in Safari's engine as in Chrome"): Playwright's WebKit
+// beside Chrome, on each set from the same opening pose. No script errors;
+// the rules bit for bit on the page's own modules; and the stage's middle
+// no rougher in WebKit than in Chrome (the doors' canvas glow came out as
+// coloured speckle in WebKit). Skipped when the matching WebKit is missing.
+async function webkitSection(chrome: Browser): Promise<void> {
+  console.log("\n— Safari's engine (WebKit) shows every set as Chrome does —");
+  let wk: Browser;
+  try {
+    wk = await webkit.launch();
+  } catch {
+    return check(true, "no matching WebKit here: skipped (npx playwright-core install webkit)");
+  }
+  try {
+    const open = async (b: Browser): Promise<{ page: Page; errors: string[] }> => {
+      const page = await (await b.newContext({ ...DESKTOP, deviceScaleFactor: 1, reducedMotion: "reduce" })).newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.goto(`${APP}/?v=${Date.now()}`);
+      await live(page);
+      await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 15_000 });
+      return { page, errors };
+    };
+    const A = await open(chrome);
+    const B = await open(wk);
+    // mean colour difference between neighbouring pixels, over the stage's
+    // middle (where every set's objects stand in the opening view)
+    const rough = async (p: Page): Promise<number> => {
+      const png = await p.screenshot({ clip: { x: 420, y: 180, width: 600, height: 300 } });
+      return A.page.evaluate(async (b64) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const g = c.getContext("2d")!;
+        g.drawImage(img, 0, 0);
+        const d = g.getImageData(0, 0, c.width, c.height).data;
+        let sum = 0;
+        let n = 0;
+        for (let y = 0; y < c.height; y++)
+          for (let x = 1; x < c.width; x++) {
+            const i = (y * c.width + x) * 4;
+            sum += Math.abs(d[i] - d[i - 4]) + Math.abs(d[i + 1] - d[i - 3]) + Math.abs(d[i + 2] - d[i - 2]);
+            n++;
+          }
+        return sum / n;
+      }, png.toString("base64"));
+    };
+    const sets = await A.page.evaluate(async () => Object.keys((await import("/stage.js" as string)).SETS));
+    for (const set of sets) {
+      await post(A.page, "/stage/clear", { set });
+      const on = await B.page.waitForFunction((s) => (document.querySelector("[data-scene]") as any).probe().stage?.set === s, set, { timeout: 3000 }).then(() => true, () => false);
+      await A.page.waitForTimeout(600);
+      await B.page.waitForTimeout(600);
+      const [ra, rb] = [await rough(A.page), await rough(B.page)];
+      await B.page.screenshot({ path: `.shots/webkit-${set}.png` });
+      // the engines draw these scenes to the same roughness (to the second
+      // decimal); the doors' speckle was 18% rougher
+      check(on && rb < ra * 1.05, `${set}: WebKit shows it, no rougher than Chrome`, `roughness ${ra.toFixed(2)} in Chrome, ${rb.toFixed(2)} in WebKit`);
+    }
+    // the rules, on the page's own modules, to the bit
+    const bits = (p: Page) =>
+      p.evaluate(async () => {
+        const m = await import("/stage.js" as string);
+        const f = new Float64Array(1);
+        const u = new Uint32Array(f.buffer);
+        const out: Record<string, number> = {};
+        for (const [id, S] of Object.entries(m.SETS) as [string, any][]) {
+          let h = 7;
+          for (let t = 0; t < m.LOOP; t += 0.25)
+            for (const q of S.positions(m.simulate({ set: id, gestures: S.fingerprint.gestures }, t)))
+              for (const x of q) {
+                f[0] = x;
+                h = (Math.imul(h, 31) + u[0]) >>> 0;
+                h = (Math.imul(h, 31) + u[1]) >>> 0;
+              }
+          out[id] = h;
+        }
+        return out;
+      });
+    const [ba, bb] = [await bits(A.page), await bits(B.page)];
+    check(Object.keys(ba).length > 0 && Object.keys(ba).every((id) => ba[id] === bb[id]), "every set's rules play the same bits in WebKit and Chrome, on the page's modules", JSON.stringify(bb));
+    check(A.errors.length === 0 && B.errors.length === 0, "no script errors in either engine", [...A.errors, ...B.errors].join("; "));
+    await freshStage(A.page, "orbit");
+    await A.page.context().close();
+    await B.page.context().close();
+  } finally {
+    await wk.close();
+  }
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1376,6 +1470,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   "phone-edit": phoneEdit,
   names,
   engines,
+  webkit: webkitSection,
   setrow: setRow,
   doors: doorsSection,
   seesaw,

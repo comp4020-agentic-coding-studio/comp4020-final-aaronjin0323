@@ -99,20 +99,30 @@ function frameGeometry(THREE, small) {
   return g;
 }
 
-/** The membrane's soft glow: bright in the middle, fading to the frame. */
+/** The membrane's soft glow: bright in the middle, fading to the frame.
+ * Computed pixels, not a 2D canvas: WebKit uploaded this canvas as
+ * coloured speckle on a real Apple GPU, mipmaps or not (CLAUDE.md, "Every
+ * set looks the same in Safari's engine"); raw bytes come out the same in
+ * every engine. */
 function glowTexture(THREE) {
-  const c = document.createElement("canvas");
-  c.width = 64;
-  c.height = 64;
-  const x = c.getContext("2d");
-  const g = x.createRadialGradient(32, 36, 4, 32, 36, 40);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.55, "rgba(255,255,255,0.55)");
-  g.addColorStop(1, "rgba(255,255,255,0.2)");
-  x.fillStyle = g;
-  x.fillRect(0, 0, 64, 64);
-  const t = new THREE.CanvasTexture(c);
+  const N = 64;
+  const data = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      // the radial falloff the canvas gradient drew: 1 at the centre,
+      // 0.55 a little over half way out, 0.2 at the rim and beyond
+      const d = Math.min(1, Math.max(0, (Math.hypot(x + 0.5 - 32, y + 0.5 - 28) - 4) / 36));
+      const a = d < 0.55 ? 1 - (0.45 * d) / 0.55 : 0.55 - (0.35 * (d - 0.55)) / 0.45;
+      const i = (y * N + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = 255;
+      data[i + 3] = Math.round(a * 255);
+    }
+  }
+  const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
   return t;
 }
 
