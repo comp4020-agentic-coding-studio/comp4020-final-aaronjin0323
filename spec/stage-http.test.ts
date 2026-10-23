@@ -169,7 +169,10 @@ describe("the stage", { concurrent: false }, () => {
       if (id === "orbit") continue;
       await fresh();
       const a = visitor();
-      await play(a, tap());
+      // back on Orbit first: the last pass left the stage on its own set,
+      // where the bell's tap would be refused
+      await post(a, "/stage/clear", { set: "orbit" });
+      expect((await play(a, tap())).status, id).toBe(200);
       const r = await post(a, "/stage/clear", { set: id });
       expect(r.status, id).toBe(200);
       expect(state(r).draft.parts).toEqual({ set: id, gestures: [] });
