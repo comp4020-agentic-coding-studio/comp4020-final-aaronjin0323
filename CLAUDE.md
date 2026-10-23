@@ -91,6 +91,16 @@ Settled; change them here first, then in the code.
   engine) and in Node (Chrome's) and compares every position bit for bit
   (seen red against the old Math.sin rules: 4 s in, a sphere a last digit
   apart).
+- **Every set looks the same in Safari's engine as in Chrome.** The
+  browser check's `webkit` section opens each set in Playwright's WebKit
+  beside Chrome, needs no script errors and the same rules to the bit on
+  the page's own modules, and compares the stage's pixels: no speckle where
+  Chrome is smooth (the doors' membrane glow, a 2D-canvas texture,
+  uploaded as coloured noise in WebKit on a real Apple GPU, with or
+  without mipmaps; it is computed bytes, a `DataTexture`, now). The
+  section skips with a notice
+  when the matching WebKit isn't installed (`npx playwright-core install
+  webkit`).
 - **The loop comes round gently, never with a jump.** In the last
   `GLIDE` (1.2 s) of each loop every sphere eases back to where it rests,
   so the first frame of the next loop is where the last one ended; a soft
