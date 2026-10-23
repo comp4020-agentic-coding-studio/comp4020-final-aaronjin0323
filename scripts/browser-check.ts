@@ -1123,6 +1123,63 @@ async function setRow(browser: Browser): Promise<void> {
   await b.context().close();
 }
 
+// Tipping Point (ADR 18): A picks the seesaw from the card's set row, walks
+// up and taps the plank's high end with the reticle (a nudge that swings
+// it and throws the small stone), then drops the big stone with its card
+// button; B sees both on B's screen within a second. Ends back on Orbit.
+async function seesaw(browser: Browser): Promise<void> {
+  console.log("\n— Tipping Point: a plank, a pivot and three stones —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
+  await b.click('[data-go="bench"]');
+  await a.click('[data-sets] [data-set="seesaw"]');
+  if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
+  const want = "throw:pebble throw:stone throw:boulder nudge:plank";
+  const got = await a.waitForFunction((w) => [...document.querySelectorAll("[data-gestures] [data-gesture]")].map((e) => (e as HTMLElement).dataset.gesture).join(" ") === w, want, { timeout: 3000 }).then(() => true, () => false);
+  check(got, "the card's buttons drop each stone and tip the plank", want);
+  const labels = await a.$$eval("[data-gestures] [data-gesture]", (els) => els.map((e) => ({ label: e.getAttribute("aria-label") ?? "", title: e.getAttribute("title") ?? "", text: (e.textContent ?? "").trim() })));
+  check(labels.length === 4 && labels.every((l) => l.label.length > 0 && l.title === l.label && l.text === ""), "each is an icon button with a name and a tooltip", labels.map((l) => l.label).join(" | "));
+  const follows = await b.waitForFunction(() => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === "seesaw", null, { timeout: 3000 }).then(() => true, () => false);
+  check(follows, "a second visitor's stage follows to the seesaw");
+  // by reticle: walk up, rest the dot on the plank's high end, a quick press
+  await walk(a, 900);
+  const end: number[] = await a.evaluate(async () => {
+    const { plankPoint, PLANK } = await import("/sets/seesaw.js" as string);
+    return plankPoint(PLANK.limit, 1.0);
+  });
+  await a.evaluate(([x, y, z]) => (document.querySelector("[data-scene]") as any).lookAtPoint(x, y + 0.66, z), end);
+  await a.waitForTimeout(200);
+  const on = (await fpOf(a)).reticle.id;
+  check(on === "plank", "the reticle rests on the plank's high end", String(on));
+  const pebbleB = await sphereAt(b, "pebble");
+  const box = (await a.locator("[data-scene]").boundingBox())!;
+  await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await a.mouse.down();
+  await a.waitForTimeout(60);
+  await a.mouse.up();
+  const sent = Date.now();
+  check(await heard(a, "nudge", 1500), "a tap on the plank by reticle kicks it, on A's screen");
+  const flew = await movedFrom(b, "pebble", pebbleB, 3000, sent);
+  check(flew >= 0 && flew < 1000, "B sees the small stone thrown by the plank within a second", `${flew} ms`);
+  await a.waitForTimeout(1500);
+  // by button: the big stone dropped on the high end launches what's there
+  const boulderB = await sphereAt(b, "boulder");
+  await a.click('[data-gesture="throw:boulder"]');
+  const sent2 = Date.now();
+  const seen = await movedFrom(b, "boulder", boulderB, 3000, sent2);
+  check(seen >= 0 && seen < 1000, "B sees A's big stone dropped by button within a second", `${seen} ms`);
+  check(await heard(b, "land", 2500), "and hears it land on the plank, on B's screen");
+  await a.waitForTimeout(500);
+  await a.screenshot({ path: ".shots/seesaw-a.png" });
+  await b.screenshot({ path: ".shots/seesaw-b.png" });
+  // and it comes to rest: nothing keeps the page drawing
+  await freshStage(a, "orbit");
+  await a.context().close();
+  await b.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1146,6 +1203,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   names,
   engines,
   setrow: setRow,
+  seesaw,
   gpu,
   idle,
 };
