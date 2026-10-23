@@ -6,7 +6,7 @@
 // textContent. Small decisions (connection, publish flow, input rules) live
 // in ui-logic.js, where a test can hold them; the stage's rules are
 // stage.js.
-import { LOOP, PALETTE, SETS, VISITOR_COLOURS, isHoldable, loopMoment, shownAt } from "./stage.js";
+import { gestureMoment, LOOP, PALETTE, SETS, VISITOR_COLOURS, isHoldable, loopMoment, shownAt } from "./stage.js";
 import { objectName, viewOf } from "./sets/views.js";
 import { isMuted, play as playSounds, setMuted, unlock } from "./sound.js";
 import {
@@ -476,7 +476,7 @@ $("[data-gestures]").addEventListener("click", async (e) => {
   const parts = state.draft.parts;
   const view = viewOf(parts.set);
   if (!view) return;
-  const at = Number(moment().toFixed(3));
+  const at = Number(gestureMoment(moment()).toFixed(3));
   const g = view.fromButton(kind, object, at, shownAt(parts, at));
   if (kind === "throw" && isHoldable(parts.set, object)) {
     const r = await post("/stage/grab", { object });

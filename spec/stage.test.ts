@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  gestureMoment,
   CAP,
   GLIDE,
   CAP_EACH,
@@ -339,6 +340,22 @@ const mix = (seed: number, n: number): Gesture[] => {
 // (Seen red: each call re-applied the gestures of the step it stood on, so
 // at 60 Hz a pluck sent two pulses and a throw flashed three times, and a
 // screen held still at 0 added a pulse every frame.)
+describe("a gesture made during the glide", () => {
+  it("is played at the top of the next loop, never lost in the glide", () => {
+    expect(gestureMoment(3.25)).toBe(3.25);
+    expect(gestureMoment(LOOP - GLIDE - 0.01)).toBe(LOOP - GLIDE - 0.01);
+    for (const t of [LOOP - GLIDE, LOOP - 0.5, LOOP - 0.001]) expect(gestureMoment(t)).toBe(0);
+  });
+
+  it("so a throw made in the glide moves its sphere well within the next loop's first second", () => {
+    const made = LOOP - 0.5;
+    const g = { kind: "throw", object: "chrome", at: gestureMoment(made), from: [0.6, 0.3, 0.7], v: [0, 2, 0], by: "aaaaaa" };
+    const rest = shownAt({ set: "orbit", gestures: [] }, 0.5).spheres.chrome.pos;
+    const now = shownAt({ set: "orbit", gestures: [g] }, 0.5).spheres.chrome.pos;
+    expect(Math.hypot(now[0] - rest[0], now[1] - rest[1], now[2] - rest[2])).toBeGreaterThan(0.5);
+  });
+});
+
 describe("frame by frame is the rule itself", () => {
   const busy = [throwAt("chrome", 1, [0.62, 0.95, 0], [0.9, 0, 0]), { kind: "pluck", object: "ribbon", at: 3.2, u: 0, by: "bbbbbb" }, { kind: "tap", object: "bell", at: 5, by: "aaaaaa" }];
 

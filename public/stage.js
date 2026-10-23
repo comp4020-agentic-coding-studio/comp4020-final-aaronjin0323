@@ -412,6 +412,12 @@ export function events(p, t0, t1) {
     .events.filter((e) => e.t >= t0 - 1e-9 && e.t < t1);
 }
 
+/** The moment a gesture made at loop moment t is recorded at: as made,
+ * except during the glide home, when everything is easing to rest and a
+ * throw would barely show; then at the top of the next loop (CLAUDE.md,
+ * "A gesture made during the glide"). */
+export const gestureMoment = (t) => (t >= LOOP - GLIDE ? 0 : t);
+
 /** The loop moment at shared time `seconds`. */
 export const loopMoment = (seconds) => ((seconds % LOOP) + LOOP) % LOOP;
 

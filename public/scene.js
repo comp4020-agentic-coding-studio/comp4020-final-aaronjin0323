@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { GLIDE, LOOP, STAGE, THROW, VISITOR_COLOURS, isHoldable, loopMoment, setOf } from "./stage.js";
+import { GLIDE, LOOP, STAGE, THROW, VISITOR_COLOURS, gestureMoment, isHoldable, loopMoment, setOf } from "./stage.js";
 import { createStageView } from "./stageview.js";
 import { heldLook } from "./sets/views.js";
 import { clearFrame } from "./ui-logic.js";
@@ -771,7 +771,7 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     press = null;
     delete canvas.dataset.touching;
     if (!p || !p.object) return;
-    const at = loopMoment(drawTime());
+    const at = gestureMoment(loopMoment(drawTime()));
     if (holding && holding === p.object) {
       // thrown where you look, harder the longer you held; from where it
       // floated, kept inside the stage's room (less the held thing's size)
