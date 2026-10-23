@@ -1,78 +1,103 @@
-# Skyline
+# Impossible Museum
 
-Skyline is a 12×12 board that a room of people share. Everyone holds exactly
-one tile, and a tile rises one level for every claimed tile around it. If you
-stand alone you stay flat. If you settle next to strangers, you build a skyline
-together.
+<!--
+DRAFT by Claude, to be rewritten in your own words (the course asks you
+to write README.md yourself). The factual sections are checked against
+the code and spec/ as of commit 68b1be6. "What good means here" is notes
+and sources only: write that argument yourself. Target: 400-600 words.
+Delete this comment when it's yours.
+-->
+
+A small shared 3D gallery floating above the clouds. Everyone who opens it
+stands in the same room, in first person, and sees the others there. In
+the middle is a stage of impossible toys that anyone can play, and round it
+six plinths hold performances people left behind.
+
+There are four toys:
+
+- **Orbit stage:** spheres that fall upward, a ribbon that catches them,
+  and a bell.
+- **Chime Tree:** six tuned chimes and a striker on a cord.
+- **Swap Doors:** two door frames joined to each other, so a ball thrown
+  into one comes out of the other.
+- **Tipping Point:** a seesaw that catapults stones.
+
+Whatever anyone does on the stage replays in a 30-second loop. You can
+answer what someone did a minute ago, cut across it, or leave the loop on a
+plinth for the next visitor to find and join.
 
 ## What good means here
 
-Skyline is good if it makes the people in the room matter to each other: more
-interesting with twenty people on it than with one. From that, four
-commitments:
-
-1. **Where you stand depends on who else is there, and you can see it.**
-   Your height comes only from your neighbours, and every claim reaches every
-   open screen within a second. When you settle, the tiles you lift show +1
-   and you're told whose they were; when someone settles beside you, you're
-   told who. Every neighbour also adds a fifth to your building's income,
-   so standing beside strangers pays. The room's goal is landmarks: a
-   building earns a bronze crown with three neighbours, silver with five and
-   gold when ringed by eight others, so three of you can start one and it
-   takes nine to finish ([why tiers](docs/adr/0006-landmark-tiers.md)). You
-   can help whoever's beside you.
-2. **Land is borrowed; what you build with it is yours.** A plot is a
-   24-hour lease you can renew with coins, up to two days, then it returns
-   to the room. Your coins survive the tab closing, a restart, a redeploy
-   and losing your land, so you can always build again.
-   [Why leases, and what they cost](docs/adr/0005-a-city-economy.md).
-3. **Anyone can join in seconds.** No account and no install: type a name,
-   pick a tile. Drag the board to turn it, or play from the keyboard (WASD or
-   arrows to move, Enter to claim). On a phone, tap a tile, then confirm.
-   It works without JavaScript too.
-4. **The board is fair and legible.** One tile each, first claim wins, and
-   nobody can take a tile from someone who's still around. Every rule can be
-   read off the screen.
-
-## Where this came from
-
-- **r/place** (Reddit, 2017 and 2022) showed how a shared grid with a scarce
-  resource turns strangers into neighbours, rivals and collaborators. Skyline
-  keeps the shared grid but makes one tile per person the whole budget, so the
-  game is about *where* you go rather than how much you can paint.
-- **The Million Dollar Homepage** (Alex Tew, 2005) is the other half: a grid
-  where a claim is permanent and the page becomes a record of who was there.
-- **Clay Shirky, "Situated Software" (2004)** argues for software built for a
-  specific group at a specific time rather than for everyone. Skyline is built
-  for one room at the showcase, not for scale.
-- **Robin Sloan, "An app can be a home-cooked meal" (2020)** argues small,
-  personal software is worth making for its own sake.
+<!--
+YOUR ARGUMENT. Notes to work from:
+- Your claim (CLAUDE.md, "Goal"): the fun is between people. That means
+  reading each other's gestures, playing along, cutting in and being
+  surprised, with no puzzle and no right answer. Touching an object answers
+  at once. Nothing needs reading first. Work is credited and recoverable.
+- Possible sources (check them before you cite them):
+  - Johan Huizinga, "Homo Ludens" (1938): play as free, bounded and
+    unproductive. Supports "no puzzle, no goal".
+  - Roger Caillois, "Man, Play and Games" (1958): paidia (free improvised
+    play) versus ludus (rule-bound). The stage is deliberately paidia.
+  - Keith Johnstone, "Impro" (1979): accept and build on an offer.
+    The 30 s loop makes every gesture an offer that the next person answers.
+  - Bret Victor, "Inventing on Principle" (2012): immediate feedback.
+    Supports "it answers with movement at once".
+  - Counter-source: Jesse Schell, "The Art of Game Design" (2008), or
+    Raph Koster, "A Theory of Fun" (2004). Fun comes from learning
+    patterns and mastering goals, so a toy with no goal gets boring once
+    explored. Your answer: four toys, plinths that keep changing, and
+    other people as the source of novelty. And you haven't watched a group
+    play it yet.
+-->
 
 ## What's tested and what's judged
 
-Checked by `spec/` on every run, against the running app: a claim reaches two
-other open sessions within one second; it persists; the first claim wins;
-one person holds one plot; a lease ends on time and its land comes back
-free, even if the server was off (on a simulated clock); income is paid at
-the rate each building really had, minute by minute, as neighbours come and
-go, never more than once and never past 4 hours; coins never go negative;
-upgrades, moves, renewals and help follow their costs, limits and cooldowns;
-upgrading the database loses no claim; heights are level plus neighbours;
-names render as text; no one's identity cookie, coins or income is ever sent
-to anyone else.
+Checked by `spec/` on every run against the running app:
 
-Judged by people, not tests: whether rising beside strangers actually feels
-rewarding, whether the economy's numbers make choices feel worth making,
-whether a newcomer understands the rules without reading this page, and
-whether the board looks good at a glance.
+- **Real time:** a gesture from one visitor reaches another's stream within
+  1000 ms.
+- **Visitors:**
+  - two cookies are two visitors;
+  - the pid never leaves the server;
+  - names are escaped.
+- **Shared play:**
+  - grabbing takes a sphere from whoever held it, and the throw that lost it
+    is refused;
+  - Undo removes only your own gesture;
+  - the loop keeps 40 gestures, at most 12 from anyone.
+- **Nothing is lost:**
+  - versions never change, enforced by a database trigger;
+  - restore adds a version;
+  - replacing a loop or a plinth archives it, never deletes it.
+- **Input:** bad input is a `400` and a cross-site POST is a `403`.
+- **Every toy:**
+  - the same gestures always give the same performance, and only with
+    arithmetic every browser rounds alike;
+  - each rule that sets one object off another has its own test.
+- **Presence:** where others stand is live and never stored.
+
+Checked by `scripts/browser-check.ts` on a local copy:
+
+- two visitors see each other move and play;
+- the four toys play bit for bit the same in Safari's engine and in Chrome;
+- the page draws nothing while nothing moves;
+- the first screen holds at most 40 words;
+- every action works by keyboard and on a phone.
+
+Judged by people, not tests:
+
+- whether playing together is actually fun;
+- whether a stranger understands the toys without reading anything;
+- whether the sounds are pleasant;
+- whether the room looks good.
 
 ## What I left out
 
-- **Accounts.** They'd stop a stranger joining in seconds. A cookie tells
-  people apart well enough for one room.
-- **Taking tiles from people who are here.** It would make the game about
-  aggression rather than proximity. Land only comes back when a lease runs
-  out.
-- **Chat and live cursors.** The board is the conversation; chat would turn
-  it into a chat room with a grid attached. Helping a neighbour carries no
-  words, so it stays a gesture.
+- **Accounts.** A cookie tells a handful of visitors apart, and a stranger
+  can start playing at once.
+- **Goals, scores and puzzles.** They would give the stage a right answer.
+- **Chat.** Gestures are the conversation.
+- **Customisable avatars.** A floating head shows where someone looks,
+  which is all you need to read what they're about to do.
+- **A physics library.** It wouldn't play the same in every browser.
