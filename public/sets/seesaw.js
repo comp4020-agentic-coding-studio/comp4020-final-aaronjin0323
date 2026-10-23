@@ -58,6 +58,8 @@ const T = {
   nudge: 2.6,
   /** a nudge on the middle hops everything on the plank up (m/s) */
   hop: 1.8,
+  /** a stone on the floor the plank comes down on rolls out at this (m/s) */
+  squeeze: 0.6,
   /** the most a stone is moved to make room, per step (m) */
   ease: 0.03,
   /** in the loop's last GLIDE, everything settles: speed lost per second */
@@ -368,6 +370,19 @@ function tick(st, t, emit) {
     s.pos[1] += ny * push;
     s.pos[2] += dz * push;
     // against the wood's own speed there, as the plank turns
+    // a stone on the floor that the plank comes down on is squeezed out
+    // sideways, rolling, at once: never halted under it each step while
+    // it holds the plank creeping down for seconds
+    if (s.pos[1] - r < 0.01 && ny < 0.7) {
+      const hn = Math.sqrt(nx * nx + dz * dz);
+      if (hn > 1e-6) {
+        const along = (s.v[0] * nx + s.v[2] * dz) / hn;
+        if (along < T.squeeze) {
+          s.v[0] += ((T.squeeze - along) * nx) / hn;
+          s.v[2] += ((T.squeeze - along) * dz) / hn;
+        }
+      }
+    }
     const vn = (s.v[0] + wr * py) * nx + (s.v[1] - wr * px) * ny + s.v[2] * dz;
     if (vn >= 0) continue;
     const arm = px * ny - py * nx;
@@ -538,7 +553,7 @@ export default {
       { kind: "throw", object: "boulder", at: 13, from: [0.4, 1.2, -0.9], v: [2, 1.5, -1.5], by: "aaaaaa" },
       { kind: "nudge", object: "plank", at: 16.5, side: -1, by: "aaaaaa" },
     ],
-    hash: "121741770169060647",
-    events: 53,
+    hash: "568122622889203942",
+    events: 46,
   },
 };

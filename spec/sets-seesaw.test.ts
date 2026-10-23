@@ -188,6 +188,26 @@ describe("Tipping Point", { concurrent: false }, () => {
   });
 
   // Seen red with the plank's lean removed (an empty plank kept creeping).
+  it("a stone on the floor under a lowering plank rolls out, never holds it creeping for seconds", () => {
+    // seed 106 had the pebble halted under the low end each step while the
+    // plank crept 4 degrees over 7 s
+    let worst = 0;
+    for (let seed = 1; seed <= 200; seed++) {
+      const run = createRun({ set: "seesaw", gestures: mixOf("seesaw", seed, 8) });
+      let prev: number | null = null;
+      let slow = 0;
+      for (let k = 1; k * STEP < LOOP - 1.2; k++) {
+        const v = run.at(k * STEP).stage as unknown as { a: number; stones: Record<string, { on: boolean; pos: number[] }> };
+        const w = prev === null ? 0 : (Math.abs(v.a - prev) / STEP) * 2 * Math.PI;
+        prev = v.a;
+        const under = Object.values(v.stones).some((s) => !s.on && s.pos[1] < 0.45 && Math.abs(s.pos[0]) < PLANK.half && Math.abs(s.pos[2]) < PLANK.width);
+        slow = w > 1e-4 && w < 0.05 && under ? slow + 1 : 0;
+        worst = Math.max(worst, slow * STEP);
+      }
+    }
+    expect(worst).toBeLessThan(1);
+  });
+
   it("left alone, the plank comes back to rest on its stop", () => {
     // the small stone thrown off, then the plank nudged with nothing on it
     const p = perf([{ kind: "throw", object: "pebble", at: 1, from: [-1.3, 0.3, 0], v: [0, 0.5, 1.8], by: "aaaaaa" }, nudge(4, -1)]);
