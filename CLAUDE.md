@@ -111,6 +111,14 @@ Settled; change them here first, then in the code.
   the wrap than a thrown one does in flight) and the browser check's `wrap`
   section. (At 12 s with a hard reset, the spheres visibly snapped back,
   which read as the sculpture glitching.)
+- **A gesture made during the glide plays at the top of the next loop.**
+  Everything is easing home in the last `GLIDE`, so a throw made then
+  barely moved and only really played 30 s later: a button press that
+  seemed to do nothing. The page records such a gesture at moment 0
+  (`gestureMoment` in `public/stage.js`), so it plays as the loop comes
+  round, within 1.2 s. Held by `spec/stage.test.ts` and by the browser
+  check's seesaw section, which failed whenever its drop landed in the
+  glide (at 29.4 to 29.6 s, every full run).
 - **The objects set each other off.** A thrown sphere floats upward,
   bounces off the ceiling and other spheres; passing close to the ribbon
   it's caught and rides it. Plucking the ribbon sends a pulse round it that
