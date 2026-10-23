@@ -94,12 +94,13 @@ describe("the server log", { concurrent: false }, () => {
     const title = 'Moon "1"\nfake=line';
     const bad = await act(MIA, "/publish", { title, slot: 4 });
     expect(bad.status).toBe(400); // a newline isn't allowed in a title
-    const ok = await act(MIA, "/publish", { title: 'Moon "1" \u202e', slot: 4 });
+    // plinth 4 holds the Chime Tree starter (exhibit 7, migration 4): replace it
+    const ok = await act(MIA, "/publish", { title: 'Moon "1" \u202e', slot: 4, replace: true });
     expect(ok.status).toBe(200);
     const taken = await act(KAI, "/publish", { title: "Mine", slot: 1 });
     expect(taken.status).toBe(409);
     const [pub] = await lines("publish");
-    expect(pub).toBe(`publish who=${tag(MIA.pid)} title="Moon \\"1\\" \\u202e" exhibit=7 n=1 slot=4`);
+    expect(pub).toBe(`publish who=${tag(MIA.pid)} title="Moon \\"1\\" \\u202e" exhibit=10 n=1 slot=4 stored=7`);
     expect(out).not.toContain("\nfake=line");
     expect((await lines("publish.refused")).map((l) => l.split(" message=")[0])).toEqual([
       `publish.refused who=${tag(MIA.pid)} status=400 error=bad-request`,
@@ -109,11 +110,11 @@ describe("the server log", { concurrent: false }, () => {
 
   it("logs restore, store and display", async () => {
     expect((await act(KAI, "/exhibits/5/restore", { versionId: 5 })).status).toBe(200);
-    expect((await act(KAI, "/exhibits/7/store")).status).toBe(200);
-    expect((await act(KAI, "/exhibits/7/display", { slot: 5 })).status).toBe(200);
+    expect((await act(KAI, "/exhibits/10/store")).status).toBe(200);
+    expect((await act(KAI, "/exhibits/10/display", { slot: 4 })).status).toBe(200);
     expect((await lines("restore"))[0]).toBe(`restore who=${tag(KAI.pid)} exhibit=5 from=1 n=2`);
-    expect((await lines("store"))[0]).toBe(`store who=${tag(KAI.pid)} exhibit=7 slot=4`);
-    expect((await lines("display"))[0]).toBe(`display who=${tag(KAI.pid)} exhibit=7 slot=5`);
+    expect((await lines("store"))[0]).toBe(`store who=${tag(KAI.pid)} exhibit=10 slot=4`);
+    expect((await lines("display"))[0]).toBe(`display who=${tag(KAI.pid)} exhibit=10 slot=4`);
   });
 
   it("logs a join that archived the loop, an undo, and a start-over", async () => {

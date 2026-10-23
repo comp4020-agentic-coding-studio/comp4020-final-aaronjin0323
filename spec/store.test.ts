@@ -41,7 +41,26 @@ describe("migrations", () => {
       const happened = events(e.latest.parts, 0, LOOP).map((x) => x.kind);
       expect(happened.some((k) => ["catch", "ring", "fling", "knock", "hop"].includes(k)), `${e.latest.title}: ${happened}`).toBe(true);
     }
-    expect(s.slots.slice(3).every((x) => x.exhibit === null)).toBe(true);
+  });
+
+  it("seeds one starter per new set on plinths 4-6 (ADR 18), each playing and setting something off", () => {
+    const s = store.snapshot(T0);
+    const starters = s.slots.slice(3).map((x) => x.exhibit);
+    expect(starters.map((e) => e?.latest.parts.set)).toEqual(["chimes", "doors", "seesaw"]);
+    for (const e of starters) {
+      expect(e!.latest.publishedBy).toBeNull();
+      expect(checkPerformance(e!.latest.parts), e!.latest.title).toEqual({ ok: true });
+      expect(new Set(events(e!.latest.parts, 0, LOOP).map((x) => x.kind)).size, e!.latest.title).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("puts a new set's starter in the storeroom when its plinth is taken", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(db, MIGRATIONS.slice(0, 3));
+    db.exec(`INSERT INTO exhibits (slot, created_at) VALUES (5, '2026-11-03T00:00:00.000Z')`);
+    migrate(db);
+    const rows = db.prepare("SELECT e.slot, v.title FROM exhibits e JOIN versions v ON v.exhibit_id = e.id WHERE json_extract(v.parts, '$.set') = 'doors'").all();
+    expect(rows).toEqual([{ slot: null, title: "Wrong Door, Right Bounce" }]);
   });
 
   it("moves exhibits made with the old recipes to the storeroom, every version kept", () => {
@@ -59,7 +78,7 @@ describe("migrations", () => {
     migrate(db);
     migrate(db);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
-    expect(db.prepare("SELECT COUNT(*) AS c FROM versions").get()).toEqual({ c: 6 });
+    expect(db.prepare("SELECT COUNT(*) AS c FROM versions").get()).toEqual({ c: 9 });
   });
 
   it("archives a sculpture left on the old workbench, recoverably", () => {
@@ -286,6 +305,9 @@ describe("the stage's loop", () => {
 });
 
 describe("versions", () => {
+  // plinth 4 holds the Chime Tree starter (migration 4): free it
+  beforeEach(() => ok(store.storeAway(store.snapshot(T0).slots[3].exhibit!.id)));
+
   it("leaves the loop as a new exhibit, credits everyone in it, and keeps the loop", () => {
     ok(store.gesture(ANA, tap(), T0));
     ok(store.gesture(BO, pluck(), T0));
@@ -356,7 +378,7 @@ describe("slots", () => {
     const id = store.snapshot(T0).slots[1].exhibit!.id;
     expect(ok(store.storeAway(id)).slot).toBe(2);
     expect(store.storeAway(id)).toMatchObject({ ok: false, error: "slot-empty" });
-    ok(store.display(id, 6, false));
-    expect(store.snapshot(T0).slots[5].exhibit!.id).toBe(id);
+    ok(store.display(id, 2, false));
+    expect(store.snapshot(T0).slots[1].exhibit!.id).toBe(id);
   });
 });

@@ -245,6 +245,16 @@ const STAGE_STARTERS: { slot: number; title: string; parts: Performance }[] = [
 
 const sq = (s: string): string => `'${s.replace(/'/g, "''")}'`;
 
+// Migration 4's starters (ADR 18), one per new set, frozen here as the
+// JSON they were when the migration was written: src/starters/ is where
+// they were tuned, and a later edit there must not change what migration 4
+// meant.
+const SET_STARTERS: { slot: number; title: string; parts: string }[] = [
+  { slot: 4, title: "Wind Up, Wind Down", parts: "{\"set\":\"chimes\",\"gestures\":[{\"kind\":\"tap\",\"object\":\"so\",\"at\":0.5,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"mi\",\"at\":1,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"so\",\"at\":1.5,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"la\",\"at\":2,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"so\",\"at\":2.5,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"do\",\"at\":3.5,\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"striker\",\"at\":7,\"from\":[0.45,1.45,-0.2],\"v\":[0.9,0.4,2.6],\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"hido\",\"at\":17,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"la\",\"at\":17.5,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"so\",\"at\":18,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"mi\",\"at\":19,\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"do\",\"at\":20,\"by\":\"000000\"}]}" },
+  { slot: 5, title: "Wrong Door, Right Bounce", parts: "{\"set\":\"doors\",\"gestures\":[{\"kind\":\"throw\",\"object\":\"apricot\",\"at\":1,\"from\":[-0.55,0.1,0.85],\"v\":[2.016,2.605,-1.642],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"plum\",\"at\":3.5,\"from\":[0.286,0.1,0.682],\"v\":[-1.973,2.31,-1.693],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"lemon\",\"at\":6,\"from\":[0,0.1,1.15],\"v\":[-1.29,2.478,-2.257],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"apricot\",\"at\":8.5,\"from\":[1.497,0.1,-0.195],\"v\":[-2.599,3.197,-0.062],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"plum\",\"at\":11,\"from\":[-0.419,0.1,-0.27],\"v\":[2.6,2.136,0.043],\"by\":\"000000\"},{\"kind\":\"tap\",\"object\":\"tealdoor\",\"at\":14,\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"apricot\",\"at\":15,\"from\":[0.146,0.1,1.512],\"v\":[-1.23,2.873,-2.291],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"plum\",\"at\":17.5,\"from\":[1.891,0.1,-0.059],\"v\":[-2.424,2.1,-0.424],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"lemon\",\"at\":20,\"from\":[0.38,0.1,-0.662],\"v\":[0.933,2.1,0.916],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"apricot\",\"at\":22.5,\"from\":[-1.445,0.1,-0.016],\"v\":[2.586,3.152,-0.27],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"plum\",\"at\":25,\"from\":[1.446,0.1,0.288],\"v\":[-1.436,2.1,-1.196],\"by\":\"000000\"}]}" },
+  { slot: 6, title: "Pebble Ping-Pong", parts: "{\"set\":\"seesaw\",\"gestures\":[{\"kind\":\"throw\",\"object\":\"boulder\",\"at\":1,\"from\":[1.2,1.8,0],\"v\":[0,-0.5,0],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"boulder\",\"at\":5,\"from\":[-1.2,1.8,0],\"v\":[0,-0.5,0],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"stone\",\"at\":9,\"from\":[1.25,1.9,0],\"v\":[0,-2,0],\"by\":\"000000\"},{\"kind\":\"nudge\",\"object\":\"plank\",\"at\":12.5,\"side\":-1,\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"boulder\",\"at\":16,\"from\":[1.2,1.8,0],\"v\":[0,-0.5,0],\"by\":\"000000\"},{\"kind\":\"throw\",\"object\":\"boulder\",\"at\":20,\"from\":[-1.2,1.8,0],\"v\":[0,-0.5,0],\"by\":\"000000\"},{\"kind\":\"nudge\",\"object\":\"plank\",\"at\":24,\"side\":0,\"by\":\"000000\"}]}" },
+];
+
 // Numbered migrations; PRAGMA user_version records how many have run. A
 // committed migration is never edited: the volume outlives every deploy.
 export const MIGRATIONS: string[] = [
@@ -352,6 +362,16 @@ export const MIGRATIONS: string[] = [
     ),
     `INSERT INTO drafts (recipe, parts, created_at) VALUES ('stage', ${sq(JSON.stringify(emptyPerformance("orbit")))}, '2026-11-02T00:00:00.000Z');`,
   ].join("\n"),
+  // 4. More sets (docs/adr/0018): one starter per new set, by the museum,
+  // on its plinth if that is free, otherwise in the storeroom; never
+  // displacing anyone's exhibit.
+  SET_STARTERS.map(
+    (s) =>
+      `INSERT INTO exhibits (slot, created_at)
+         VALUES ((SELECT CASE WHEN EXISTS (SELECT 1 FROM exhibits WHERE slot = ${s.slot}) THEN NULL ELSE ${s.slot} END), '2026-11-03T00:00:00.000Z');
+       INSERT INTO versions (exhibit_id, n, title, recipe, parts, published_at)
+         VALUES (last_insert_rowid(), 1, ${sq(s.title)}, 'stage', ${sq(s.parts)}, '2026-11-03T00:00:00.000Z');`,
+  ).join("\n"),
 ];
 
 export function migrate(db: DatabaseSync, migrations = MIGRATIONS): void {
