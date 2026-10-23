@@ -1,130 +1,118 @@
 # Process overview
 
-How Skyline got from the brief to a live 12×12 city where where you build
-depends on who else is there. Every link below is a commit in this repo; the
-tags `crit-8` and `crit-9` mark what each crit saw.
+<!--
+DRAFT by Claude, to be rewritten in your own words (the course asks you
+to write PROCESS.md yourself). Every hash below exists in this repo and
+was checked by `pnpm check:evidence`. Links to commits after 01c16c4 only
+resolve on GitHub once those commits are pushed. Target: 900-1100 words.
+The claims about who decided what are yours to confirm or correct. Delete
+this comment when it's yours.
+-->
+
+How Impossible Museum got from the brief to a shared 3D gallery where
+visitors play impossible toys together. It started as a different project.
+Every link is a commit in this repo; the tags `crit-8` to `crit-10` mark
+what each crit saw.
+
+## Skyline was the exploration
+
+Crits 8 to 10 built Skyline, a 12×12 board where your building rose with
+its neighbours. It worked and its checks were green, but in a five-minute
+session it was boring: you claimed a tile and waited. Nothing answered you
+in the moment you acted. I decided to rebuild from a new idea in the same
+repo rather than keep polishing, and recorded why in ADR 11
+[`b1d3558`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/b1d3558). What carried over was the harness, not the game: the
+decide-then-code rhythm, the live-URL guard, the browser check and the
+lessons in `CLAUDE.md`. Nothing Skyline-specific came with it.
 
 ## The harness comes before the code
 
-Every change starts as a decision in `CLAUDE.md`, and only then becomes
-code. The agent reads the brief and lists what's undecided, I answer, and the
-answers become rules
-([`2cc77e4`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2cc77e4)).
-From the economy on, that settled into a three-commit rhythm I hold the agent
-to: **decide** (CLAUDE.md and an ADR, no code), **server** (the rule and its
-tests), **page** (what a player sees). Parks went
-[`905aed1`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/905aed1),
-[`d00aec1`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/d00aec1),
-[`4666820`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/4666820),
-and landmark tiers, return the favour, zoning and districts follow the same
-shape. The decide commit is the one I review hardest, because a rule is cheap
-to change there and expensive once a server test and a page depend on it.
+Every change starts as a decision in `CLAUDE.md`, and an ADR when there
+were real alternatives. Only then does it become code, as separate commits:
+**decide**, then **server** with its tests, then **page**. The museum began
+that way [`8347666`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/8347666), and so did each turn after it: the word budget
+[`a855543`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/a855543), the Loop Stage [`68b1d80`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/68b1d80), first person [`7880ccd`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7880ccd)
+and more toys [`2b3d468`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2b3d468). The decide commit is the one I review
+hardest. A rule is cheap to change there and expensive once a test and a
+page depend on it.
 
-The rules have to stay true, too. By crit 10 `CLAUDE.md` carried three
-weeks of superseded rules patched over by "this section wins", so the agent
-was reading instructions the code no longer followed. I had it pruned to the
-game as it stands, each dropped rule replaced by a pointer to the ADR that
-ended it
-([`f9ab9d2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/f9ab9d2)).
+The museum changed shape four times in two weeks, and the ADRs are how
+that stayed legible:
+
+- **Sculptures built with sliders** (ADR 12) became a word budget, because
+  the room should carry the meaning ([`ddc4711`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/ddc4711), ADR 13).
+- **Orbit** [`4f149fd`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/4f149fd) was a reversible prototype. It showed that one
+  person's change moving another's piece was the fun part.
+- **The Loop Stage** [`68b1d80`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/68b1d80) made exhibits short performances that
+  anyone adds to.
+- **First person** [`7880ccd`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7880ccd) let visitors see each other reach.
+
+Each ADR names what it supersedes, so `CLAUDE.md` holds only the museum
+as it stands.
 
 ## The stack, and the trade-offs
 
-- **Bare `node:http`, TypeScript run directly by Node 24.** No build step, so
-  the repo is exactly what runs. The cost is hand-written cookies and body
-  parsing.
-- **SQLite through `node:sqlite`, numbered migrations.** One file on the one
-  volume, no native compile. Every schema change runs once at boot against
-  whatever production holds, so the crit-8 board survived dormancy, then
-  leases
-  ([`1df0f39`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/1df0f39),
-  [`c7f470c`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/c7f470c)).
-  A committed migration is never edited.
-- **Server-sent events, not WebSockets.** Only the server pushes; players
-  act through `POST`s. WebSockets would earn their keep only for streaming
-  input like live cursors
-  ([`2f50d78`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2f50d78)).
-  Every event carries the whole board, so a page that reconnects after
-  Fly drops an idle stream is right from its first message
-  ([`9f51eb8`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/9f51eb8)).
-- **CSS 3D over real buttons, not Three.js.** A form of tile buttons had to
-  exist for keyboard and no-JS play; with CSS 3D that form *is* the scene
-  ([`7301095`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/7301095)).
-  The cost is no lighting, and a memory bill I paid later.
-
-Who may see and change what is in
-[ADR 2](docs/adr/0002-who-may-see-and-change-what.md), and the log format
-that tells two strangers apart without printing their cookie is in
-[`4194287`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/4194287).
+- **Bare `node:http`, TypeScript run directly by Node 24, `node:sqlite`.**
+  No build step and no framework, kept from Skyline. Migrations are
+  numbered and never edited, because the volume outlives every deploy.
+  New starter exhibits arrive as migration 4, which puts a starter in the
+  storeroom rather than displace anyone's exhibit [`f5ab2e4`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/f5ab2e4).
+- **Server-sent events with the whole state in every event.** A
+  reconnecting page is right from its first message. Held by a test: a
+  gesture on one stream reaches another within 1000 ms [`a1fd569`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/a1fd569).
+- **Three.js from a pinned CDN, with the DOM still holding every control.**
+  It gives real light and a room, and keyboard and screen-reader play still
+  work through ordinary buttons.
+- **Our own physics, not a library.** Every screen computes the same
+  performance from the gestures and the clock, so nothing but a gesture is
+  ever written.
 
 ## When something went wrong, the fix went into the harness
 
-**A rule that failed until it was code.** Spec runs against the live URL
-left test players on the real board. I added a `CLAUDE.md` rule
-([`05a68ca`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/05a68ca));
-the next day they were back. So the check now refuses any `fly.dev` host
-before sending a request, held by its own test
-([`2fb2b6f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2fb2b6f)).
-A rule the agent can read is weaker than one it can't get past.
+**Determinism that held in Node but not in Safari.** The rules used
+`Math.sin`, which each JavaScript engine may round differently. A sphere
+came out a last digit apart 4 s in, enough for two screens to disagree
+about a collision. The rules now use only arithmetic IEEE 754 rounds the
+same everywhere [`647bcea`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/647bcea). The browser check plays them in macOS's
+JavaScriptCore and in Node and compares every position bit for bit
+[`c194738`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/c194738). I saw that check fail against the old rules first.
 
-**A test that only checked what it happened to see.** "No `pid` in the logs"
-passed while a `pid` was printed on page loads, because the test never
-loaded a page. It now drives every path that logs and requires each line to
-exist before checking for absence
-([`4194287`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/4194287));
-the general lesson went into `CLAUDE.md`
-([`df8f06d`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/df8f06d)).
+**A rule that failed until it was code** (from Skyline, still true). Spec
+runs against the live URL left test players on the real board. A
+`CLAUDE.md` rule [`05a68ca`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/05a68ca) didn't stop it, so the checks now refuse
+any `fly.dev` host before sending a request [`2fb2b6f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2fb2b6f). A rule the
+agent can read is weaker than one it can't get past.
 
-**Bugs only a browser could find.** A third of empty tiles were
-unclickable, live since crit 8, because a flat tile lay in the board's own
-3D plane
-([`3157737`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/3157737)).
-Clipped roofs cost 1.1 GB of compositor memory and the GPU dropped
-buildings
-([`1f7ccda`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/1f7ccda)).
-Both are now measured by `scripts/browser-check.ts` and named in
-`CLAUDE.md`.
+**A loop that read as a glitch.** At 12 s with a hard reset, every sphere
+snapped home, and people read it as the sculpture breaking. The loop is
+now 30 s and glides home [`01c16c4`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/01c16c4). A flaky browser check later
+showed the cost of that glide: a gesture made in its last 1.2 s barely
+moved. The flake failed every full run at the same loop moment, 29.4 to
+29.6 s. Reading its logs instead of retrying found the cause, and such a
+gesture now plays at the top of the next loop [`68b1be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/68b1be6).
 
-**A flaky test diagnosed, not retried.** `realtime.test.ts` failed about one
-run in two. Reading the server logs of three failures showed it racing
-`claim.test.ts` for the same first free tile, so the files now take tiles
-from different rows, and the rule is written down
-([`5f1ac1f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/5f1ac1f)).
+**A laptop that ran hot.** The idle page drew about 70 frames a second.
+Measuring first showed the cost was the GPU and the drawing, not the
+physics. A lighter frame [`c7d1f91`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/c7d1f91) and drawing only when something
+moves [`ce2c43b`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/ce2c43b) took the idle page to zero frames. The same pass found
+that playback re-applied gestures, doubling pulses and flashes
+[`1bb6f42`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/1bb6f42).
 
-**A test that asserted the bug.** On a throttled connection a claim the
-server made, whose reply was lost, said "nothing claimed", and the browser
-check *expected* that text. I changed what the check holds rather than
-keeping it green, and both new checks fail against the old page
-([`52532db`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/52532db)).
-
-## Checking it the way the marker will
-
-Green checks say the rules hold, not that a stranger can play. So I test the
-deployed app the way it is marked. Driving the live site in Chrome, with
-every write blocked, found that tapping a building left an earlier plot
-picked, so Enter built where the player wasn't looking
-([`51be412`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/51be412)).
-Acting out the next-day persistence check found the worst one: after a 24 h
-lease ended, a returning player saw an empty board and no money, though
-every coin had persisted. The wallet was hidden without land, so the data
-looked lost. It now says the lease ended and how much is waiting, with
-Collect
-([`2c3b59d`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2c3b59d)).
-The same session found the page sent 285 KB uncompressed; it is now about
-51 KB
-([`df0c1f1`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/df0c1f1)).
+**Bugs only a browser could find.** Two visitors who arrive together stand
+on one spot, and each one's view was 86% the inside of the other's head
+[`b3f92cd`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/b3f92cd). In Safari's engine the doors' glow drew as coloured
+speckle, on a real GPU too [`b1f573d`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/b1f573d). Both are now measured by
+`scripts/browser-check.ts`, and each check was seen failing before the fix.
 
 ## Directing, grounding and correcting
 
 I direct the agent through the decide commits and through what I find by
-playing: tabbing through 144 tiles to reach the board became page-wide
-WASD, with a spec test that failed first
-([`2ae2576`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/2ae2576)),
-and finding the game one decision deep led to showing whom each claim
-lifts
-([`616eaa6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/616eaa6)).
-I ground it in the running app, not its reports: a fix counts once its test
-has been seen to fail with the fix removed. For larger reviews I run
-subagents in parallel on separate concerns, with one allowed to edit files,
-and I check their claims against the diff and the commits before acting.
-The agent drafts most of the code and much of the prose; the decisions in
-`CLAUDE.md` and the ADRs, and which findings become rules, are mine.
+playing. For larger work I fan out subagents in separate worktrees, each
+with a written brief and its own files. Adding three toys at once went that
+way: one agent built the plug-in seam, three built a toy each, and I merged
+and wrote the one migration. I ground their reports in the running app, not
+in what they say. A fix counts once its test has been seen to fail with the
+fix removed, and a UI change counts once I've read the screenshots at both
+sizes. The agent drafts most of the code and much of the prose; the
+decisions in `CLAUDE.md` and the ADRs, and which findings become rules, are
+mine.
