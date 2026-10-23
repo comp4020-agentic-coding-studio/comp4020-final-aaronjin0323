@@ -329,6 +329,11 @@ Read `docs/adr/0017-first-person.md`.
   where they reach; a sphere they hold floats in front of them. In the
   panel they're still a dot in the "here now" strip and a chip on every
   credit.
+  A head closer than 0.9 m to your eye fades out (and is gone under
+  0.45 m), so someone standing where you stand, such as two visitors who
+  just arrived at the same spot, never fills your view. Held by the browser
+  check (`crowd`): two visitors on the start spot each see the stage, not
+  the other's head.
 - **Live text is a system font stack or an SIL OFL face** with its licence
   beside it. AA contrast is measured on the rendered pixels over the sky,
   by the `contrast` section of `scripts/browser-check.ts` (seen failing with
