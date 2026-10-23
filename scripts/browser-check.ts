@@ -1184,6 +1184,77 @@ async function doorsSection(browser: Browser): Promise<void> {
   await b.context().close();
 }
 
+// Chime Tree (ADR 18): picked from the set row, a striker swing by button
+// strikes chimes and sets off a cascade, seen on a second screen within a
+// second; then a chime rung by the reticle, walking up as a visitor would.
+async function chimesSection(browser: Browser): Promise<void> {
+  console.log("\n— Chime Tree: a swing that rings the ring —");
+  const motion: Opts = { ...DESKTOP, reducedMotion: "no-preference" };
+  const a = await visitor(browser, motion);
+  const b = await visitor(browser, motion);
+  await freshStage(a);
+  await b.click('[data-go="bench"]');
+  await a.click('[data-sets] [data-set="chimes"]');
+  if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
+  const onB = await b.waitForFunction(() => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === "chimes", null, { timeout: 3000 }).then(() => true, () => false);
+  check(onB, "chimes: chosen from the set row, a second visitor's stage shows the chime tree");
+  const objs = Object.keys((await stageOf(a))?.spheres ?? {});
+  check(["striker", "do", "re", "mi", "so", "la", "hido"].every((id) => objs.includes(id)), "chimes: a striker and six chimes on the stage", objs.join(", "));
+  await a.screenshot({ path: ".shots/chimes-still.png" });
+  // by button: the striker swung round; B sees it move within a second,
+  // and both screens hear it strike and the chimes knock each other
+  const from = await sphereAt(b, "striker");
+  const t0 = Date.now();
+  await a.click('[data-gesture="throw:striker"]');
+  const seen = await movedFrom(b, "striker", from, 1500, t0);
+  check(seen >= 0 && seen <= 1000, "chimes: a striker swing by button shows on a second visitor's screen within a second", `${seen} ms`);
+  check(await heard(b, "strike", 3000), "chimes: the striker strikes a chime on the second visitor's screen");
+  await b.waitForTimeout(250);
+  await b.screenshot({ path: ".shots/chimes-swing-b.png" });
+  // a cascade: chimes ring on after the strike, knocked by each other
+  const kinds = await b.evaluate(async () => {
+    const c = document.querySelector("[data-scene]") as any;
+    const seenKinds = new Set<string>();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2500) {
+      for (const k of (c.dataset.heard ?? "").split(" ")) if (k) seenKinds.add(k);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return [...seenKinds];
+  });
+  check(kinds.includes("chime"), "chimes: and the chimes ring on (a cascade)", kinds.join(" "));
+  // by reticle: walk up to the stage, look at the G chime, click it
+  await a.evaluate(() => (document.querySelector("[data-scene]") as any).lookAtPoint(0, 1.62, 0));
+  await walk(a, 700);
+  await a.waitForTimeout(2500);
+  await a.evaluate(() => {
+    const c = document.querySelector("[data-scene]") as any;
+    const s = c.probe().stage.spheres.so.pos;
+    c.lookAtPoint(s[0], s[1] + 0.66, s[2]);
+  });
+  await a.waitForTimeout(200);
+  const on = (await fpOf(a)).reticle.id;
+  check(on === "so", "chimes: the reticle rests on the G chime", String(on));
+  const box = (await a.locator("[data-scene]").boundingBox())!;
+  await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await b.evaluate(() => ((document.querySelector("[data-scene]") as HTMLElement).dataset.heard = ""));
+  const t1 = Date.now();
+  await a.mouse.down();
+  await a.waitForTimeout(60);
+  await a.mouse.up();
+  const rang = await b
+    .waitForFunction(() => /\bchime\b/.test(document.querySelector("[data-scene]")!.getAttribute("data-heard") ?? ""), null, { timeout: 1500 })
+    .then(() => Date.now() - t1, () => -1);
+  check(rang >= 0 && rang <= 1000, "chimes: a chime rung by the reticle sounds on a second visitor's screen within a second", `${rang} ms`);
+  const ticks = await a.locator("[data-loop-ticks] .tick").count();
+  check(ticks === 2, "chimes: both gestures are in the loop", `${ticks} ticks`);
+  await a.screenshot({ path: ".shots/chimes-a.png" });
+  await b.screenshot({ path: ".shots/chimes-b.png" });
+  await freshStage(a, "orbit");
+  await a.context().close();
+  await b.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1208,6 +1279,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   engines,
   setrow: setRow,
   doors: doorsSection,
+  chimes: chimesSection,
   gpu,
   idle,
 };
