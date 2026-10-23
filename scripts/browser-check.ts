@@ -1241,6 +1241,47 @@ async function seesaw(browser: Browser): Promise<void> {
   await b.context().close();
 }
 
+// Two visitors who arrive together stand on the same start spot: each sees
+// the stage, never the inside of the other's head (CLAUDE.md, "Visitors
+// are there with you"). Measured as the share of dark pixels in the middle
+// of the view; the room there is ivory, glass and sky.
+async function crowd(browser: Browser): Promise<void> {
+  console.log("\n— crowd: someone on your spot never fills your view —");
+  const a = await visitor(browser);
+  await freshStage(a);
+  const dark = async (p: Page): Promise<number> => {
+    await p.waitForTimeout(400);
+    const png = await p.screenshot({ clip: { x: 520, y: 250, width: 400, height: 300 } });
+    return p.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext("2d")!;
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < 180) n++;
+      return n / (d.length / 4);
+    }, png.toString("base64"));
+  };
+  const alone = await dark(a);
+  const b = await visitor(browser);
+  await a.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().fp.others.length >= 1, null, { timeout: 3000 }).catch(() => null);
+  const together = await dark(a);
+  await a.screenshot({ path: ".shots/crowd-a.png" });
+  check(together < alone + 0.05, "with B on A's spot, A still sees the stage", `dark ${Math.round(alone * 100)}% alone, ${Math.round(together * 100)}% with B`);
+  // and B, a step ahead towards the stage, is a head A can see again
+  await walk(b, 700);
+  await a.waitForTimeout(600);
+  const seen = (await fpOf(a)).others as { visible: boolean }[];
+  check(seen.length === 1 && seen[0].visible, "a step apart, B's head shows again");
+  await b.context().close();
+  await a.context().close();
+}
+
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
@@ -1251,6 +1292,7 @@ const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   noWebGL,
   realtime,
   presence,
+  crowd,
   chain,
   wrap,
   publishing,
