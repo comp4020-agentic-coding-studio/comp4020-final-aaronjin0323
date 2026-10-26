@@ -172,9 +172,9 @@ async function keyboard(browser: Browser) {
   await page.focus("[data-scene]");
   const before = (await probe(page)).bell;
   for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowLeft");
-  await page.waitForTimeout(200);
-  const after = (await probe(page)).bell;
-  check(Math.abs(after.x - before.x) + Math.abs(after.y - before.y) > 2, "arrow keys turn the room");
+  // until the next frames show it, however busy the machine (not a fixed wait)
+  const turned = await page.waitForFunction((b) => { const q = (document.querySelector("[data-scene]") as any).probe().bell; return Math.abs(q.x - b.x) + Math.abs(q.y - b.y) > 2; }, before, { timeout: 3000 }).then(() => true, () => false);
+  check(turned, "arrow keys turn the room");
   await page.context().close();
 }
 
@@ -308,8 +308,9 @@ async function hall(browser: Browser) {
   // leaving takes your robot away
   const tb = (await hallProbe(b)).you;
   await b.context().close();
-  const gone = await a.waitForFunction((t) => !(document.querySelector("[data-hall]") as any).probe().robots.some((r: any) => r.tag === t), tb, { timeout: 3000 }).then(() => true, () => false);
-  check(gone, "a visitor's robot leaves with them");
+  // a ghost for the grace (ADR 27); the lifecycle section sees it leave after
+  const ghost = await a.waitForFunction((t) => (document.querySelector("[data-hall]") as any).probe().robots.find((r: any) => r.tag === t)?.away === true, tb, { timeout: 3000 }).then(() => true, () => false);
+  check(ghost, "a visitor who leaves leaves a ghost, at once");
   await a.context().close();
 }
 
@@ -320,7 +321,7 @@ async function dragToward(page: Page, target: number[], ok: (p: number[]) => boo
   await settled(page);
   const pr = await hallProbe(page);
   const me = meIn(pr);
-  const from = { pos: me.pos, vel: [0, 0], t: 0, seq: 0 };
+  const from = { pos: me.pos, vel: [0, 0], t: 0, seq: 0, home: me.home }; // its zone: others' are solid to it
   const dx = target[0] - me.pos[0], dy = target[1] - me.pos[1];
   const len = Math.hypot(dx, dy);
   for (let power = 0.25; power <= 1.0001; power += 0.05) {
@@ -350,20 +351,20 @@ async function collect(browser: Browser) {
   console.log("\n— collecting: touch to carry, your zone to keep, a display that stays (ADR 25) —");
   const a = await hallVisitor(browser);
   let pr = await hallProbe(a);
-  check(pr.artifacts.length === H.MAX_AVAILABLE, "six artifacts on the floor", String(pr.artifacts.length));
+  check(pr.artifacts.length >= H.MAX_AVAILABLE, "at least six artifacts on the floor (returned cargo can add more)", String(pr.artifacts.length));
   check(new Set(pr.artifacts.map((x: any) => x.kind)).size >= 1 && pr.artifacts.every((x: any) => H.KINDS.includes(x.kind)), "each one of the three kinds");
   check(/Carrying nothing\. Room for 3\./.test((await a.textContent("[data-cargo]")) ?? ""), "the panel says the cargo is empty, with room for three");
   const before = { ...pr.kept.collection };
   // launch over the nearest artifact, in hops if it's far
   const me0 = meIn(pr).pos;
-  const target = [...pr.artifacts].sort((p: any, q: any) => Math.hypot(p.pos[0] - me0[0], p.pos[1] - me0[1]) - Math.hypot(q.pos[0] - me0[0], q.pos[1] - me0[1]))[0];
+  const target = [...pr.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((p: any, q: any) => Math.hypot(p.pos[0] - me0[0], p.pos[1] - me0[1]) - Math.hypot(q.pos[0] - me0[0], q.pos[1] - me0[1]))[0];
   check(await reach(a, target.pos, (p) => H.touches(p, target.pos)), "launches can reach an artifact");
   const carried = await a.waitForFunction((id) => (document.querySelector("[data-hall]") as any).probe().carrying.some((c: any) => c.id === id), target.id, { timeout: 5000 }).then(() => true, () => false);
   check(carried, "touching it carries it, as the server says");
   pr = await hallProbe(a);
   check(pr.kept.collection[target.kind] === before[target.kind], "and it isn't kept yet: the collection hasn't changed");
   check(/Carrying [123] of 3/.test((await a.textContent("[data-cargo]")) ?? ""), "the panel says what's carried and the room left", (await a.textContent("[data-cargo]")) ?? "");
-  check(pr.artifacts.length === H.MAX_AVAILABLE && !pr.artifacts.some((x: any) => x.id === target.id), "the floor is topped up to six, without it");
+  check(pr.artifacts.length >= H.MAX_AVAILABLE && !pr.artifacts.some((x: any) => x.id === target.id), "the floor is topped up, without it");
   await settled(a);
   await a.screenshot({ path: ".shots/hall-carrying.png" });
   // home
@@ -415,7 +416,7 @@ async function together(browser: Browser) {
   // a collects one and shows it
   const pa = await hallProbe(a);
   const mineA = meIn(pa).pos;
-  const near = (pr: any, from: number[]) => [...pr.artifacts].filter((x: any) => x.readyAt <= Date.now() + 5e9).sort((p: any, q: any) => Math.hypot(p.pos[0] - from[0], p.pos[1] - from[1]) - Math.hypot(q.pos[0] - from[0], q.pos[1] - from[1]))[0];
+  const near = (pr: any, from: number[]) => [...pr.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((p: any, q: any) => Math.hypot(p.pos[0] - from[0], p.pos[1] - from[1]) - Math.hypot(q.pos[0] - from[0], q.pos[1] - from[1]))[0];
   const ta1 = near(pa, mineA);
   await reach(a, ta1.pos, (p) => H.touches(p, ta1.pos));
   await a.waitForFunction(() => (document.querySelector("[data-hall]") as any).probe().carrying.length > 0, null, { timeout: 5000 });
@@ -471,6 +472,77 @@ async function together(browser: Browser) {
   await b.context().close();
 }
 
+async function lifecycle(browser: Browser) {
+  console.log("\n— leaving and coming back: a grace, then cargo back to the hall; who you are (ADR 27) —");
+  const ctxA = await browser.newContext({ reducedMotion: "reduce", ...DESKTOP });
+  const a = await ctxA.newPage();
+  a.on("pageerror", (e) => check(false, "no script errors in the hall", e.message));
+  const openHall = async (page: Page) => {
+    await page.goto(`${APP}/hall/?v=${Date.now()}`);
+    await page.waitForFunction(() => { const p = (document.querySelector("[data-hall]") as any).probe?.(); return document.body.dataset.conn === "live" && p?.robots.some((r: any) => r.tag === p.you); }, null, { timeout: 10_000 });
+  };
+  await openHall(a);
+  const b = await hallVisitor(browser);
+  const ta = (await hallProbe(a)).you;
+  // a collects one, keeps it, shows it; then carries another
+  const nearest = async (page: Page) => {
+    const pr = await hallProbe(page);
+    const me = meIn(pr).pos;
+    return [...pr.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((p: any, q: any) => Math.hypot(p.pos[0] - me[0], p.pos[1] - me[1]) - Math.hypot(q.pos[0] - me[0], q.pos[1] - me[1]))[0];
+  };
+  const carryOne = async (page: Page) => {
+    const t = await nearest(page);
+    await reach(page, t.pos, (p) => H.touches(p, t.pos));
+    await page.waitForFunction((id) => (document.querySelector("[data-hall]") as any).probe().carrying.some((c: any) => c.id === id), t.id, { timeout: 6000 });
+    return t;
+  };
+  const first = await carryOne(a);
+  const home = (await hallProbe(a)).home.pos;
+  await reach(a, home, (p) => H.atHome(p, home));
+  await a.waitForFunction((k) => (document.querySelector("[data-hall]") as any).probe().kept.collection[k] > 0, first.kind, { timeout: 6000 });
+  await a.selectOption("#slot-1", first.kind);
+  await a.waitForFunction((k) => (document.querySelector("[data-hall]") as any).probe().kept.display[0] === k, first.kind, { timeout: 3000 });
+  const carried = await carryOne(a);
+
+  // 1. away briefly: a ghost, then the same robot with the same cargo
+  await a.goto("about:blank");
+  const ghost = await b.waitForFunction((t) => (document.querySelector("[data-hall]") as any).probe().robots.find((r: any) => r.tag === t)?.away === true, ta, { timeout: 3000 }).then(() => true, () => false);
+  check(ghost, "a player who leaves is a ghost to everyone else, for the grace");
+  await b.screenshot({ path: ".shots/hall-ghost.png" });
+  await openHall(a);
+  check(/Welcome back/.test((await a.textContent("[data-news]")) ?? ""), "back within the grace: told so", (await a.textContent("[data-news]")) ?? "");
+  check((await hallProbe(a)).carrying.some((c: any) => c.id === carried.id), "still carrying what it carried");
+  check(await b.waitForFunction((t) => (document.querySelector("[data-hall]") as any).probe().robots.find((r: any) => r.tag === t)?.away === false, ta, { timeout: 3000 }).then(() => true, () => false), "and solid again to everyone else");
+
+  // 2. away too long: the cargo goes back to the hall, and they're told
+  await a.goto("about:blank");
+  const back = await b.waitForFunction((id) => (document.querySelector("[data-hall]") as any).probe().artifacts.some((x: any) => x.id === id), carried.id, { timeout: H.GRACE_MS + 4000 }).then(() => true, () => false);
+  check(back, "away past the grace: what it carried is back on the floor for anyone");
+  check(!(await hallProbe(b)).robots.some((r: any) => r.tag === ta), "and the robot has left the hall");
+  await openHall(a);
+  check(/away too long: the 1 artifact you carried went back/.test((await a.textContent("[data-news]")) ?? ""), "they're told when they return", (await a.textContent("[data-news]")) ?? "");
+  check((await hallProbe(a)).carrying.length === 0 && (await hallProbe(a)).kept.collection[first.kind] > 0, "with nothing carried, and their collection still theirs");
+
+  // 3. the directory, and who you are
+  await b.click("[data-directory-refresh]");
+  const listed = await b.waitForFunction((t) => !!document.querySelector(`[data-directory] [data-look="${t}"]`), ta, { timeout: 3000 }).then(() => true, () => false);
+  check(listed, "their display is in everyone's directory");
+  const state = await ctxA.storageState();
+  await ctxA.close();
+  const sameCtx = await browser.newContext({ ...DESKTOP, storageState: state });
+  const same = await sameCtx.newPage();
+  await openHall(same);
+  check((await hallProbe(same)).you === ta && (await hallProbe(same)).kept.display[0] === first.kind, "the same browser's cookie, in a new session: the same visitor, collection and display");
+  await sameCtx.close();
+  const freshCtx = await browser.newContext(DESKTOP);
+  const fresh = await freshCtx.newPage();
+  await openHall(fresh);
+  check((await hallProbe(fresh)).you !== ta, "cleared data or another device: a new visitor");
+  check(/can't be claimed back/.test((await fresh.textContent("[data-cards]")) ?? ""), "and the page says plainly that the old collection can't be claimed");
+  await freshCtx.close();
+  await b.context().close();
+}
+
 async function noWebGL(browser: Browser) {
   console.log("\n— without WebGL —");
   const page = await visitor(browser, DESKTOP, () => {
@@ -496,7 +568,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, collect, together, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, collect, together, lifecycle, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
