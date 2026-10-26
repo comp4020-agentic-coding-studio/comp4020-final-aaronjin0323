@@ -123,6 +123,10 @@ Settled; change them here first, then in the code. The design is
 - **Presence is open streams.** The state lists who's here.
 - **Disconnected means watch-only.** The page keeps playing, disables
   every control and says so, until the first state of a new connection.
+- **A refused stream is opened again by the page.** A browser gives up for
+  good on an answer that isn't a stream (Fly's proxy answers 502 during a
+  deploy or a cold start), so the page opens a new one: 1 s, doubling, at
+  most 15 s apart. Held by the browser check's `reconnect`.
 
 ### The page
 
@@ -178,7 +182,7 @@ a person as their tag.
 - Look at the page at 1440x900 and 390x844 before calling a page change
   done: `node scripts/browser-check.ts` against the local app plays it as
   two visitors (drag a ball, ring the bell, pointers, aim, keyboard, Leave it,
-  no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
+  a refused stream, no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
   isn't in CI, which has no Chrome.
 
 ## Out of scope
