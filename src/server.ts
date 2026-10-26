@@ -72,9 +72,10 @@ function hallBroadcast() {
   const now = Date.now();
   const robots = hall.view((pid) => store.who(pid) ?? { tag: "", name: "Someone", colour: 0 }, now);
   const artifacts = hall.floor();
+  const news = hall.news(); // what just happened, sent once, to everyone
   for (const c of hallClients) {
     const mine = { home: hall.homeOf(c.pid), collection: store.collection(c.pid), display: store.displayOf(c.pid) };
-    send(c.res, "hall", { robots, artifacts, mine, you: store.who(c.pid), serverTime: now });
+    send(c.res, "hall", { robots, artifacts, news, mine, you: store.who(c.pid), serverTime: now });
   }
 }
 // the server sees every touch: each tick walks moving robots along their steps

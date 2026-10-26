@@ -364,6 +364,15 @@ describe("collecting in the hall", { concurrent: false }, () => {
     expect(r.status).toBe(200);
     expect(r.json.display).toEqual(slots);
     expect(await s.next("hall", (x) => x.mine.display[0] === target.kind)).not.toBeNull();
+    // someone else, in their own session, sees that real display, read-only
+    const b = visitor();
+    const sb = await b.stream("/hall/events");
+    const ta = (await a.me()).tag;
+    const seen = await sb.next("hall", (x) => x.robots.find((r: any) => r.tag === ta)?.display?.[0]?.kind === target.kind);
+    expect(seen).not.toBeNull();
+    expect(seen!.data.robots.find((r: any) => r.tag === ta).display[0].count).toBe(kept!.data.mine.collection[target.kind]);
+    expect(JSON.stringify(seen!.data.robots)).not.toMatch(/"collection"/);
+    sb.close();
     s.close();
   });
   test("a page can't claim a pickup, a count, someone's ID, or a kind it doesn't own", async () => {
