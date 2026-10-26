@@ -116,3 +116,26 @@ describe("arranging the display", () => {
     expect(new Set(kinds).size).toBe(kinds.length);
   });
 });
+
+// ADR 26: knocks in words, and the feedback for a dropped artifact and a protected robot
+describe("together", () => {
+  const name = (tag: string) => ({ aaaa: "Rosy Wren", bbbb: "Copper Ibis", cccc: "Lunar Newt" })[tag] ?? "Someone";
+  const knock = (by: string, from: string, kind = "cloud") => ({ kind: "knock", by, from, artifact: { id: "x", kind }, pos: [1, 1], at: 0 });
+  test("a knock in words: to you, by you, or between others", () => {
+    expect(ui.newsWords(knock("aaaa", "bbbb"), "bbbb", name)).toBe("Rosy Wren knocked a rain cloud loose from you. You're shielded for a moment.");
+    expect(ui.newsWords(knock("bbbb", "aaaa", "fish"), "bbbb", name)).toBe("You knocked a luminous fish loose from Rosy Wren. It's free to take in a moment.");
+    expect(ui.newsWords(knock("aaaa", "cccc", "door"), "bbbb", name)).toBe("Rosy Wren knocked a door onto stars loose from Lunar Newt.");
+  });
+  test("a dropped artifact is ready by degrees, from 0 when dropped to 1 when anyone may take it", () => {
+    expect(ui.readiness(2000, 1000)).toBe(0);
+    expect(ui.readiness(2000, 1500)).toBeCloseTo(0.5, 9);
+    expect(ui.readiness(2000, 2000)).toBe(1);
+    expect(ui.readiness(0, 5000)).toBe(1);
+  });
+  test("a shield fades from full to nothing, with no numbers", () => {
+    expect(ui.shield(4000, 1000)).toBe(1);
+    expect(ui.shield(4000, 2500)).toBeCloseTo(0.5, 9);
+    expect(ui.shield(4000, 4000)).toBe(0);
+    expect(ui.shield(0, 9000)).toBe(0);
+  });
+});

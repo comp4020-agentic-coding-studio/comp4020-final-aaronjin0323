@@ -1,7 +1,7 @@
 // The hall page's decisions, as small pure functions (ADR 24). No DOM and
 // no fetch, so spec/hall-ui.test.ts holds them without a browser. The
 // movement numbers themselves are all in hall.js.
-import { CARRY_MAX, HALL, KINDS, MIN_PULL, PULL_MAX } from "./hall.js";
+import { CARRY_MAX, DROP_PROTECT_MS, HALL, KINDS, MIN_PULL, PICKUP_DELAY_MS, PULL_MAX } from "./hall.js";
 
 /**
  * A launch from a pull: away from where the pointer is, harder the further
@@ -90,3 +90,17 @@ export function placeIn(display, slot, kind) {
   out[slot] = kind;
   return out;
 }
+
+// ---- together (ADR 26)
+
+/** A knock in words, as `you` see it. `name(tag)` names a player. */
+export function newsWords(n, you, name) {
+  const what = `a ${KIND_NAMES[n.artifact.kind]}`;
+  if (n.from === you) return `${name(n.by)} knocked ${what} loose from you. You're shielded for a moment.`;
+  if (n.by === you) return `You knocked ${what} loose from ${name(n.from)}. It's free to take in a moment.`;
+  return `${name(n.by)} knocked ${what} loose from ${name(n.from)}.`;
+}
+/** How ready a dropped artifact is at `now`: 0 just dropped, 1 free to take. */
+export const readiness = (readyAt, now) => (now >= readyAt ? 1 : Math.max(0, 1 - (readyAt - now) / PICKUP_DELAY_MS));
+/** How strong a robot's shield is at `now`: 1 just knocked, fading to 0. */
+export const shield = (protectedUntil, now) => (now >= protectedUntil ? 0 : Math.min(1, (protectedUntil - now) / DROP_PROTECT_MS));
