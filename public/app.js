@@ -1,7 +1,7 @@
 // The page: the stream, the panel, and the requests. The 3D room is
 // scene.js, loaded after, so the panel works without WebGL; the rules are
 // fountain.js and the page's own decisions ui.js.
-import { BALLS, LOOP, gestureMoment, shown, simulate } from "./fountain.js";
+import { BALLS, LOOP, createRun, gestureMoment, shown, simulate } from "./fountain.js";
 import * as sound from "./sound.js";
 import {
   BALL_COLOURS,
@@ -10,6 +10,7 @@ import {
   VISITOR_COLOURS,
   buttonFlick,
   canPlay,
+  chainStory,
   clock,
   clockOffset,
   connection,
@@ -132,6 +133,7 @@ function render() {
   renderStage();
   renderPlinth();
   renderDrawers();
+  tellStory();
   scene?.update(state, you);
   setConn(conn);
 }
@@ -207,6 +209,22 @@ function tickHead() {
   if (head) head.style.left = `${(now() / LOOP) * 100}%`;
   requestAnimationFrame(tickHead);
 }
+
+// the latest chain in words, a few times a second (ADR 23)
+let storyRun = null, storyKey = "";
+function tellStory() {
+  if (!state || !you) return;
+  const key = JSON.stringify(state.stage.gestures.map((g) => [g.seq, g.by, g.at]));
+  if (key !== storyKey) {
+    storyKey = key;
+    storyRun = createRun(state.stage.gestures);
+  }
+  const names = new Map([...state.here, ...state.stage.credits].map((w) => [w.tag, w.name]));
+  const text = chainStory(storyRun.at(now()).events, now(), (tag) => names.get(tag) ?? "Someone", you.tag);
+  const p = $("[data-story]");
+  if (p.textContent !== text) p.textContent = text;
+}
+setInterval(tellStory, 250);
 
 // ---- leave it
 let publishFor = null; // a slot chosen from a plinth card
@@ -377,7 +395,7 @@ try {
     coverRight: () => (phone.matches || document.body.classList.contains("no-gl") ? 0 : $("#panel").getBoundingClientRect().width + 16),
     onGesture: gesture,
     onSelect: (sel) => choose(sel),
-    onPointer: (p) => canPlay(conn) && post("/pointer", { p }),
+    onPointer: (p, aim) => canPlay(conn) && post("/pointer", aim ? { p, aim } : { p }),
   });
   scene.onEvent((e) => sound.play(e));
   scene.select(selected);

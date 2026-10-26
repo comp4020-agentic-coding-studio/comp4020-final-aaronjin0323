@@ -1,17 +1,20 @@
 // The room in 3D (ADR 21): the fountain on its pedestal in the middle, six
-// plinths round it each playing its exhibit, and everyone's pointers.
+// plinths round it each playing its exhibit, and everyone's pointers and
+// aim; a ball trails in the colour of whoever last moved it (ADR 23).
 // Loaded with a dynamic import, so without WebGL or the CDN the page still
 // works from the panel. The scene says what was touched (onGesture,
 // onSelect); the page sends it.
 import * as THREE from "three";
 import { BALLS, BALL_R, BELL, DOME, createRun, gestureMoment, shown } from "./fountain.js";
-import { BALL_COLOURS, VISITOR_COLOURS, flickFrom } from "./ui.js";
+import { BALL_COLOURS, FLICK_GAIN, VISITOR_COLOURS, flickFrom } from "./ui.js";
 
 const STAGE_Y = 0.7; // the pedestal's top: the fountain's floor
 const PLINTH_R = 5.4; // how far the plinths stand from the middle
 const PLINTH_H = 1.1;
 const MINI = 0.34; // an exhibit is the fountain at this scale
 const ROOM_R = 9;
+/** How long a ball shows who moved it, in seconds (CLAUDE.md, ADR 23). */
+const TRAIL_S = 1.5;
 
 /** Where plinth `slot` (1-6) stands, on the floor. */
 export function plinthAt(slot) {
@@ -105,6 +108,9 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
   let stageKey = "";
   let seen = 0;
   let you = null;
+  // every visitor's colour by tag, from whoever the state names
+  const colours = new Map();
+  const colourOf = (tag) => colours.get(tag) ?? "#ffffff";
 
   // ---- others' pointers: an orb in their colour, with their name
   const others = new Map();
@@ -123,7 +129,17 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
         name.position.y = 0.22;
         orb.add(name);
         scene.add(orb);
-        o = { orb, ring, name, nameText: p.name, to: new THREE.Vector3() };
+        // their aim: a shaft and a head from the ball they hold, and a halo round it
+        const aimMat = new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.9, depthTest: false });
+        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1, 8), aimMat);
+        const head = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.2, 12), aimMat);
+        const halo = new THREE.Mesh(new THREE.RingGeometry(BALL_R * 1.35, BALL_R * 1.7, 32), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthTest: false }));
+        const aimGroup = new THREE.Group();
+        aimGroup.add(shaft, head, halo);
+        for (const m of [shaft, head, halo]) m.renderOrder = 12;
+        aimGroup.visible = false;
+        scene.add(aimGroup);
+        o = { orb, ring, name, nameText: p.name, to: new THREE.Vector3(), aim: null, aimGroup, shaft, head, halo };
         orb.position.fromArray(p.p);
         others.set(p.tag, o);
       }
@@ -135,9 +151,11 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
         o.nameText = p.name;
       }
       o.to.fromArray(p.p);
+      o.aim = p.aim && stage.balls.has(p.aim.ball) ? p.aim : null;
     }
     for (const [tag, o] of others) if (!live.has(tag)) {
       scene.remove(o.orb);
+      scene.remove(o.aimGroup);
       others.delete(tag);
     }
   }
@@ -200,6 +218,7 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
   scene.add(aim);
 
   let press = null; // { id, kind, x, y, moved, ball?, plane?, from? }
+  let aiming = null; // { ball, v } while you drag a ball
   const pointersDown = new Map();
   let pinch = null;
   let playable = false;
@@ -249,6 +268,7 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
         press.to = p;
         aim.geometry.setFromPoints([press.from, p]);
         aim.visible = true;
+        aiming = { ball: press.id, v: flickFrom(press.from.toArray(), p.toArray()) };
       }
     } else if (press.moved > 4) {
       // turn round the target
@@ -266,6 +286,10 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
     const p = press;
     press = null;
     aim.visible = false;
+    if (aiming) {
+      aiming = null;
+      sendPointer(lastPoint);
+    }
     delete canvas.dataset.dragging;
     if (!p || e.type === "pointercancel") return;
     if (p.plane && playable) {
@@ -300,16 +324,18 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
     }
   });
 
-  // your pointer, for everyone else: at most 10 a second, and null when it leaves
-  let lastSent = 0, pending = undefined, sendTimer = null;
+  // your pointer, for everyone else: at most 10 a second, and null when it
+  // leaves; while you drag a ball, the flick you'd make if you let go
+  let lastSent = 0, pending = undefined, sendTimer = null, lastPoint = null;
   function sendPointer(p) {
+    lastPoint = p;
     pending = p ? [clamp(p.x, -8, 8), clamp(p.y, 0, 4), clamp(p.z, -8, 8)] : null;
     if (sendTimer) return;
     const wait = Math.max(0, 100 - (performance.now() - lastSent));
     sendTimer = setTimeout(() => {
       sendTimer = null;
       lastSent = performance.now();
-      onPointer(pending);
+      onPointer(pending, pending && aiming ? aiming : null);
     }, wait);
   }
 
@@ -328,6 +354,8 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
   // ---- each frame
   function update(state, me) {
     you = me;
+    const named = [...state.here, ...state.stage.credits, ...state.slots.flatMap((s) => s.exhibit?.latest.credits ?? [])];
+    for (const w of named) colours.set(w.tag, VISITOR_COLOURS[w.colour % VISITOR_COLOURS.length]);
     const key = JSON.stringify(state.stage.gestures.map((g) => [g.seq, g.by, g.at]));
     if (key !== stageKey) {
       stageKey = key;
@@ -365,11 +393,12 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
       const e = st.events[seen];
       onEvent(e);
       if (e.kind === "ring") flash(BELL.pos, "#ffe7a6", 1.2);
-      else if (e.kind === "knock") flash(e.pos, "#ffffff", 0.6);
+      else if (e.kind === "knock") flash(e.pos, e.by ? colourOf(e.by) : "#ffffff", 0.6);
       else if (e.kind === "flick") flash(e.pos, BALL_COLOURS[e.ball], 0.5);
     }
-    stage.show(shown(st, t), t);
-    for (const p of plinths) if (p.run) p.mini.show(shown(p.run.at(t), t), t);
+    const look = { camera, colourOf, trails: !reducedMotion() };
+    stage.show(shown(st, t), t, look);
+    for (const p of plinths) if (p.run) p.mini.show(shown(p.run.at(t), t), t, look);
     for (const f of flashes.slice()) {
       f.t += dt;
       f.m.scale.setScalar(f.size * (0.3 + f.t * 1.6));
@@ -382,11 +411,31 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
     for (const o of others.values()) {
       o.orb.position.lerp(o.to, 1 - Math.exp(-dt * 12));
       o.ring.lookAt(camera.position);
+      showAim(o);
     }
     for (const p of plinths) p.body.material.emissive.set(selected.kind === "slot" && selected.slot === p.slot ? "#3a2a10" : "#000000");
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
+  // another visitor's aim: from the ball, as far and the way they've dragged
+  const UP = new THREE.Vector3(0, 1, 0);
+  function showAim(o) {
+    o.aimGroup.visible = !!o.aim;
+    if (!o.aim) return;
+    const from = stage.balls.get(o.aim.ball).getWorldPosition(new THREE.Vector3());
+    const d = new THREE.Vector3().fromArray(o.aim.v).divideScalar(FLICK_GAIN);
+    const len = Math.max(d.length(), 0.05);
+    const dir = d.lengthSq() > 1e-6 ? d.clone().normalize() : new THREE.Vector3(0, -1, 0);
+    const q = new THREE.Quaternion().setFromUnitVectors(UP, dir);
+    o.shaft.scale.set(1, len, 1);
+    o.shaft.position.copy(from).addScaledVector(dir, len / 2);
+    o.shaft.quaternion.copy(q);
+    o.head.position.copy(from).addScaledVector(dir, len + 0.1);
+    o.head.quaternion.copy(q);
+    o.halo.position.copy(from);
+    o.halo.lookAt(camera.position);
+  }
+
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     const cover = coverRight();
@@ -415,6 +464,8 @@ export async function createScene(canvas, { onGesture, onSelect, onPointer, loop
       bell: onScreen(stage.bell),
       plinths: plinths.map((p) => ({ slot: p.slot, ...onScreen(p.body), showing: p.mini.group.visible })),
       others: [...others.keys()],
+      aims: [...others].filter(([, o]) => o.aim).map(([tag, o]) => ({ tag, ball: o.aim.ball })),
+      movers: stage.movers(),
       gestures: stageKey,
     };
   };
@@ -474,22 +525,76 @@ function makeFountain(scale) {
   bellGroup.add(bell);
 
   const balls = new Map();
+  const marks = new Map(); // per ball: who moved it, a trail and a ring in their colour
+  const TRAIL_N = 24; // frames of positions kept; every other one is a dot
+  const dotGeo = new THREE.SphereGeometry(BALL_R * 0.6, 12, 8);
   for (const id of BALLS) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 32, 20), new THREE.MeshStandardMaterial({ color: BALL_COLOURS[id], roughness: 0.25, metalness: 0.15 }));
     m.castShadow = true;
     m.userData = { kind: "ball", id };
     inner.add(m);
     balls.set(id, m);
+    const points = new Float32Array(TRAIL_N * 3);
+    // the trail: a comet of dots behind the ball, smaller and fainter the older
+    const trail = new THREE.Group();
+    for (let i = 0; i < TRAIL_N / 2; i++) trail.add(new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })));
+    trail.visible = false;
+    inner.add(trail);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(BALL_R * 1.2, BALL_R * 1.45, 32), new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+    ring.visible = false;
+    inner.add(ring);
+    marks.set(id, { trail, points, ring, key: "", by: null });
   }
 
-  function show(v, t) {
-    for (const id of BALLS) balls.get(id).position.fromArray(v.balls[id].pos);
+  // a ball shows who last moved it for TRAIL_S: a ring round it, a glow, and
+  // (with motion allowed) a trail behind it, all in their colour
+  function mark(id, ball, b, t, look) {
+    const k = marks.get(id);
+    const since = t - b.byAt;
+    const on = !!b.by && since >= 0 && since < TRAIL_S;
+    k.by = on ? b.by : null;
+    k.ring.visible = on;
+    k.trail.visible = on && look.trails;
+    ball.material.emissive.set(on ? look.colourOf(b.by) : "#000000");
+    ball.material.emissiveIntensity = on ? 0.55 * (1 - since / TRAIL_S) : 0;
+    if (!on) return;
+    const fade = 1 - since / TRAIL_S;
+    const colour = look.colourOf(b.by);
+    k.ring.material.color.set(colour);
+    k.ring.material.opacity = 0.95 * fade;
+    k.ring.position.copy(ball.position);
+    k.ring.lookAt(look.camera.position);
+    const key = `${b.by}:${b.byAt}`;
+    const p = k.points;
+    if (key !== k.key) {
+      k.key = key;
+      for (let i = 0; i < TRAIL_N; i++) ball.position.toArray(p, i * 3);
+    } else {
+      p.copyWithin(0, 3);
+      ball.position.toArray(p, (TRAIL_N - 1) * 3);
+    }
+    k.trail.children.forEach((dot, i) => {
+      const age = (i + 1) / k.trail.children.length; // 1 is newest
+      dot.position.fromArray(p, i * 2 * 3);
+      dot.scale.setScalar(0.35 + 0.65 * age);
+      dot.material.color.set(colour);
+      dot.material.opacity = 0.7 * fade * age;
+    });
+  }
+
+  function show(v, t, look) {
+    for (const id of BALLS) {
+      balls.get(id).position.fromArray(v.balls[id].pos);
+      if (look) mark(id, balls.get(id), v.balls[id], t, look);
+    }
     // the bell swings on its thread for a moment after it rings
     const since = v.bell.rungAt < 0 ? 99 : t - v.bell.rungAt;
     const swing = since >= 0 && since < 2 ? Math.sin(since * 18) * Math.exp(-since * 2.5) * 0.18 : 0;
     bellGroup.rotation.z = swing;
   }
-  return { group, balls, bell, show };
+  /** Each ball's mover while it shows, for the browser check. */
+  const movers = () => Object.fromEntries([...marks].filter(([, k]) => k.by).map(([id, k]) => [id, k.by]));
+  return { group, balls, bell, show, movers };
 }
 
 function skyTexture() {

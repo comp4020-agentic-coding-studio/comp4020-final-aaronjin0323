@@ -30,7 +30,7 @@ export function connectionMessage(c) {
 const clampV = (x) => Math.max(-(V_MAX - 0.01), Math.min(V_MAX - 0.01, x));
 const r3 = (x) => Math.round(x * 1000) / 1000;
 /** How hard a drag throws: m/s per metre dragged. */
-const FLICK_GAIN = 5;
+export const FLICK_GAIN = 5;
 /** A press with no drag hops the ball down a little; it falls back up. */
 const HOP = [0, -2.2, 0];
 
