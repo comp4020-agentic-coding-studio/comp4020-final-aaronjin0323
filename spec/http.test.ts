@@ -21,10 +21,10 @@ function visitor() {
     const r = await req(path, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
     return { status: r.status, json: (await r.json().catch(() => ({}))) as any };
   };
-  /** Opens /events and collects every event as it arrives. */
-  async function stream() {
+  /** Opens a stream (/events unless told) and collects every event as it arrives. */
+  async function stream(path = "/events") {
     const ctl = new AbortController();
-    const r = await req("/events", { signal: ctl.signal });
+    const r = await req(path, { signal: ctl.signal });
     const events: { type: string; data: any; at: number }[] = [];
     const reader = r.body!.getReader();
     const dec = new TextDecoder();
@@ -217,5 +217,74 @@ describe("exhibits", { concurrent: false }, () => {
     expect(list.loops[0].gestures.some((g: any) => g.at === 5.5)).toBe(true);
     expect((await a.post("/stage/bring-back", { archivedId: list.loops[0].id })).status).toBe(200);
     expect((await a.req("/archive?before=x")).status).toBe(400);
+  });
+});
+
+// ADR 24: the server says where every robot is; a page sends only launches
+describe("the hall", { concurrent: false }, () => {
+  const robotOf = (d: any, tag: string) => d.robots.find((r: any) => r.tag === tag);
+  const speed = (r: any) => Math.sqrt(r.vel[0] * r.vel[0] + r.vel[1] * r.vel[1]);
+  test("/hall/ is the hall page", async () => {
+    const r = await fetch(BASE + "/hall/");
+    expect(r.status).toBe(200);
+    expect(await r.text()).toMatch(/<canvas[^>]*data-hall/);
+  });
+  test("a visitor has a robot while their hall is open, at rest, the server's clock on every snapshot", async () => {
+    const a = visitor();
+    const ta = (await a.me()).tag;
+    const s = await a.stream("/hall/events");
+    const got = await s.next("hall", (d) => !!robotOf(d, ta));
+    expect(got).not.toBeNull();
+    expect(got!.data.you.tag).toBe(ta);
+    expect(Number.isInteger(got!.data.serverTime)).toBe(true);
+    const r = robotOf(got!.data, ta);
+    expect(r).toMatchObject({ vel: [0, 0], name: expect.any(String), colour: expect.any(Number) });
+    expect(Number.isInteger(r.t)).toBe(true);
+    expect(JSON.stringify(got!.data)).not.toMatch(/pid/);
+    s.close();
+  });
+  test("a launch moves your robot, capped, and reaches another visitor within a second", async () => {
+    const a = visitor(), b = visitor();
+    const ta = (await a.me()).tag;
+    const sb = await b.stream("/hall/events");
+    const sa = await a.stream("/hall/events");
+    await sa.next("hall", (d) => !!robotOf(d, ta));
+    const sent = Date.now();
+    const r = await a.post("/hall/launch", { dir: [3, 4], power: 1, seq: 5 });
+    expect(r.status).toBe(200);
+    expect(r.json.robot.seq).toBe(5);
+    expect(speed(r.json.robot)).toBeCloseTo(8, 6);
+    const seen = await sb.next("hall", (d) => robotOf(d, ta)?.seq === 5);
+    expect(seen).not.toBeNull();
+    expect(seen!.at - sent).toBeLessThan(1000);
+    // ten more launches: never faster than one
+    for (let i = 6; i < 16; i++) await a.post("/hall/launch", { dir: [1, 0], power: 1, seq: i });
+    const last = await sb.next("hall", (d) => robotOf(d, ta)?.seq === 15);
+    expect(speed(robotOf(last!.data, ta))).toBeLessThanOrEqual(8 + 1e-9);
+    sa.close();
+    sb.close();
+  });
+  test("a page can't say where its robot is, or launch it too hard", async () => {
+    const a = visitor();
+    const s = await a.stream("/hall/events");
+    await s.next("hall", () => true);
+    for (const bad of [{ dir: [1, 0], power: 0.5, seq: 1, pos: [1, 1] }, { dir: [1, 0], power: 2, seq: 1 }, { pos: [3, 3] }, { dir: [0, 0], power: 1, seq: 1 }]) {
+      const r = await a.post("/hall/launch", bad);
+      expect(r.status).toBe(400);
+      expect(r.json.error).toBeTruthy();
+    }
+    expect((await a.post("/hall/launch", { dir: [1, 0], power: 0.5, seq: 1 }, "https://evil.example")).status).toBe(403);
+    s.close();
+  });
+  test("no hall open, no robot to launch; leaving takes your robot away", async () => {
+    const a = visitor(), b = visitor();
+    const ta = (await a.me()).tag;
+    expect((await a.post("/hall/launch", { dir: [1, 0], power: 0.5, seq: 1 })).status).toBe(409);
+    const sb = await b.stream("/hall/events");
+    const sa = await a.stream("/hall/events");
+    expect(await sb.next("hall", (d) => !!robotOf(d, ta))).not.toBeNull();
+    sa.close();
+    expect(await sb.next("hall", (d) => !robotOf(d, ta), 2000)).not.toBeNull();
+    sb.close();
   });
 });

@@ -10,6 +10,7 @@ import { openStore } from "./db.ts";
 import { checkGesture } from "../public/fountain.js";
 import { log } from "./log.ts";
 import { renderListing } from "./html.ts";
+import { createHall } from "./hall.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PRODUCTION = process.env.NODE_ENV === "production";
@@ -62,8 +63,17 @@ function pointersSoon() {
     for (const c of clients) send(c.res, "pointers", list);
   }, POINTER_EVERY_MS);
 }
+// ---- the hall's streams: robots' snapshots, on every change (ADR 24)
+const hall = createHall();
+const hallClients = new Set<Client>();
+function hallBroadcast() {
+  const now = Date.now();
+  const robots = hall.view((pid) => store.who(pid) ?? { tag: "", name: "Someone", colour: 0 }, now);
+  for (const c of hallClients) send(c.res, "hall", { robots, you: store.who(c.pid), serverTime: now });
+}
+
 setInterval(() => {
-  for (const c of clients) c.res.write(": beat\n\n");
+  for (const c of [...clients, ...hallClients]) c.res.write(": beat\n\n");
 }, HEARTBEAT_MS).unref();
 
 // ---- requests
@@ -158,6 +168,27 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(page());
     }
+    if (path === "/hall/") {
+      visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(readFileSync(join(PUBLIC, "hall.html"), "utf8"));
+    }
+    if (path === "/hall/events") {
+      const v = visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      const c: Client = { res, pid: v.pid, tag: v.tag };
+      hallClients.add(c);
+      hall.join(v.pid, Date.now());
+      log("hall-open", { tag: v.tag, open: hallClients.size });
+      hallBroadcast();
+      req.on("close", () => {
+        hallClients.delete(c);
+        hall.leave(v.pid);
+        log("hall-close", { tag: v.tag, open: hallClients.size });
+        hallBroadcast();
+      });
+      return;
+    }
     if (path === "/readme/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(readme());
@@ -225,6 +256,15 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     pointersSoon();
     return json(res, 200, { ok: true });
   }
+  if (path === "/hall/launch") {
+    const r = hall.launch(v.pid, body, now);
+    if (!r.ok) {
+      log("refused", { event: "launch", tag: v.tag, error: r.error });
+      return refuse(res, r);
+    }
+    json(res, 200, { robot: { ...store.who(v.pid), ...r.robot } });
+    return hallBroadcast();
+  }
   if (path === "/me") return done(store.rename(v.pid, body.name), "rename", { name: body.name });
   if (path === "/stage/gesture") return done(store.addGesture(v.pid, body.gesture, now), "gesture", { kind: (body.gesture as any)?.kind });
   if (path === "/stage/undo") return done(store.undo(v.pid), "undo");
@@ -251,7 +291,7 @@ const server = createServer((req, res) => {
 server.listen(PORT, "0.0.0.0", () => log("listening", { port: PORT, db: DB_PATH }));
 
 process.on("SIGTERM", () => {
-  for (const c of clients) c.res.end();
+  for (const c of [...clients, ...hallClients]) c.res.end();
   server.close();
   server.closeAllConnections();
   store.close();
