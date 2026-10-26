@@ -318,37 +318,41 @@ describe("collecting in the hall", { concurrent: false }, () => {
     expect(d.mine).toEqual({ home: me.home, collection: { fish: 0, cloud: 0, door: 0 }, display: [null, null, null, null] });
     s.close();
   });
-  test("launch into an artifact and it's carried; launch home and it's yours, counted once", async () => {
+  /** Where your robot is now, from the latest snapshot on the shared clock. */
+  const nowOf = (s: any) => {
+    const e = s.events.filter((x: any) => x.type === "hall").at(-1);
+    return H.advance(mineOf(e.data), Date.now() + (e.data.serverTime - e.at));
+  };
+  const stopped = async (s: any) => {
+    for (let i = 0; i < 100 && (nowOf(s).vel[0] !== 0 || nowOf(s).vel[1] !== 0); i++) await new Promise((r) => setTimeout(r, 100));
+  };
+  /** As a player would: one launch if it reaches, else full-power hops towards it. */
+  async function reach(a: any, s: any, target: number[], ok: (p: number[]) => boolean, seq: number) {
+    for (let hop = 0; hop < 6; hop++, seq++) {
+      await stopped(s);
+      const me = nowOf(s);
+      const l = aimAt(me, target, ok);
+      const go = l ?? { dir: [target[0] - me.pos[0], target[1] - me.pos[1]], power: 1 };
+      expect((await a.post("/hall/launch", { dir: go.dir, power: go.power, seq })).status).toBe(200);
+      if (l) return seq;
+    }
+    throw new Error("couldn't reach it in six launches");
+  }
+  test("launch into an artifact and it's carried; launch home and it's yours, counted once", { timeout: 60_000 }, async () => {
     const a = visitor();
     const s = await a.stream("/hall/events");
-    let d = (await s.next("hall", (x) => !!mineOf(x)))!.data;
-    let me = mineOf(d);
-    // the first artifact some launch from home passes over
-    let target: any = null, l: any = null;
-    for (const x of d.artifacts) {
-      l = aimAt(me, x.pos, (p) => H.touches(p, x.pos));
-      if (l) {
-        target = x;
-        break;
-      }
-    }
-    expect(target).not.toBeNull();
-    expect((await a.post("/hall/launch", { ...l, seq: 1 })).status).toBe(200);
+    const d = (await s.next("hall", (x) => !!mineOf(x)))!.data;
+    const me = mineOf(d);
+    const target = [...d.artifacts].sort((p, q) => Math.hypot(p.pos[0] - me.pos[0], p.pos[1] - me.pos[1]) - Math.hypot(q.pos[0] - me.pos[0], q.pos[1] - me.pos[1]))[0];
+    const seq = await reach(a, s, target.pos, (p) => H.touches(p, target.pos), 1);
     const got = await s.next("hall", (x) => mineOf(x)?.carrying.some((c: any) => c.id === target.id), 5000);
     expect(got).not.toBeNull();
     expect(got!.data.artifacts.some((x: any) => x.id === target.id)).toBe(false);
     expect(got!.data.artifacts.length).toBe(H.MAX_AVAILABLE); // topped up
     expect(got!.data.mine.collection[target.kind]).toBe(0); // carried isn't kept yet
-    // wait for it to stop, then home
-    await new Promise((r) => setTimeout(r, 3500));
-    d = s.events.filter((e) => e.type === "hall").at(-1)!.data;
-    const offset = d.serverTime - s.events.at(-1)!.at;
-    me = H.advance(mineOf(d), Date.now() + offset);
-    expect(me.vel).toEqual([0, 0]);
-    const home = H.HOMES[mineOf(d).home];
-    const back = aimAt(me, home, (p) => H.atHome(p, home));
-    expect(back).not.toBeNull();
-    expect((await a.post("/hall/launch", { ...back, seq: 2 })).status).toBe(200);
+    // then home
+    const home = H.HOMES[me.home];
+    await reach(a, s, home, (p) => H.atHome(p, home), seq + 1);
     const kept = await s.next("hall", (x) => x.mine.collection[target.kind] >= 1 && mineOf(x).carrying.length === 0, 5000);
     expect(kept).not.toBeNull();
     const n = Object.values(kept!.data.mine.collection as Record<string, number>).reduce((p, q) => p + q, 0);

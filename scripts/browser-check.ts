@@ -12,6 +12,8 @@
 import { mkdirSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
+// @ts-ignore -- plain JS module shared with the page
+import * as H from "../public/hall.js";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
 refuseProduction(APP);
@@ -311,6 +313,84 @@ async function hall(browser: Browser) {
   await a.context().close();
 }
 
+/** Drags your robot to launch so its path passes `ok`: the pull worked
+ * out by the same rule the server runs. False if no launch from here does. */
+async function dragToward(page: Page, target: number[], ok: (p: number[]) => boolean): Promise<boolean> {
+  await settled(page);
+  const pr = await hallProbe(page);
+  const me = meIn(pr);
+  const from = { pos: me.pos, vel: [0, 0], t: 0, seq: 0 };
+  const dx = target[0] - me.pos[0], dy = target[1] - me.pos[1];
+  const len = Math.hypot(dx, dy);
+  for (let power = 0.25; power <= 1.0001; power += 0.05) {
+    const p = Math.min(1, power);
+    if (!(H.path(from, { dir: [dx / len, dy / len], power: p, seq: 0 }) as number[][]).some(ok)) continue;
+    // the pull: back from the robot, PULL_MAX * power metres
+    const pull = p * H.PULL_MAX;
+    await page.mouse.move(me.x, me.y);
+    await page.mouse.down();
+    await page.mouse.move(me.x - (dx / len) * pull * pr.metre, me.y - (dy / len) * pull * pr.metre, { steps: 6 });
+    await page.mouse.up();
+    return true;
+  }
+  return false;
+}
+/** As a player would: launches straight there if one launch can, else hops
+ * towards it at full power and tries again, up to six launches. */
+async function reach(page: Page, target: number[], ok: (p: number[]) => boolean): Promise<boolean> {
+  for (let hop = 0; hop < 6; hop++) {
+    if (await dragToward(page, target, ok)) return true;
+    await dragToward(page, target, () => true);
+  }
+  return false;
+}
+
+async function collect(browser: Browser) {
+  console.log("\n— collecting: touch to carry, your zone to keep, a display that stays (ADR 25) —");
+  const a = await hallVisitor(browser);
+  let pr = await hallProbe(a);
+  check(pr.artifacts.length === H.MAX_AVAILABLE, "six artifacts on the floor", String(pr.artifacts.length));
+  check(new Set(pr.artifacts.map((x: any) => x.kind)).size >= 1 && pr.artifacts.every((x: any) => H.KINDS.includes(x.kind)), "each one of the three kinds");
+  check(/Carrying nothing\. Room for 3\./.test((await a.textContent("[data-cargo]")) ?? ""), "the panel says the cargo is empty, with room for three");
+  const before = { ...pr.kept.collection };
+  // launch over the nearest artifact, in hops if it's far
+  const me0 = meIn(pr).pos;
+  const target = [...pr.artifacts].sort((p: any, q: any) => Math.hypot(p.pos[0] - me0[0], p.pos[1] - me0[1]) - Math.hypot(q.pos[0] - me0[0], q.pos[1] - me0[1]))[0];
+  check(await reach(a, target.pos, (p) => H.touches(p, target.pos)), "launches can reach an artifact");
+  const carried = await a.waitForFunction((id) => (document.querySelector("[data-hall]") as any).probe().carrying.some((c: any) => c.id === id), target.id, { timeout: 5000 }).then(() => true, () => false);
+  check(carried, "touching it carries it, as the server says");
+  pr = await hallProbe(a);
+  check(pr.kept.collection[target.kind] === before[target.kind], "and it isn't kept yet: the collection hasn't changed");
+  check(/Carrying [123] of 3/.test((await a.textContent("[data-cargo]")) ?? ""), "the panel says what's carried and the room left", (await a.textContent("[data-cargo]")) ?? "");
+  check(pr.artifacts.length === H.MAX_AVAILABLE && !pr.artifacts.some((x: any) => x.id === target.id), "the floor is topped up to six, without it");
+  await settled(a);
+  await a.screenshot({ path: ".shots/hall-carrying.png" });
+  // home
+  const home = pr.home.pos;
+  check(await reach(a, home, (p) => H.atHome(p, home)), "launches can reach your zone");
+  const keptIt = await a.waitForFunction(([k, n]) => (document.querySelector("[data-hall]") as any).probe().kept.collection[k as string] > (n as number), [target.kind, before[target.kind]] as const, { timeout: 6000 }).then(() => true, () => false);
+  check(keptIt, "entering your zone keeps it, once the server says");
+  check(/Kept: /.test((await a.textContent("[data-kept]")) ?? ""), "and the panel says so", (await a.textContent("[data-kept]")) ?? "");
+  check(/Carrying nothing/.test((await a.textContent("[data-cargo]")) ?? ""), "with the cargo empty again");
+  // the display: put it in place 2
+  await a.selectOption("#slot-2", target.kind);
+  const shown = await a.waitForFunction((k) => /×\d/.test(document.querySelectorAll("[data-display] li")[1]?.textContent ?? "") && (document.querySelector("[data-hall]") as any).probe().kept.display[1] === k, target.kind, { timeout: 3000 }).then(() => true, () => false);
+  check(shown, "a kind you own goes on the display, with its count");
+  await a.screenshot({ path: ".shots/hall-kept.png", fullPage: true });
+  // the same visitor, later: all still there, from the server
+  await a.reload();
+  await a.waitForFunction(() => (document.querySelector("[data-hall]") as any).probe?.()?.kept, null, { timeout: 10_000 });
+  pr = await hallProbe(a);
+  check(pr.kept.display[1] === target.kind && pr.kept.collection[target.kind] > before[target.kind], "after a reload, the collection and display are still there");
+  await a.context().close();
+  // the panels on a phone
+  const b = await hallVisitor(browser, PHONE);
+  const sw = await b.evaluate(() => document.documentElement.scrollWidth);
+  check(sw === 390, "phone: no sideways scroll with the panels", `${sw}px`);
+  await b.screenshot({ path: ".shots/hall-phone-panels.png", fullPage: true });
+  await b.context().close();
+}
+
 async function noWebGL(browser: Browser) {
   console.log("\n— without WebGL —");
   const page = await visitor(browser, DESKTOP, () => {
@@ -336,7 +416,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, collect, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
