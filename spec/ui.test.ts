@@ -1,11 +1,12 @@
 // The page's decisions, as pure functions (public/ui.js), held without a
 // browser: the shared clock, the connection, a flick from a drag, what a
-// gesture button does, and where "Leave it" can put a loop.
+// gesture button does, the latest chain in words, and where "Leave it"
+// can put a loop.
 import { describe, expect, test } from "vitest";
 // @ts-ignore -- plain JS module shared with the page
 import * as ui from "../public/ui.js";
 // @ts-ignore -- plain JS module shared with the page
-import { LOOP, V_MAX, checkGesture } from "../public/fountain.js";
+import { LOOP, V_MAX, checkGesture, simulate } from "../public/fountain.js";
 
 describe("the shared clock", () => {
   test("two pages with different clocks agree on the loop moment", () => {
@@ -79,5 +80,41 @@ describe("where Leave it can go", () => {
     const b = ui.suggestTitle([{ kind: "flick", ball: "gold", v: [1, 1, 1], at: 2 }, { kind: "flick", ball: "plum", v: [1, 1, 1], at: 3 }]);
     for (const t of [a, b]) expect(t.length).toBeGreaterThan(0), expect(t.length).toBeLessThanOrEqual(40);
     expect(a).not.toBe(b);
+  });
+});
+
+describe("the latest chain, in words (ADR 23)", () => {
+  const A = "aaaa1111", B = "bbbb2222";
+  const name = (tag: string) => ({ [A]: "Rosy Wren", [B]: "Copper Ibis" })[tag] ?? "Someone";
+  // teal rests at +x, coral at +z: Copper nudges coral, then Rosy sends teal into it
+  const knockRun = [
+    { kind: "flick", ball: "coral", v: [0, -0.6, 0], at: 0.5, by: B },
+    { kind: "flick", ball: "teal", v: [-2.12, 0, 2.12], at: 1, by: A },
+  ];
+  test("who started it, and whose ball their ball knocked", () => {
+    const st = simulate(knockRun, 2.5);
+    expect(ui.chainStory(st.events, 2.5, name, "")).toMatch(/^Rosy Wren flicked teal; teal knocked Copper Ibis's coral/);
+  });
+  test("you are you", () => {
+    const st = simulate(knockRun, 2.5);
+    expect(ui.chainStory(st.events, 2.5, name, A)).toMatch(/^You flicked teal; teal knocked Copper Ibis's coral/);
+    expect(ui.chainStory(st.events, 2.5, name, B)).toMatch(/^Rosy Wren flicked teal; teal knocked your coral/);
+  });
+  test("a ball ringing the bell is part of the chain", () => {
+    const st = simulate([{ kind: "flick", ball: "coral", v: [-3, -5.5, -4], at: 1, by: A }], 3);
+    expect(ui.chainStory(st.events, 3, name, "")).toMatch(/^Rosy Wren flicked coral; .*coral rang the bell/);
+  });
+  test("a ring of the bell starts a chain; the newest gesture is the story; it ends with a full stop", () => {
+    const events = [
+      { kind: "flick", ball: "gold", by: A, t: 1 },
+      { kind: "ring", by: B, t: 2 },
+    ];
+    expect(ui.chainStory(events, 2.5, name, "")).toBe("Copper Ibis rang the bell.");
+  });
+  test("it goes quiet a few seconds after the last gesture, and when nothing has happened", () => {
+    const events = [{ kind: "flick", ball: "gold", by: A, t: 1 }];
+    expect(ui.chainStory(events, 2, name, "")).toBe("Rosy Wren flicked gold.");
+    expect(ui.chainStory(events, 9, name, "")).toBe("");
+    expect(ui.chainStory([], 9, name, "")).toBe("");
   });
 });

@@ -1,5 +1,6 @@
 // The page's decisions, as small pure functions: the shared clock, the
-// connection, a flick from a drag, and where "Leave it" can put a loop.
+// connection, a flick from a drag, the latest chain in words, and where
+// "Leave it" can put a loop.
 // No DOM and no fetch, so spec/ui.test.ts holds them without a browser.
 import { BALLS, LOOP, V_MAX, loopMoment } from "./fountain.js";
 
@@ -79,6 +80,35 @@ export function suggestTitle(gestures) {
   const who = balls.map((b) => NAMES[b]).join(" & ");
   if (balls.length === 1) return rings ? `${who} Rings True` : `${who} Falls Up`;
   return rings ? `${who} at the Bell` : `${who}, Upside Down`;
+}
+
+/** How long the latest chain stays told after its gesture, in seconds. */
+const STORY_S = 4;
+/**
+ * The latest chain in words (ADR 23): the newest gesture up to loop moment
+ * t, then what the balls it moved went on to do. `name(tag)` names a
+ * visitor; `you` is your tag. "" when nothing has happened lately.
+ */
+export function chainStory(events, t, name, you) {
+  const who = (tag) => (tag === you ? "You" : name(tag));
+  const whose = (tag, ball, mover) => (tag === mover || !tag ? ball : tag === you ? `your ${ball}` : `${name(tag)}'s ${ball}`);
+  let start = -1;
+  for (let i = 0; i < events.length && events[i].t <= t; i++) {
+    const e = events[i];
+    if (e.kind === "flick" || (e.kind === "ring" && !e.ball)) start = i;
+  }
+  if (start < 0 || t - events[start].t > STORY_S) return "";
+  const o = events[start];
+  const links = [o.kind === "flick" ? `${who(o.by)} flicked ${o.ball}` : `${who(o.by)} rang the bell`];
+  for (let i = start + 1; i < events.length && events[i].t <= t && links.length < 5; i++) {
+    const e = events[i];
+    if (e.by !== o.by) continue;
+    let link = "";
+    if (e.kind === "knock") link = `${e.hit === e.ball ? e.other : e.ball} knocked ${whose(e.was, e.hit, o.by)}`;
+    else if (e.kind === "ring" && e.ball) link = `${e.ball} rang the bell`;
+    if (link && !links.includes(link)) links.push(link);
+  }
+  return `${links.join("; ")}.`;
 }
 
 /** Seconds into the loop as "0:07". */
