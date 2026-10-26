@@ -52,7 +52,8 @@ const REST = {
 };
 
 const restState = () => ({
-  balls: Object.fromEntries(BALLS.map((id) => [id, { pos: [...REST[id]], v: [0, 0, 0] }])),
+  // `by` is the tag of whoever last moved the ball, `byAt` when (ADR 23)
+  balls: Object.fromEntries(BALLS.map((id) => [id, { pos: [...REST[id]], v: [0, 0, 0], by: null, byAt: -1 }])),
   bell: { rungAt: -1 },
   events: [],
 });
@@ -101,6 +102,8 @@ function apply(st, g, t) {
   if (g.kind === "flick") {
     const b = st.balls[g.ball];
     b.v = [...g.v];
+    b.by = g.by ?? null;
+    b.byAt = t;
     st.events.push({ kind: "flick", ball: g.ball, by: g.by, t, pos: [...b.pos] });
     return;
   }
@@ -114,6 +117,8 @@ function apply(st, g, t) {
     const n = len < 1e-6 ? [0, 1, 0] : [d[0] / len, d[1] / len, d[2] / len];
     const push = RING_PUSH * (1 - len / RING_REACH);
     for (let i = 0; i < 3; i++) b.v[i] += n[i] * push;
+    b.by = g.by ?? null;
+    b.byAt = t;
   }
 }
 
@@ -164,7 +169,7 @@ function tick(st, t) {
         for (let i = 0; i < 3; i++) v[i] -= (1 + BELL_BOUNCE) * vn * n[i];
         if (-vn > LOUD) {
           st.bell.rungAt = t;
-          st.events.push({ kind: "ring", by: id, t, pos: [...BELL.pos] });
+          st.events.push({ kind: "ring", by: b.by, ball: id, t, pos: [...BELL.pos] });
         }
       }
     }
@@ -184,12 +189,21 @@ function tick(st, t) {
       }
       const vn = (a.v[0] - b.v[0]) * n[0] + (a.v[1] - b.v[1]) * n[1] + (a.v[2] - b.v[2]) * n[2];
       if (vn <= 0) continue;
+      // the one moving harder into the other is the striker: it passes its mover on
+      const aInto = a.v[0] * n[0] + a.v[1] * n[1] + a.v[2] * n[2];
+      const [striker, struck, hit] = aInto >= vn - aInto ? [a, b, BALLS[j]] : [b, a, BALLS[i]];
       const share = ((1 + BALL_BOUNCE) / 2) * vn;
       for (let k = 0; k < 3; k++) {
         a.v[k] -= share * n[k];
         b.v[k] += share * n[k];
       }
-      if (vn > LOUD) st.events.push({ kind: "knock", ball: BALLS[i], other: BALLS[j], t, pos: [(a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2, (a.pos[2] + b.pos[2]) / 2] });
+      if (vn <= LOUD) continue;
+      const was = struck.by;
+      if (striker.by !== null) {
+        struck.by = striker.by;
+        struck.byAt = t;
+      }
+      st.events.push({ kind: "knock", ball: BALLS[i], other: BALLS[j], by: striker.by, hit, was, t, pos: [(a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2, (a.pos[2] + b.pos[2]) / 2] });
     }
   }
 }
@@ -256,7 +270,8 @@ export function shown(st, t) {
   const balls = {};
   for (const id of BALLS) {
     const p = st.balls[id].pos, r = REST[id];
-    balls[id] = { pos: [p[0] + (r[0] - p[0]) * e, p[1] + (r[1] - p[1]) * e, p[2] + (r[2] - p[2]) * e] };
+    const b = st.balls[id];
+    balls[id] = { pos: [p[0] + (r[0] - p[0]) * e, p[1] + (r[1] - p[1]) * e, p[2] + (r[2] - p[2]) * e], by: b.by, byAt: b.byAt };
   }
   return { balls, bell: { rungAt: st.bell.rungAt } };
 }

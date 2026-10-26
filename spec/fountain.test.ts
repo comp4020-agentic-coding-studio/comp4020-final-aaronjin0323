@@ -1,5 +1,6 @@
 // The Upside-down Fountain's rules (CLAUDE.md, "The performance"): one
 // module the server and the page share, so these hold both.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 // @ts-ignore -- plain JS module shared with the page
@@ -59,7 +60,7 @@ describe("gestures", () => {
   test("a ball hitting the bell rings it", () => {
     const g = [flick("coral", [-3, -5.5, -4], 1)]; // down and in, at the bell
     const st = F.simulate(g, 3);
-    expect(st.events.some((e: any) => e.kind === "ring" && e.by === "coral")).toBe(true);
+    expect(st.events.some((e: any) => e.kind === "ring" && e.ball === "coral")).toBe(true);
   });
   test("balls knock each other", () => {
     // teal rests at +x, coral at +z: send teal straight at coral
@@ -69,6 +70,65 @@ describe("gestures", () => {
     const st = F.simulate([flick("teal", v, 1)], 2.5);
     expect(st.events.some((e: any) => e.kind === "knock")).toBe(true);
     expect(dist(pos(st, "coral"), b)).toBeGreaterThan(0.1);
+  });
+});
+
+// ADR 23: a ball carries who last moved it, passed on by every push
+describe("whose ball it is", () => {
+  const by = <G extends Gesture>(g: G, who: string) => ({ ...g, by: who });
+  const towardsCoral = (): V3 => {
+    const a = pos(F.simulate([], 0), "teal"), b = pos(F.simulate([], 0), "coral");
+    const d = dist(a, b);
+    return [((b[0] - a[0]) / d) * 3, 0, ((b[2] - a[2]) / d) * 3];
+  };
+  test("at rest, nobody's", () => {
+    for (const id of F.BALLS) expect(F.simulate([], 5).balls[id].by).toBeNull();
+  });
+  test("a flick makes the ball the flicker's, from its moment", () => {
+    const st = F.simulate([by(flick("gold", [0, -3, 0], 2), "aaaa1111")], 2.5);
+    expect(st.balls.gold.by).toBe("aaaa1111");
+    expect(st.balls.gold.byAt).toBeCloseTo(2, 6);
+    expect(st.balls.teal.by).toBeNull();
+  });
+  test("a ball that knocks another passes its mover on, and the knock says whose it was", () => {
+    const g = [by(flick("coral", [0, -0.6, 0], 0.5), "bbbb2222"), by(flick("teal", towardsCoral(), 1), "aaaa1111")];
+    const st = F.simulate(g, 2.5);
+    const knock: any = st.events.find((e: any) => e.kind === "knock");
+    expect(knock).toMatchObject({ by: "aaaa1111", hit: "coral", was: "bbbb2222" });
+    expect(st.balls.coral.by).toBe("aaaa1111");
+    expect(st.balls.coral.byAt).toBeCloseTo(knock.t, 6);
+  });
+  test("a ring makes every ball it pushes the ringer's", () => {
+    const g = [by(flick("teal", [-3, -1.7, 0.3], 3), "aaaa1111")];
+    let closest = 99, when = 0;
+    for (let t = 3; t < 4.5; t += 1 / 60) {
+      const d = dist(pos(F.simulate(g, t), "teal"), F.BELL.pos);
+      if (d < closest) [closest, when] = [d, t];
+    }
+    const t0 = Math.ceil(when * 60) / 60;
+    const st = F.simulate([...g, by(ring(t0), "cccc3333")], t0 + 0.1);
+    expect(st.balls.teal.by).toBe("cccc3333");
+    expect(st.balls.gold.by).toBeNull(); // out of reach, at rest by the dome
+  });
+  test("a ball's ring of the bell is credited to whoever moved the ball", () => {
+    const st = F.simulate([by(flick("coral", [-3, -5.5, -4], 1), "aaaa1111")], 3);
+    expect(st.events.some((e: any) => e.kind === "ring" && e.ball === "coral" && e.by === "aaaa1111")).toBe(true);
+  });
+  test("shown passes the mover on to the screen", () => {
+    const st = F.simulate([by(flick("plum", [1, -2, 0], 4), "aaaa1111")], 4.5);
+    expect((F.shown(st, 4.5).balls as any).plum).toMatchObject({ by: "aaaa1111" });
+  });
+  test("credit moves nothing: the same positions as before it existed", () => {
+    // the fingerprint of the wild run below, taken before ADR 23's change
+    const wild: Gesture[] = [];
+    for (let i = 0; i < 30; i++) wild.push(i % 5 === 4 ? ring(i * 0.6) : flick(F.BALLS[i % 4], [((i * 7) % 13) - 6, ((i * 5) % 13) - 6, ((i * 3) % 13) - 6], i * 0.6));
+    const run = F.createRun(wild.map((g, i) => by(g, `0000000${i % 3}`)));
+    const h = createHash("sha256");
+    for (let t = 0; t < F.LOOP; t += 0.25) {
+      const st = run.at(t);
+      for (const id of F.BALLS) h.update(JSON.stringify(st.balls[id].pos));
+    }
+    expect(h.digest("hex").slice(0, 16)).toBe("2d8836b3dd65ca4b");
   });
 });
 
