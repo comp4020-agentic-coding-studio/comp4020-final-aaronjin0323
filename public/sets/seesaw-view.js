@@ -24,10 +24,11 @@ export const icon =
 const LABEL = { pebble: "Drop the small stone", stone: "Drop the middle stone", boulder: "Drop the big stone" };
 /** The stage card's gesture buttons, in tab order: a stone each, then the plank. */
 export const buttons = [
-  ...STONES.map((id) => ({ gesture: `throw:${id}`, label: `${LABEL[id]} on the high end`, ball: hexOf(id) })),
+  ...STONES.map((id) => ({ gesture: `throw:${id}`, label: `${LABEL[id]} on the high end`, verb: "throw", ball: hexOf(id) })),
   {
     gesture: "nudge:plank",
     label: "Tip the plank",
+    verb: "tip",
     icon: '<path d="M3 16L21 10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M12 15l-2.5 5h5z" fill="currentColor"/><path d="M18 3v4m0 0l-2-2m2 2l2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   },
 ];

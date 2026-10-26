@@ -19,13 +19,14 @@ export const icon = '<circle cx="12" cy="12" r="8" fill="none" stroke="currentCo
 
 /**
  * The stage card's gesture buttons, in tab order: one per object. Each is
- * `{ gesture: "kind:object", label, title?, ball?: colour, icon?: svg }`.
+ * `{ gesture: "kind:object", label, verb, title?, ball?: colour, icon?: svg }`;
+ * `verb` is the one lowercase word the reticle's hint uses ("Hold to throw").
  * `heldLabel(id, name)` is the label while someone else holds it.
  */
 export const buttons = [
-  ...SPHERES.map((id) => ({ gesture: `throw:${id}`, label: `Throw the ${id} sphere`, ball: hexOf(id) })),
-  { gesture: "pluck:ribbon", label: "Pluck the ribbon", icon: '<path d="M3 12c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
-  { gesture: "tap:bell", label: "Ring the bell", icon: '<path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' },
+  ...SPHERES.map((id) => ({ gesture: `throw:${id}`, label: `Throw the ${id} sphere`, verb: "throw", ball: hexOf(id) })),
+  { gesture: "pluck:ribbon", label: "Pluck the ribbon", verb: "pluck", icon: '<path d="M3 12c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' },
+  { gesture: "tap:bell", label: "Ring the bell", verb: "ring", icon: '<path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' },
 ];
 export const heldLabel = (id, who) => `Take the ${id} sphere from ${who} and throw it`;
 

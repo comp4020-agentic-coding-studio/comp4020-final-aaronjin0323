@@ -23,8 +23,8 @@ const doorIcon = (id) => `<path d="M6 21V4h12v17" fill="none" stroke="${hexOf(id
 
 /** The stage card's gesture buttons, in tab order: one per object. */
 export const buttons = [
-  ...BALLS.map((id) => ({ gesture: `throw:${id}`, label: `Throw the ${id} ball`, ball: hexOf(id) })),
-  ...DOORS.map((id) => ({ gesture: `tap:${id}`, label: `Turn the ${doorWord(id)} door`, icon: doorIcon(id) })),
+  ...BALLS.map((id) => ({ gesture: `throw:${id}`, label: `Throw the ${id} ball`, verb: "throw", ball: hexOf(id) })),
+  ...DOORS.map((id) => ({ gesture: `tap:${id}`, label: `Turn the ${doorWord(id)} door`, verb: "turn", icon: doorIcon(id) })),
 ];
 export const heldLabel = (id, who) => `Take the ${id} ball from ${who} and throw it`;
 

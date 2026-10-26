@@ -151,3 +151,41 @@ describe("viewOffsetFor: centring the camera on the clear part", () => {
     expect(o.offY).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("aimHint: what the reticle says about what it rests on (ADR 19)", () => {
+  const buttons = [
+    { gesture: "throw:gold", label: "Throw the gold sphere", verb: "throw" },
+    { gesture: "tap:bell", label: "Ring the bell", verb: "ring" },
+  ];
+  test("a holdable object says to hold, and what letting go does", () => {
+    expect(ui.aimHint(buttons, "gold", { holdable: true })).toBe("Hold to throw");
+    expect(ui.aimHint(buttons, "gold", { holdable: true, holding: "gold" })).toBe("Let go to throw");
+  });
+  test("anything else says click, or tap on a touch screen", () => {
+    expect(ui.aimHint(buttons, "bell", {})).toBe("Click to ring");
+    expect(ui.aimHint(buttons, "bell", { touch: true })).toBe("Tap to ring");
+  });
+  test("nothing aimed at, or an object the set has no button for, says nothing", () => {
+    expect(ui.aimHint(buttons, null, {})).toBe("");
+    expect(ui.aimHint(buttons, "ribbon", {})).toBe("");
+    expect(ui.aimHint([{ gesture: "tap:bell", label: "Ring the bell" }], "bell", {})).toBe("");
+  });
+  test("every set's every object has a hint of at most four words", async () => {
+    // @ts-ignore -- plain JS module shared with the page
+    const { VIEWS } = await import("../public/sets/views.js");
+    // @ts-ignore -- plain JS module shared with the page
+    const { SETS } = await import("../public/stage.js");
+    const ids = Object.keys(SETS);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      for (const object of SETS[id].objects) {
+        const holdable = SETS[id].holdable.includes(object);
+        for (const opts of [{ holdable }, { holdable, touch: true }, { holdable, holding: holdable ? object : null }]) {
+          const hint = ui.aimHint(VIEWS[id].buttons, object, opts);
+          expect(hint, `${id}/${object}`).toMatch(/^(Hold|Let go|Click|Tap) to [a-z]+$/);
+          expect(hint.split(" ").length).toBeLessThanOrEqual(4);
+        }
+      }
+    }
+  });
+});

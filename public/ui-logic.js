@@ -204,3 +204,20 @@ export function viewOffsetFor(w, h, clear) {
   const fullH = 2 * Math.max(cy, h - cy);
   return { fullW, fullH, offX: fullW / 2 - cx, offY: fullH / 2 - cy };
 }
+
+/**
+ * What the reticle's hint says about what it rests on (ADR 19): how to
+ * touch it and what that does, in at most four words, or "" for nothing.
+ * The verb is the set view's own (`verb` on the object's button).
+ * @param {{ gesture: string, label?: string, verb?: string }[]} buttons the set view's
+ * @param {string | null} id what the reticle rests on
+ * @param {{ holdable?: boolean, holding?: string | null, touch?: boolean }} opts
+ */
+export function aimHint(buttons, id, { holdable = false, holding = null, touch = false } = {}) {
+  if (!id) return "";
+  const mine = buttons.filter((b) => b.gesture.split(":")[1] === id);
+  const b = (holdable && mine.find((x) => x.gesture.startsWith("throw:"))) || mine[0];
+  if (!b?.verb) return "";
+  if (holdable) return `${holding === id ? "Let go" : "Hold"} to ${b.verb}`;
+  return `${touch ? "Tap" : "Click"} to ${b.verb}`;
+}

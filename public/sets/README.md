@@ -76,8 +76,9 @@ read the buttons, names and sounds without WebGL.
 ```js
 export const icon = '<path .../>';         // the set row's icon: SVG inner markup, 24x24, currentColor
 export const buttons = [                   // the card's gesture buttons, in tab order, one per object
-  { gesture: "throw:striker", label: "Throw the striker", ball: "#e3b65b" },  // ball: a colour swatch
-  { gesture: "tap:c1", label: "Strike the low chime", icon: '<path .../>' },  // or an icon
+  { gesture: "throw:striker", label: "Throw the striker", verb: "swing", ball: "#e3b65b" },  // ball: a colour swatch
+  { gesture: "tap:c1", label: "Strike the low chime", verb: "ring", icon: '<path .../>' },  // or an icon
+  // verb: one lowercase word for the reticle's hint, "Hold to swing" (ADR 19)
 ];
 export function heldLabel(id, who)         // a throw button's label while `who` holds it
 export function fromButton(kind, object, at, shown) // the gesture a button plays (shown = shownAt now)

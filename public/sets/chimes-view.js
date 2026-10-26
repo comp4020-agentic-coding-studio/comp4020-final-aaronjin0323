@@ -27,8 +27,8 @@ const tubeIcon = (id, i) => {
 /** The stage card's gesture buttons, in tab order: the striker, then the
  * chimes low to high. */
 export const buttons = [
-  { gesture: "throw:striker", label: "Swing the striker", ball: hexOf("striker") },
-  ...CHIMES.map((id, i) => ({ gesture: `tap:${id}`, label: `Ring the ${NOTE_NAME[id]} chime`, icon: tubeIcon(id, i) })),
+  { gesture: "throw:striker", label: "Swing the striker", verb: "swing", ball: hexOf("striker") },
+  ...CHIMES.map((id, i) => ({ gesture: `tap:${id}`, label: `Ring the ${NOTE_NAME[id]} chime`, verb: "ring", icon: tubeIcon(id, i) })),
 ];
 export const heldLabel = (_id, who) => `Take the striker from ${who} and swing it`;
 
