@@ -223,6 +223,94 @@ async function reconnect(browser: Browser) {
   await ctx.close();
 }
 
+/** A hall page, live, with its robot on screen. */
+async function hallVisitor(browser: Browser, opts: Opts = DESKTOP): Promise<Page> {
+  const ctx = await browser.newContext({ reducedMotion: "reduce", ...opts });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => check(false, "no script errors in the hall", e.message));
+  await page.goto(`${APP}/hall/?v=${Date.now()}`);
+  await page.waitForFunction(() => { const p = (document.querySelector("[data-hall]") as any).probe?.(); return document.body.dataset.conn === "live" && p?.robots.some((r: any) => r.tag === p.you); }, null, { timeout: 10_000 });
+  return page;
+}
+const hallProbe = (page: Page) => page.evaluate(() => (document.querySelector("[data-hall]") as any).probe());
+const meIn = (p: any, tag = p.you) => p.robots.find((r: any) => r.tag === tag);
+/** Waits until a robot (yours unless told) is still, on this page. */
+const settled = (page: Page, tag?: string) =>
+  page.waitForFunction((t) => { const p = (document.querySelector("[data-hall]") as any).probe(); const r = p.robots.find((x: any) => x.tag === (t ?? p.you)); return r && r.speed === 0; }, tag, { timeout: 15_000 });
+
+async function hall(browser: Browser) {
+  console.log("\n— the hall: drag back to aim, let go to launch; the server says where (ADR 24) —");
+  const a = await hallVisitor(browser);
+  const b = await hallVisitor(browser, PHONE);
+  const ta = (await hallProbe(a)).you;
+  await b.waitForFunction((t) => (document.querySelector("[data-hall]") as any).probe().robots.some((r: any) => r.tag === t), ta);
+  await settled(a);
+  const me = meIn(await hallProbe(a));
+  // mouse: press on the robot, pull back to the left
+  await a.mouse.move(me.x, me.y);
+  await a.mouse.down();
+  await a.mouse.move(me.x - 1.2 * (await hallProbe(a)).metre, me.y + 4, { steps: 5 });
+  const aiming = await hallProbe(a);
+  check(!!aiming.aim && aiming.aim.dir[0] > 0.9 && aiming.aim.power > 0.3 && aiming.aim.power < 0.7, "pulling back aims the other way, with power by the pull", JSON.stringify(aiming.aim));
+  check(/Aiming right, power \d+%/.test(await a.textContent("[data-aim]") ?? ""), "and says the aim in words", await a.textContent("[data-aim]") ?? "");
+  await a.screenshot({ path: ".shots/hall-aim.png" });
+  const sent = Date.now();
+  await a.mouse.up();
+  const ownMoved = await a.waitForFunction(() => { const p = (document.querySelector("[data-hall]") as any).probe(); return p.robots.find((r: any) => r.tag === p.you).speed > 0; }, null, { timeout: 300 }).then(() => Date.now() - sent, () => -1);
+  check(ownMoved >= 0 && ownMoved < 300, "letting go moves your robot at once", `${ownMoved} ms`);
+  const seen = await b.waitForFunction(([t, x]) => { const r = (document.querySelector("[data-hall]") as any).probe().robots.find((q: any) => q.tag === t); return r && r.pos[0] > x + 0.3; }, [ta, me.pos[0]] as const, { timeout: 1500 }).then(() => Date.now() - sent, () => -1);
+  check(seen >= 0 && seen < 1000, "the other visitor sees it go within a second", `${seen} ms`);
+  await settled(a);
+  await settled(b, ta);
+  const pa = meIn(await hallProbe(a)).pos, pb = meIn(await hallProbe(b), ta).pos;
+  check(Math.hypot(pa[0] - pb[0], pa[1] - pb[1]) < 0.01, "and both screens agree where it stopped", `${pa.map((x: number) => x.toFixed(3))} / ${pb.map((x: number) => x.toFixed(3))}`);
+  // a pull shorter than MIN_PULL cancels
+  const still = meIn(await hallProbe(a));
+  await a.mouse.move(still.x, still.y);
+  await a.mouse.down();
+  await a.mouse.move(still.x + 2, still.y, { steps: 2 });
+  await a.mouse.up();
+  await a.waitForTimeout(300);
+  check(meIn(await hallProbe(a)).speed === 0, "a tiny pull launches nothing");
+  // keys: aim, change power, launch; ten launches in a row are no faster than one
+  await a.focus("[data-hall]");
+  await a.keyboard.press("ArrowLeft");
+  await a.keyboard.press("ArrowUp");
+  check(/Aiming up-right|Aiming right/.test(await a.textContent("[data-aim]") ?? ""), "arrow keys aim", await a.textContent("[data-aim]") ?? "");
+  await a.keyboard.press("Escape");
+  check((await hallProbe(a)).aim === null, "Escape cancels the aim");
+  for (let i = 0; i < 6; i++) await a.keyboard.press("ArrowUp"); // full power
+  let fastest = 0;
+  for (let i = 0; i < 10; i++) {
+    await a.keyboard.press("Enter"); // the same shot again
+    fastest = Math.max(fastest, meIn(await hallProbe(a)).speed);
+  }
+  await a.waitForTimeout(400);
+  fastest = Math.max(fastest, meIn(await hallProbe(a)).speed, meIn(await hallProbe(b), ta).speed);
+  check(fastest > 7.9 && fastest <= 8 + 1e-9, "Enter launches at full power, and ten in a row are no faster than one", fastest.toFixed(3));
+  // touch, on the phone: real touch events, pulled down to launch up
+  await settled(b);
+  const mb = meIn(await hallProbe(b));
+  const cdp = await b.context().newCDPSession(b);
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+  await touch("touchStart", mb.x, mb.y);
+  for (let i = 1; i <= 5; i++) await touch("touchMove", mb.x, mb.y + i * 14);
+  const tAim = (await hallProbe(b)).aim;
+  check(!!tAim && tAim.dir[1] < -0.9, "on a phone, a touch pulled down aims up", JSON.stringify(tAim));
+  await b.screenshot({ path: ".shots/hall-phone.png" });
+  await touch("touchEnd", 0, 0);
+  const tMoved = await b.waitForFunction(() => { const p = (document.querySelector("[data-hall]") as any).probe(); return p.robots.find((r: any) => r.tag === p.you).speed > 0; }, null, { timeout: 500 }).then(() => true, () => false);
+  check(tMoved, "and letting go launches it");
+  const sw = await b.evaluate(() => document.documentElement.scrollWidth);
+  check(sw === 390, "phone: no sideways scroll", `${sw}px`);
+  // leaving takes your robot away
+  const tb = (await hallProbe(b)).you;
+  await b.context().close();
+  const gone = await a.waitForFunction((t) => !(document.querySelector("[data-hall]") as any).probe().robots.some((r: any) => r.tag === t), tb, { timeout: 3000 }).then(() => true, () => false);
+  check(gone, "a visitor's robot leaves with them");
+  await a.context().close();
+}
+
 async function noWebGL(browser: Browser) {
   console.log("\n— without WebGL —");
   const page = await visitor(browser, DESKTOP, () => {
@@ -248,7 +336,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
