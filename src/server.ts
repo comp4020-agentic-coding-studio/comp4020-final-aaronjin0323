@@ -39,7 +39,7 @@ function visitorOf(req: IncomingMessage, res: ServerResponse) {
 }
 
 // ---- the stream: every open page, who it is, and the state it last got
-type Client = { res: ServerResponse; pid: string; tag: string };
+type Client = { res: ServerResponse; pid: string; tag: string; welcome?: unknown };
 const clients = new Set<Client>();
 type Aim = { ball: string; v: number[] };
 const pointers = new Map<string, { tag: string; name: string; colour: number; p: number[]; aim?: Aim; at: number }>();
@@ -68,13 +68,20 @@ function pointersSoon() {
 const hall = createHall(store);
 const hallClients = new Set<Client>();
 const HALL_TICK_MS = 50;
+const HALL_STREAMS_PER_VISITOR = 4;
+const BODY_MAX = 4096;
 function hallBroadcast() {
   const now = Date.now();
   const robots = hall.view((pid) => store.who(pid) ?? { tag: "", name: "Someone", colour: 0 }, now);
   const artifacts = hall.floor();
   const news = hall.news(); // what just happened, sent once, to everyone
   for (const c of hallClients) {
-    const mine = { home: hall.homeOf(c.pid), collection: store.collection(c.pid), display: store.displayOf(c.pid) };
+    const mine: Record<string, unknown> = { home: hall.homeOf(c.pid), collection: store.collection(c.pid), display: store.displayOf(c.pid) };
+    // how their join went, once, in the first event of their stream
+    if (c.welcome) {
+      mine.welcome = c.welcome;
+      delete c.welcome;
+    }
     send(c.res, "hall", { robots, artifacts, news, mine, you: store.who(c.pid), serverTime: now });
   }
 }
@@ -94,12 +101,13 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 };
 const refuse = (res: ServerResponse, r: { status: number; error: string; message: string }) => json(res, r.status, { error: r.error, message: r.message });
 
-async function bodyOf(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+const TOO_LARGE = Symbol("too large");
+async function bodyOf(req: IncomingMessage): Promise<Record<string, unknown> | null | typeof TOO_LARGE> {
   let size = 0;
   const parts: Buffer[] = [];
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 16_384) return null;
+    if (size > BODY_MAX) return TOO_LARGE;
     parts.push(chunk as Buffer);
   }
   const text = Buffer.concat(parts).toString("utf8");
@@ -184,17 +192,23 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
       return res.end(readFileSync(join(PUBLIC, "hall.html"), "utf8"));
     }
+    if (path === "/hall/displays") {
+      const d = store.directory(url.searchParams.get("before"));
+      return d.ok ? json(res, 200, { entries: d.entries, next: d.next }) : refuse(res, d);
+    }
     if (path === "/hall/events") {
       const v = visitorOf(req, res);
+      if ([...hallClients].filter((c) => c.pid === v.pid).length >= HALL_STREAMS_PER_VISITOR)
+        return refuse(res, { status: 429, error: "too-many-streams", message: `At most ${HALL_STREAMS_PER_VISITOR} hall pages open at once` });
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
       const c: Client = { res, pid: v.pid, tag: v.tag };
       hallClients.add(c);
-      hall.join(v.pid, Date.now());
+      c.welcome = hall.join(v.pid, Date.now());
       log("hall-open", { tag: v.tag, open: hallClients.size });
       hallBroadcast();
       req.on("close", () => {
         hallClients.delete(c);
-        hall.leave(v.pid);
+        hall.leave(v.pid, Date.now());
         log("hall-close", { tag: v.tag, open: hallClients.size });
         hallBroadcast();
       });
@@ -245,6 +259,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   }
   if (crossSite(req)) return refuse(res, { status: 403, error: "cross-origin", message: "Posts come from the museum's own page" });
   const body = await bodyOf(req);
+  if (body === TOO_LARGE) return refuse(res, { status: 413, error: "too-large", message: `A request body is at most ${BODY_MAX} bytes` });
   if (!body) return refuse(res, { status: 400, error: "bad-json", message: "The body is a JSON object" });
   const v = visitorOf(req, res);
   const now = Date.now();
@@ -271,17 +286,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const r = hall.launch(v.pid, body, now);
     if (!r.ok) {
       log("refused", { event: "launch", tag: v.tag, error: r.error });
-      return refuse(res, r);
+      // a stale launch is answered with the robot, so the page can resync
+      return json(res, r.status, { error: r.error, message: r.message, ...("robot" in r ? { robot: r.robot } : {}) });
     }
     json(res, 200, { robot: { ...store.who(v.pid), ...r.robot } });
     return hallBroadcast();
   }
   if (path === "/hall/display") {
-    if (Object.keys(body).some((k) => k !== "slots")) return refuse(res, { status: 400, error: "bad-display", message: "The display is { slots }" });
-    const r = store.arrange(v.pid, body.slots);
+    if (Object.keys(body).some((k) => k !== "slots" && k !== "was") || !("was" in body))
+      return refuse(res, { status: 400, error: "bad-display", message: "A display change is { slots, was }: the new layout and the one it was made from" });
+    const r = store.arrange(v.pid, body.slots, body.was, now);
     if (!r.ok) {
       log("refused", { event: "display", tag: v.tag, error: r.error });
-      return refuse(res, r);
+      return json(res, r.status, { error: r.error, message: r.message, ...("display" in r ? { display: r.display } : {}) });
     }
     log("display", { tag: v.tag, slots: r.display.join(",") });
     json(res, 200, r);

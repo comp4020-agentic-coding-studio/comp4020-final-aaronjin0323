@@ -315,7 +315,7 @@ describe("collecting in the hall", { concurrent: false }, () => {
     const me = mineOf(d);
     expect(me.carrying).toEqual([]);
     expect(me.pos).toEqual(H.HOMES[me.home]);
-    expect(d.mine).toEqual({ home: me.home, collection: { fish: 0, cloud: 0, door: 0 }, display: [null, null, null, null] });
+    expect(d.mine).toEqual({ home: me.home, collection: { fish: 0, cloud: 0, door: 0 }, display: [null, null, null, null], welcome: { kind: "new", released: 0 } });
     s.close();
   });
   /** Where your robot is now, from the latest snapshot on the shared clock. */
@@ -360,7 +360,7 @@ describe("collecting in the hall", { concurrent: false }, () => {
     expect(n).toBeLessThanOrEqual(3);
     // shown on the display, with nothing the page says about counts or who it is
     const slots = [target.kind, null, null, null];
-    const r = await a.post("/hall/display", { slots });
+    const r = await a.post("/hall/display", { slots, was: [null, null, null, null] });
     expect(r.status).toBe(200);
     expect(r.json.display).toEqual(slots);
     expect(await s.next("hall", (x) => x.mine.display[0] === target.kind)).not.toBeNull();
@@ -381,11 +381,73 @@ describe("collecting in the hall", { concurrent: false }, () => {
     const d = (await sb.next("hall", (x) => !!mineOf(x)))!.data;
     const id = d.artifacts[0].id;
     for (const path of ["/hall/pickup", "/hall/deposit", "/hall/collect"]) expect((await a.post(path, { id })).status).toBe(404);
-    expect((await a.post("/hall/display", { slots: ["fish", null, null, null] })).json.error).toBe("not-owned");
-    expect((await a.post("/hall/display", { slots: [null, null, null, null], collection: { fish: 99 } })).status).toBe(400);
-    expect((await a.post("/hall/display", { slots: [null, null, null, null], pid: "someone-else" })).status).toBe(400);
-    expect((await a.post("/hall/display", { slots: ["fish", "fish", null, null] })).status).toBe(400);
+    const was = [null, null, null, null];
+    expect((await a.post("/hall/display", { slots: ["fish", null, null, null], was })).json.error).toBe("not-owned");
+    expect((await a.post("/hall/display", { slots: [null, null, null, null], was, collection: { fish: 99 } })).status).toBe(400);
+    expect((await a.post("/hall/display", { slots: [null, null, null, null], was, pid: "someone-else" })).status).toBe(400);
+    expect((await a.post("/hall/display", { slots: ["fish", "fish", null, null], was })).status).toBe(400);
     expect((await sb.next("hall", (x) => !x.artifacts.some((y: any) => y.id === id), 300))).toBeNull();
     sb.close();
+  });
+});
+
+// ADR 27: limits, stale actions, the directory, and coming back
+describe("the hall's limits and stale actions", { concurrent: false }, () => {
+  test("a body over 4 KB is too large", async () => {
+    const a = visitor();
+    const r = await a.post("/hall/launch", { dir: [1, 0], power: 1, seq: 1, pad: "x".repeat(5000) });
+    expect(r.status).toBe(413);
+    expect(r.json.error).toBe("too-large");
+  });
+  test("at most four hall streams per visitor", async () => {
+    const a = visitor();
+    const open = [];
+    for (let i = 0; i < 4; i++) open.push(await a.stream("/hall/events"));
+    const r = await a.req("/hall/events");
+    expect(r.status).toBe(429);
+    await r.body?.cancel();
+    for (const s of open) s.close();
+  });
+  test("a launch that isn't newer is stale, answered with the robot to resync from", async () => {
+    const a = visitor();
+    const s = await a.stream("/hall/events");
+    await s.next("hall", (d) => d.robots.some((r: any) => r.tag === d.you.tag));
+    expect((await a.post("/hall/launch", { dir: [1, 0], power: 0.3, seq: 7 })).status).toBe(200);
+    const stale = await a.post("/hall/launch", { dir: [0, 1], power: 1, seq: 7 });
+    expect(stale.status).toBe(409);
+    expect(stale.json).toMatchObject({ error: "stale-launch", robot: { seq: 7 } });
+    s.close();
+  });
+  test("a display change needs the layout it was made from; a stale one gets the current layout", async () => {
+    const a = visitor();
+    expect((await a.post("/hall/display", { slots: [null, null, null, null] })).status).toBe(400);
+    const r = await a.post("/hall/display", { slots: [null, null, null, null], was: ["fish", null, null, null] });
+    expect(r.status).toBe(409);
+    expect(r.json).toMatchObject({ error: "stale-display", display: [null, null, null, null] });
+    expect((await a.post("/hall/display", { slots: [null, null, null, null], was: [null, null, null, null] })).status).toBe(200);
+  });
+  test("the directory: a bounded page and a cursor; a bad cursor is refused", async () => {
+    const r = await fetch(BASE + "/hall/displays");
+    expect(r.status).toBe(200);
+    const d = await r.json();
+    expect(Array.isArray(d.entries)).toBe(true);
+    expect(d.entries.length).toBeLessThanOrEqual(12);
+    for (const e of d.entries) expect(e).toMatchObject({ tag: expect.stringMatching(/^[0-9a-f]{8}$/), name: expect.any(String), display: expect.any(Array) });
+    expect(JSON.stringify(d)).not.toMatch(/"pid"/);
+    expect((await fetch(BASE + "/hall/displays?before=nope")).status).toBe(400);
+  });
+  test("closing the hall and opening it again within the grace: the same robot, told so", async () => {
+    const a = visitor();
+    const s1 = await a.stream("/hall/events");
+    const first = await s1.next("hall", (d) => d.robots.some((r: any) => r.tag === d.you.tag));
+    expect(first!.data.mine.welcome).toMatchObject({ kind: "new" });
+    expect((await a.post("/hall/launch", { dir: [1, 1], power: 0.4, seq: 3 })).status).toBe(200);
+    s1.close();
+    await new Promise((r) => setTimeout(r, 300));
+    const s2 = await a.stream("/hall/events");
+    const back = await s2.next("hall", (d) => !!d.mine.welcome);
+    expect(back!.data.mine.welcome).toEqual({ kind: "restored" });
+    expect(back!.data.robots.find((r: any) => r.tag === back!.data.you.tag).seq).toBe(3);
+    s2.close();
   });
 });
