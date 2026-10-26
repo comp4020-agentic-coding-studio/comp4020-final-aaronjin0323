@@ -307,7 +307,7 @@ describe("collecting in the hall", { concurrent: false }, () => {
     const a = visitor();
     const s = await a.stream("/hall/events");
     const d = (await s.next("hall", (x) => !!mineOf(x)))!.data;
-    expect(d.artifacts.length).toBe(H.MAX_AVAILABLE);
+    expect(d.artifacts.length).toBeGreaterThanOrEqual(H.MAX_AVAILABLE); // returned cargo can add more (ADR 27)
     for (const x of d.artifacts) {
       expect(x.id).toMatch(/^[0-9a-f-]{36}$/);
       expect(H.KINDS).toContain(x.kind);
@@ -348,7 +348,7 @@ describe("collecting in the hall", { concurrent: false }, () => {
     const got = await s.next("hall", (x) => mineOf(x)?.carrying.some((c: any) => c.id === target.id), 5000);
     expect(got).not.toBeNull();
     expect(got!.data.artifacts.some((x: any) => x.id === target.id)).toBe(false);
-    expect(got!.data.artifacts.length).toBe(H.MAX_AVAILABLE); // topped up
+    expect(got!.data.artifacts.length).toBeGreaterThanOrEqual(H.MAX_AVAILABLE); // topped up
     expect(got!.data.mine.collection[target.kind]).toBe(0); // carried isn't kept yet
     // then home
     const home = H.HOMES[me.home];

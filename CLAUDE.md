@@ -221,9 +221,11 @@ back [ADR 27](docs/adr/0027-leaving-and-coming-back.md).
 
 - **Three kinds of artifact, one set of rules** ([ADR 25](docs/adr/0025-collecting-artifacts.md)):
   a luminous flying fish, a rain-filled cloud, a small door onto stars.
-- **Six available at a time**, in safe public spots (a fixed list in
-  `public/hall.js`: inside the walls, clear of every delivery zone and of
-  each other), topped up whenever one is picked up. Each has a UUID.
+- **New ones keep six on the floor**, in safe public spots (a fixed list in
+  `public/hall.js`: inside the walls, clear of every zone and of each
+  other), topped up whenever one is picked up. Each has a UUID. Knocked
+  and returned cargo comes back on top of the six, so the floor holds at
+  most six plus whatever players carry.
 - **Touching one collects it** once it's ready, up to three carried. The server sees the
   touch: a 50 ms tick walks each moving robot along its 20 ms steps
   against the artifacts. Pages never send a pickup, a deposit, a player ID

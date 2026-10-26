@@ -84,5 +84,8 @@ Turned down:
 ## Consequences
 
 - Migration 4 adds when each display last changed, for the directory.
+- Returned cargo comes back on top of the six the floor is topped up to,
+  as knocked artifacts already did (ADR 26): the floor holds at most six
+  plus whatever players carry, not exactly six.
 - A redeploy is a restart: the same grace applies. This is tested by
   restarting the server locally; it has **not** been tested on Fly.
