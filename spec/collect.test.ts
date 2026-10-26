@@ -281,3 +281,99 @@ describe("a display anyone can look at", () => {
     expect(s.publicDisplay(a)).toEqual([null, { kind: "cloud", count: 3 }, null, null]);
   });
 });
+
+// ADR 27: leaving and coming back, a directory, stale changes
+describe("cargo going back to the floor", () => {
+  test("everything carried returns, where it's told, ready at once; again changes nothing", () => {
+    const { s, a } = fresh();
+    s.fillFloor(T0);
+    const [x, y] = s.floor();
+    s.pickUp(a, x.id, T0);
+    s.pickUp(a, y.id, T0);
+    const back = s.releaseCargo(a, T0 + 5, [[2.6, 2.8], [4.4, 2.8]]);
+    expect(back.map((r: any) => r.id).sort()).toEqual([x.id, y.id].sort());
+    expect(s.cargo(a)).toEqual([]);
+    const f = s.floor();
+    for (const r of back) expect(f.find((z: any) => z.id === r.id)).toMatchObject({ readyAt: T0 + 5 });
+    expect(new Set(back.map((r: any) => r.pos.join())).size).toBe(2);
+    expect(s.releaseCargo(a, T0 + 6, [[2.6, 2.8]])).toEqual([]);
+  });
+  test("never touches anything delivered, and never someone else's cargo", () => {
+    const { s, a, b } = fresh();
+    own(s, a, "fish", 2);
+    s.fillFloor(T0);
+    const z = s.floor()[0];
+    s.pickUp(b, z.id, T0);
+    expect(s.releaseCargo(a, T0, [[2.6, 2.8]])).toEqual([]);
+    expect(s.collection(a).fish).toBe(2);
+    expect(s.cargo(b).map((c: any) => c.id)).toEqual([z.id]);
+  });
+  test("who holds cargo right now", () => {
+    const { s, a, b } = fresh();
+    s.fillFloor(T0);
+    s.pickUp(a, s.floor()[0].id, T0);
+    expect(s.holders()).toEqual([a]);
+    expect(s.holders()).not.toContain(b);
+  });
+});
+
+describe("the directory of displays", () => {
+  test("everyone who arranged one, newest change first, a page at a time, by cursor", () => {
+    const { s } = fresh();
+    const pids: string[] = [];
+    for (let i = 0; i < 14; i++) {
+      const p = s.visitor(null, T0).pid;
+      s.hallHome(p, T0);
+      own(s, p, "door", 1);
+      ok(s.arrange(p, ["door", null, null, null], undefined, T0 + i));
+      pids.push(p);
+    }
+    s.hallHome(s.visitor(null, T0).pid, T0); // never arranged: not listed
+    const first = s.directory(null);
+    expect(first.entries.length).toBe(12);
+    expect(first.entries[0].tag).toBe(s.who(pids[13]).tag);
+    expect(first.entries[0].display[0]).toEqual({ kind: "door", count: 1 });
+    expect(first.next).toMatch(/^\d+\.[0-9a-f]{8}$/);
+    const second = s.directory(first.next);
+    expect(second.entries.map((e: any) => e.tag)).toEqual([s.who(pids[1]).tag, s.who(pids[0]).tag]);
+    expect(second.next).toBeNull();
+    expect(JSON.stringify(first)).not.toContain(pids[13]);
+  });
+  test("a cursor that isn't one is refused", () => {
+    const { s } = fresh();
+    for (const bad of ["x", "1.zz", "1.abcd1234; DROP", "-1.abcd1234"]) expect(s.directory(bad)).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("a display change from a layout that's no longer there", () => {
+  test("is refused, with the current one", () => {
+    const { s, a } = fresh();
+    own(s, a, "fish", 1);
+    own(s, a, "cloud", 1);
+    ok(s.arrange(a, ["fish", null, null, null], [null, null, null, null], T0));
+    const stale = s.arrange(a, ["cloud", null, null, null], [null, null, null, null], T0 + 1);
+    expect(stale).toMatchObject({ ok: false, status: 409, error: "stale-display", display: ["fish", null, null, null] });
+    expect(s.displayOf(a)).toEqual(["fish", null, null, null]);
+    expect(s.arrange(a, ["cloud", null, null, null], "nope", T0 + 2)).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("migration 4", () => {
+  test("keeps a version-3 file's displays, and lists them", () => {
+    const dir = mkdtempSync(join(tmpdir(), "museum-"));
+    const path = join(dir, "gallery.db");
+    const old = new DatabaseSync(path);
+    for (const m of MIGRATIONS.slice(0, 3)) old.exec(m);
+    old.exec("PRAGMA user_version = 3");
+    old.prepare("INSERT INTO visitors (pid, tag, name, colour, created_at) VALUES ('p3', 'beef0003', 'Three Owl', 1, 1)").run();
+    old.prepare("INSERT INTO hall_players (pid, home, joined_at) VALUES ('p3', 2, 1)").run();
+    old.prepare("INSERT INTO artifacts (id, kind, x, y, state, owner, spawned_at, deposited_at) VALUES ('k3', 'cloud', 3, 3, 'deposited', 'p3', 1, 2)").run();
+    old.prepare("INSERT INTO display_slots (pid, slot, kind) VALUES ('p3', 1, 'cloud')").run();
+    old.close();
+    const s: any = openStore(path);
+    expect(s.displayOf("p3")).toEqual(["cloud", null, null, null]);
+    expect(s.directory(null).entries.map((e: any) => e.tag)).toContain("beef0003");
+    expect(readdirSync(dir).filter((f) => /^gallery\.db\.before-v3-\d+$/.test(f)).length).toBe(1);
+    s.close();
+  });
+});

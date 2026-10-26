@@ -57,7 +57,14 @@ export const MIGRATIONS = [
    CREATE TRIGGER artifacts_one_way BEFORE UPDATE ON artifacts
      WHEN NOT ((OLD.state = 'available' AND NEW.state = 'carried') OR (OLD.state = 'carried' AND NEW.state IN ('deposited', 'available')))
      BEGIN SELECT RAISE(ABORT, 'an artifact goes available, carried, then deposited (or back to available by a knock)'); END;`,
+  // 4: the directory of displays (ADR 27): when each display last changed.
+  // Displays already arranged count from when their owner joined.
+  `ALTER TABLE hall_players ADD COLUMN display_changed_at INTEGER;
+   UPDATE hall_players SET display_changed_at = joined_at WHERE pid IN (SELECT pid FROM display_slots);
+   CREATE INDEX hall_players_directory ON hall_players (display_changed_at DESC) WHERE display_changed_at IS NOT NULL;`,
 ];
+/** How many displays a page of the directory holds. */
+export const DIRECTORY_PAGE = 12;
 
 /**
  * Brings a database up to the newest migration. Before changing a file that
@@ -194,6 +201,11 @@ export function openStore(path: string) {
     const out: (string | null)[] = Array(DISPLAY_SLOTS).fill(null);
     for (const r of db.prepare("SELECT slot, kind FROM display_slots WHERE pid = ?").all(pid) as Row[]) out[r.slot - 1] = r.kind;
     return out;
+  }
+
+  function publicDisplayOf(pid: string) {
+    const have = collection(pid);
+    return displayOf(pid).map((k) => (k ? { kind: k, count: have[k] } : null));
   }
 
   return {
@@ -415,11 +427,53 @@ export function openStore(path: string) {
         return u.changes === 1 ? { id: r.id as string, kind: r.kind as string } : null;
       });
     },
-    /** A display as anyone may see it: its kinds and the owner's real counts. */
-    publicDisplay(pid: string) {
-      const have = collection(pid);
-      return displayOf(pid).map((k) => (k ? { kind: k, count: have[k] } : null));
+    /** A departed robot's cargo back on the floor (ADR 27): each artifact
+     * the visitor carries goes to the next of `spots`, ready at once. Each
+     * is released only from carried by its holder, so twice is once. */
+    releaseCargo(pid: string, now: number, spots: number[][]) {
+      return tx(() => {
+        const carried = db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[];
+        const out: { id: string; kind: string; pos: number[] }[] = [];
+        carried.forEach((r, i) => {
+          const pos = spots[i] ?? spots[spots.length - 1] ?? [HOMES[0][0], HOMES[0][1]];
+          const u = db
+            .prepare("UPDATE artifacts SET state = 'available', holder = NULL, picked_at = NULL, x = ?, y = ?, ready_at = ? WHERE id = ? AND state = 'carried' AND holder = ?")
+            .run(pos[0], pos[1], now, r.id, pid);
+          if (u.changes === 1) out.push({ id: r.id, kind: r.kind, pos });
+        });
+        return out;
+      });
     },
+    /** Everyone carrying anything right now. */
+    holders: () => (db.prepare("SELECT DISTINCT holder FROM artifacts WHERE state = 'carried' ORDER BY holder").all() as Row[]).map((r) => r.holder as string),
+    /** The directory (ADR 27): everyone who has arranged a display, present
+     * or not, newest change first, DIRECTORY_PAGE at a time. `before` is the
+     * cursor a page gave as `next`: "<changed_at>.<tag>". */
+    directory(before: string | null) {
+      let after: [number, string] | null = null;
+      if (before !== null) {
+        const m = /^(\d{1,15})\.([0-9a-f]{8})$/.exec(before);
+        if (!m) return fail(400, "bad-cursor", "before is a cursor from a page of the directory");
+        after = [Number(m[1]), m[2]];
+      }
+      const rows = db
+        .prepare(
+          `SELECT h.pid, h.display_changed_at AS at, v.tag FROM hall_players h JOIN visitors v ON v.pid = h.pid
+           WHERE h.display_changed_at IS NOT NULL AND EXISTS (SELECT 1 FROM display_slots d WHERE d.pid = h.pid)
+             AND (? IS NULL OR h.display_changed_at < ? OR (h.display_changed_at = ? AND v.tag < ?))
+           ORDER BY h.display_changed_at DESC, v.tag DESC LIMIT ?`,
+        )
+        .all(after?.[0] ?? null, after?.[0] ?? null, after?.[0] ?? null, after?.[1] ?? null, DIRECTORY_PAGE + 1) as Row[];
+      const page = rows.slice(0, DIRECTORY_PAGE);
+      const last = page[page.length - 1];
+      return {
+        ok: true as const,
+        entries: page.map((r) => ({ ...who(byPid(r.pid)!), display: publicDisplayOf(r.pid) })),
+        next: rows.length > DIRECTORY_PAGE && last ? `${last.at}.${last.tag}` : null,
+      };
+    },
+    /** A display as anyone may see it: its kinds and the owner's real counts. */
+    publicDisplay: (pid: string) => publicDisplayOf(pid),
 
     /** In their zone: everything the visitor carries becomes theirs. */
     deliver(pid: string, now: number) {
@@ -430,18 +484,27 @@ export function openStore(path: string) {
 
     displayOf,
     /** The visitor's display: DISPLAY_SLOTS entries, each null or a kind
-     * they own, each kind once. Replaces the whole layout at once. */
-    arrange(pid: string, slots: unknown) {
+     * they own, each kind once. Replaces the whole layout at once. `was`,
+     * when given, is the layout the change was made from: if that's no
+     * longer the display, the change is stale and refused. */
+    arrange(pid: string, slots: unknown, was?: unknown, now: number = Date.now()) {
       if (!Array.isArray(slots) || slots.length !== DISPLAY_SLOTS) return fail(400, "bad-display", `The display is ${DISPLAY_SLOTS} slots`);
       if (!slots.every((k) => k === null || (KINDS as string[]).includes(k))) return fail(400, "bad-display", "Each slot is empty or a kind of artifact");
       const kinds = slots.filter((k): k is string => k !== null);
       if (new Set(kinds).size !== kinds.length) return fail(400, "bad-display", "Each kind goes in one slot; its count shows there");
+      if (was !== undefined && (!Array.isArray(was) || was.length !== DISPLAY_SLOTS || !was.every((k) => k === null || (KINDS as string[]).includes(k))))
+        return fail(400, "bad-display", "was is the layout you changed, as the display's slots");
       return tx(() => {
+        const current = displayOf(pid);
+        if (was !== undefined && (was as unknown[]).some((k, i) => k !== current[i]))
+          return { ...fail(409, "stale-display", "Your display changed somewhere else; here it is now"), display: current };
         const have = collection(pid);
         const missing = kinds.find((k) => !have[k]);
         if (missing) return fail(409, "not-owned", `You haven't collected a ${missing} yet`);
         db.prepare("DELETE FROM display_slots WHERE pid = ?").run(pid);
         slots.forEach((k, i) => k && db.prepare("INSERT INTO display_slots (pid, slot, kind) VALUES (?, ?, ?)").run(pid, i + 1, k));
+        db.prepare(`INSERT INTO hall_players (pid, home, joined_at, display_changed_at) VALUES (?, (SELECT COUNT(*) FROM hall_players) % ${HOMES.length}, ?, ?)
+                    ON CONFLICT (pid) DO UPDATE SET display_changed_at = excluded.display_changed_at`).run(pid, now, now);
         return { ok: true as const, display: slots as (string | null)[] };
       });
     },
