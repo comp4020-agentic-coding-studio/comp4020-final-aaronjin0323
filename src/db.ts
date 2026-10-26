@@ -50,6 +50,13 @@ export const MIGRATIONS = [
    CREATE TABLE hall_players (pid TEXT PRIMARY KEY REFERENCES visitors(pid), home INTEGER NOT NULL, joined_at INTEGER NOT NULL);
    CREATE TABLE display_slots (pid TEXT NOT NULL REFERENCES visitors(pid), slot INTEGER NOT NULL CHECK (slot BETWEEN 1 AND 4),
      kind TEXT NOT NULL CHECK (kind IN ('fish', 'cloud', 'door')), PRIMARY KEY (pid, slot), UNIQUE (pid, kind));`,
+  // 3: knocks (ADR 26). A carried artifact can be knocked loose, back to
+  // available; it can be picked up only from ready_at. Deposited stays final.
+  `ALTER TABLE artifacts ADD COLUMN ready_at INTEGER NOT NULL DEFAULT 0;
+   DROP TRIGGER artifacts_one_way;
+   CREATE TRIGGER artifacts_one_way BEFORE UPDATE ON artifacts
+     WHEN NOT ((OLD.state = 'available' AND NEW.state = 'carried') OR (OLD.state = 'carried' AND NEW.state IN ('deposited', 'available')))
+     BEGIN SELECT RAISE(ABORT, 'an artifact goes available, carried, then deposited (or back to available by a knock)'); END;`,
 ];
 
 /**
@@ -180,6 +187,12 @@ export function openStore(path: string) {
   function collection(pid: string): Record<string, number> {
     const out: Record<string, number> = Object.fromEntries((KINDS as string[]).map((k) => [k, 0]));
     for (const r of db.prepare("SELECT kind, COUNT(*) AS c FROM artifacts WHERE state = 'deposited' AND owner = ? GROUP BY kind").all(pid) as Row[]) out[r.kind] = r.c;
+    return out;
+  }
+
+  function displayOf(pid: string): (string | null)[] {
+    const out: (string | null)[] = Array(DISPLAY_SLOTS).fill(null);
+    for (const r of db.prepare("SELECT slot, kind FROM display_slots WHERE pid = ?").all(pid) as Row[]) out[r.slot - 1] = r.kind;
     return out;
   }
 
@@ -377,18 +390,37 @@ export function openStore(path: string) {
         return added;
       });
     },
-    floor: () => (db.prepare("SELECT id, kind, x, y FROM artifacts WHERE state = 'available' ORDER BY spawned_at, id").all() as Row[]).map((r) => ({ id: r.id, kind: r.kind, pos: [r.x, r.y] })),
+    floor: () => (db.prepare("SELECT id, kind, x, y, ready_at FROM artifacts WHERE state = 'available' ORDER BY spawned_at, id").all() as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string, pos: [r.x, r.y], readyAt: r.ready_at as number })),
     cargo: (pid: string) => (db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string })),
 
     /** A touch: the artifact is the visitor's to carry if it's still
      * available and they carry fewer than CARRY_MAX. */
     pickUp(pid: string, id: string, now: number) {
       const r = db
-        .prepare(`UPDATE artifacts SET state = 'carried', holder = ?, picked_at = ? WHERE id = ? AND state = 'available'
+        .prepare(`UPDATE artifacts SET state = 'carried', holder = ?, picked_at = ? WHERE id = ? AND state = 'available' AND ready_at <= ?
                   AND (SELECT COUNT(*) FROM artifacts WHERE state = 'carried' AND holder = ?) < ?`)
-        .run(pid, now, id, pid, CARRY_MAX);
+        .run(pid, now, id, now, pid, CARRY_MAX);
       return { ok: true as const, picked: r.changes === 1 };
     },
+    /** A knock (ADR 26): the visitor's newest carried artifact goes back on
+     * the floor at `pos`, ready to pick up from `readyAt`. Null if they
+     * carry nothing. Delivered artifacts are never touched. */
+    knockLoose(pid: string, now: number, pos: number[], readyAt: number) {
+      return tx(() => {
+        const r = db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at DESC, id DESC LIMIT 1").get(pid) as Row | undefined;
+        if (!r) return null;
+        const u = db
+          .prepare("UPDATE artifacts SET state = 'available', holder = NULL, picked_at = NULL, x = ?, y = ?, ready_at = ? WHERE id = ? AND state = 'carried' AND holder = ?")
+          .run(pos[0], pos[1], readyAt, r.id, pid);
+        return u.changes === 1 ? { id: r.id as string, kind: r.kind as string } : null;
+      });
+    },
+    /** A display as anyone may see it: its kinds and the owner's real counts. */
+    publicDisplay(pid: string) {
+      const have = collection(pid);
+      return displayOf(pid).map((k) => (k ? { kind: k, count: have[k] } : null));
+    },
+
     /** In their zone: everything the visitor carries becomes theirs. */
     deliver(pid: string, now: number) {
       const r = db.prepare("UPDATE artifacts SET state = 'deposited', owner = holder, holder = NULL, deposited_at = ? WHERE state = 'carried' AND holder = ?").run(now, pid);
@@ -396,11 +428,7 @@ export function openStore(path: string) {
     },
     collection,
 
-    displayOf(pid: string): (string | null)[] {
-      const out: (string | null)[] = Array(DISPLAY_SLOTS).fill(null);
-      for (const r of db.prepare("SELECT slot, kind FROM display_slots WHERE pid = ?").all(pid) as Row[]) out[r.slot - 1] = r.kind;
-      return out;
-    },
+    displayOf,
     /** The visitor's display: DISPLAY_SLOTS entries, each null or a kind
      * they own, each kind once. Replaces the whole layout at once. */
     arrange(pid: string, slots: unknown) {

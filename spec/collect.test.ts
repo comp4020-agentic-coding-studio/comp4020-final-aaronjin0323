@@ -156,14 +156,16 @@ describe("one state at a time, held by the database itself", () => {
     s.deliver(a, T0);
     expect(raw(s, `UPDATE artifacts SET holder = '${a}' WHERE id = '${x.id}'`)).toThrow();
   });
-  test("only available → carried → deposited; a kept artifact never goes back and is never deleted", () => {
+  test("only available → carried → deposited, or carried → available (a knock, ADR 26); a kept artifact never goes back and is never deleted", () => {
     const { s, a } = fresh();
     s.fillFloor(T0);
     const [x, y] = s.floor();
     expect(raw(s, `UPDATE artifacts SET state = 'deposited', owner = '${a}' WHERE id = '${y.id}'`)).toThrow();
     s.pickUp(a, x.id, T0);
-    expect(raw(s, `UPDATE artifacts SET state = 'available', holder = NULL WHERE id = '${x.id}'`)).toThrow();
+    expect(raw(s, `UPDATE artifacts SET state = 'available', holder = NULL WHERE id = '${x.id}'`)).not.toThrow();
+    s.pickUp(a, x.id, T0);
     s.deliver(a, T0);
+    expect(raw(s, `UPDATE artifacts SET state = 'available', owner = NULL WHERE id = '${x.id}'`)).toThrow();
     expect(raw(s, `UPDATE artifacts SET state = 'carried', holder = '${a}', owner = NULL WHERE id = '${x.id}'`)).toThrow();
     expect(raw(s, `DELETE FROM artifacts WHERE id = '${x.id}'`)).toThrow();
     expect(s.collection(a)[x.kind]).toBe(1);
@@ -219,5 +221,63 @@ describe("kept on the volume", () => {
     expect(s.hallHome(a, T0)).toBe(home);
     expect(existsSync(path)).toBe(true);
     s.close();
+  });
+});
+
+// ADR 26: a knock takes one carried artifact; nothing delivered is ever touched
+describe("knocked loose", () => {
+  test("a knock drops the struck visitor's newest carried artifact where it's told, ready only later", () => {
+    const { s, a } = fresh();
+    s.fillFloor(T0);
+    const [x, y] = s.floor();
+    s.pickUp(a, x.id, T0);
+    s.pickUp(a, y.id, T0 + 20);
+    const k = s.knockLoose(a, T0 + 100, [3, 4], T0 + 1100);
+    expect(k).toEqual({ id: y.id, kind: y.kind });
+    expect(s.cargo(a).map((c: any) => c.id)).toEqual([x.id]);
+    expect(s.floor().find((f: any) => f.id === y.id)).toMatchObject({ pos: [3, 4], readyAt: T0 + 1100 });
+  });
+  test("a dropped artifact can't be picked up, by anyone, until it's ready", () => {
+    const { s, a, b } = fresh();
+    s.fillFloor(T0);
+    const [x] = s.floor();
+    s.pickUp(a, x.id, T0);
+    s.knockLoose(a, T0 + 100, [3, 4], T0 + 1100);
+    expect(ok(s.pickUp(b, x.id, T0 + 1099)).picked).toBe(false);
+    expect(ok(s.pickUp(a, x.id, T0 + 1099)).picked).toBe(false);
+    expect(ok(s.pickUp(b, x.id, T0 + 1100)).picked).toBe(true);
+  });
+  test("carrying nothing, nothing drops; nothing delivered is ever knocked loose", () => {
+    const { s, a } = fresh();
+    expect(s.knockLoose(a, T0, [3, 4], T0)).toBeNull();
+    own(s, a, "door", 2);
+    expect(s.knockLoose(a, T0, [3, 4], T0)).toBeNull();
+    expect(s.collection(a).door).toBe(2);
+  });
+  test("migration 3 keeps a version-2 file's artifacts, ready at once, after a copy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "museum-"));
+    const path = join(dir, "gallery.db");
+    const old = new DatabaseSync(path);
+    old.exec(MIGRATIONS[0]);
+    old.exec(MIGRATIONS[1]);
+    old.exec("PRAGMA user_version = 2");
+    old.prepare("INSERT INTO visitors (pid, tag, name, colour, created_at) VALUES ('p2', 'beef0002', 'Two Owl', 1, 1)").run();
+    old.prepare("INSERT INTO artifacts (id, kind, x, y, state, owner, spawned_at, deposited_at) VALUES ('kept-1', 'fish', 3, 3, 'deposited', 'p2', 1, 2)").run();
+    old.prepare("INSERT INTO artifacts (id, kind, x, y, state, spawned_at) VALUES ('free-1', 'cloud', 4.4, 4.3, 'available', 1)").run();
+    old.close();
+    const s: any = openStore(path);
+    expect(s.collection("p2").fish).toBe(1);
+    expect(s.floor().find((f: any) => f.id === "free-1")).toMatchObject({ readyAt: 0 });
+    expect(readdirSync(dir).filter((f) => /^gallery\.db\.before-v2-\d+$/.test(f)).length).toBe(1);
+    s.close();
+  });
+});
+
+describe("a display anyone can look at", () => {
+  test("is the owner's real layout, with their real counts, and nothing else of theirs", () => {
+    const { s, a } = fresh();
+    own(s, a, "cloud", 3);
+    ok(s.arrange(a, [null, "cloud", null, null]));
+    expect(s.publicDisplay(a)).toEqual([null, { kind: "cloud", count: 3 }, null, null]);
   });
 });
