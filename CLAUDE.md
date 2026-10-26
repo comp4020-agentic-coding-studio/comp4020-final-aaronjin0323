@@ -32,6 +32,110 @@ needs reading first. Work is credited and recoverable, so playing never
 costs anyone their creation. These are starting decisions: change them
 when evidence warrants it, with the reason recorded here and in an ADR.
 
+## Decisions
+
+Settled; change them here first, then in the code. The design is
+[ADR 21](docs/adr/0021-one-stage-one-toy.md), the stack
+[ADR 22](docs/adr/0022-stack.md).
+
+### Who is who
+
+- **A visitor is a cookie.** A new browser gets a random `pid` (UUID,
+  HttpOnly, `SameSite=Lax`, `Secure` in production, one year), and a
+  `visitors` row with a generated name ("Coral Heron") and a colour. Two
+  browser profiles are two visitors. No accounts.
+- **The pid never leaves the server.** Everyone else sees a visitor as
+  `{ tag, name, colour }`, `tag` being the first 8 hex of a SHA-256 of the
+  pid, in every payload and log line.
+- **A name is a label.** Rename to 1--24 characters after trimming;
+  anything else is a `400`, never truncated. Names may collide; colour and
+  tag tell people apart.
+
+### The room
+
+- **One round gallery: the stage in the middle, six plinths round it.**
+  The camera orbits: drag to turn, wheel or pinch to zoom. Clicking a
+  plinth flies to it; "Back to the stage" (and `Escape`) flies back.
+- **The toy is the Upside-down Fountain:** four balls that fall *up* to a
+  glass dome and bounce, and a bell hanging in the middle. Press a ball and
+  drag to flick it; let go and it flies the way you dragged. Click the bell
+  to ring it: it pushes nearby balls away. A ball hitting the bell rings it.
+- **Touch is direct.** The object under the pointer lights up and the
+  cursor says it's touchable; your own gesture plays on your screen at
+  once, before the server answers.
+- **Others are visible.** Each visitor's pointer shows in the room as a
+  small orb in their colour, with their name, while it's over the scene.
+  Pointers are in memory only: at most 10 a second sent per page, dropped
+  after 4 s, never stored.
+
+### The performance
+
+- **A performance is a 20 s loop of gestures.** A gesture is
+  `{ kind: "flick", ball, v: [x, y, z] }` or `{ kind: "ring" }`, at a
+  moment `at` (0 to 20 s). At most 30 in a loop and 10 from one visitor:
+  past 10 your own oldest drops, past 30 the oldest of all.
+- **What happens is a rule, not a record.** Every position at every
+  moment comes from the gestures alone, by a fixed 60 Hz step from rest
+  with no randomness (`simulate` in `public/fountain.js`, shared by the
+  server and the page). Every screen shows the same thing.
+- **Only arithmetic every engine rounds the same:** + − × ÷ and
+  `Math.sqrt` in `public/fountain.js`, never `sin`, `cos`, `pow`, `exp` or
+  `**`. Held by a source check in `spec/fountain.test.ts`.
+- **The loop comes round gently.** In the last 1 s every ball eases home,
+  so the wrap never jumps.
+- **The shared clock.** Each state event carries `serverTime`; the loop
+  moment is shared time modulo 20 s.
+- **Undo is yours alone:** it removes your own newest gesture.
+- **Start over archives.** The loop goes to "Cleared loops" (newest 10
+  shown, any can be brought back) and a silent one starts.
+
+### Exhibits
+
+- **Leave it** puts the stage's loop on a plinth: a title (1--40
+  characters) and either an empty plinth, a taken plinth (the page asks
+  first; the old exhibit goes to the storeroom), or a new version of an
+  exhibit. The loop stays on the stage.
+- **Versions are immutable**, each with its gestures, title, the visitors
+  who played in it and who left it. No route changes or deletes one, and a
+  trigger refuses `UPDATE` and `DELETE` on `versions`.
+- **Restore makes a new version** with an old one's performance.
+- **Join in** brings a version to the stage. If the stage has gestures the
+  page asks first, and the old loop is archived.
+- **Nothing published is deleted.** The storeroom holds exhibits off the
+  plinths with every version; any can go back on an empty plinth.
+
+### Live
+
+- **SSE with the whole state in every event**, on connect and after every
+  change, plus a 15 s heartbeat. Pointers go in a separate `pointers`
+  event.
+- **Presence is open streams.** The state lists who's here.
+- **Disconnected means watch-only.** The page keeps playing, disables
+  every control and says so, until the first state of a new connection.
+
+### The page
+
+- **Words for actions.** Buttons say what they do ("Leave it", "Join in",
+  "Undo"); no icon-only control.
+- **Every gesture also has a button** in the panel ("Flick teal", "Ring
+  the bell"), so the toy works from the keyboard and without WebGL.
+- **At 390x844** the scene is pinned on top and the panel scrolls under
+  it; nothing scrolls sideways.
+- **Every animation has a `prefers-reduced-motion` path.**
+
+## How to work in here
+
+- **Decide before code.** A change starts here (and as an ADR when there
+  were real alternatives), then the server and its tests, then the page,
+  in separate commits.
+- **Red first.** A check counts once it has been seen failing with the rule
+  broken.
+- Run `pnpm check` against a throwaway local server
+  (`DB_PATH=$(mktemp -d)/x.db PORT=8080 node src/server.ts`) before every
+  commit. Never commit red.
+- Look at the page at 1440x900 and 390x844 before calling a page change
+  done.
+
 ## Out of scope
 
 Bodies, faces or customisable avatars, chat, accounts and passwords,
