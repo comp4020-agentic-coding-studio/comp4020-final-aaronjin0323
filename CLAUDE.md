@@ -148,7 +148,8 @@ Settled; change them here first, then in the code. The design is
   server's snapshot.
 - **One rule, `public/hall.js`**, shared by the server and the page: every
   movement number lives there (hall size, robot radius, `LAUNCH_MAX`,
-  `PULL_MAX`, slowing down, wall bounce), and `advance` steps at 60 Hz with
+  `PULL_MAX`, slowing down, wall bounce), and `advance` steps at 50 Hz (20 ms,
+  so snapshot times stay whole milliseconds) with
   + − × ÷ and `Math.sqrt` only, held by a source check.
 - **A launch replaces the velocity**, at most `LAUNCH_MAX`, so repeated
   launches never add up. Robots slow to a stop and rebound off the walls,

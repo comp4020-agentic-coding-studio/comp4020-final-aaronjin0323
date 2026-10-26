@@ -24,7 +24,8 @@ in your colour, not customisable, and the hall is one more page.
   unchanged. Whether the hall replaces it later is still open.
 - **One shared rule, `public/hall.js`**, like the fountain's: every
   movement number, the launch check, and `advance`, which steps a robot at
-  a fixed 60 Hz with + − × ÷ and `Math.sqrt` only. The server and the page
+  a fixed 50 Hz (whole 20 ms steps, so advancing in hops lands exactly
+  where one advance does) with + − × ÷ and `Math.sqrt` only. The server and the page
   import the same file, so the same snapshot gives the same path on both.
 - **The server owns every robot.** It keeps each one as a snapshot:
   position, velocity and the server time they hold for. A client sends
