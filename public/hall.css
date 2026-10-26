@@ -37,6 +37,12 @@ body { background: #2b2747; min-height: 100svh; }
 .who::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
 .who:hover { background: rgba(255,255,255,.24); }
 .display .place { font-size: 0.8rem; color: var(--ink-soft); }
+.directory { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.directory li { color: var(--ink-soft); font-size: 0.9rem; }
+.directory .who { background: var(--ink); }
+.directory .none { font-style: italic; }
+.row { display: flex; gap: 8px; margin: 10px 0 0; }
+.row .close { margin-top: 0; }
 .close { margin-top: 10px; min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font: inherit; cursor: pointer; }
 .how, .here { color: #e6e0f2; font-size: 0.92rem; line-height: 1.4; margin: 6px 0 0; max-width: 70ch; }
 .here span { color: #fff; }

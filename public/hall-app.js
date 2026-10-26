@@ -4,9 +4,10 @@
 // hall.js; the page only predicts your own launch until the server's answer
 // arrives. What's carried and kept comes only from the server's stream.
 import { ARTIFACT_R, HALL, HOMES, KINDS, PAD_R, ROBOT_R, STEP_MS, advance, launch, path } from "./hall.js";
+import { hallConnectionMessage, welcomeWords } from "./hall-ui.js";
 import { KEY_AIM_START, KIND_NAMES, aimFromPull, aimWords, behind, cargoSlots, cargoWords, keyAim, launchOfKeyAim, newsWords, placeIn, readiness, shield, slotChoices, trust } from "./hall-ui.js";
 import { drawKind, kindIcon } from "./hall-draw.js";
-import { INITIAL_CONN, VISITOR_COLOURS, canPlay, connection, connectionMessage, retryDelay } from "./ui.js";
+import { INITIAL_CONN, VISITOR_COLOURS, canPlay, connection, retryDelay } from "./ui.js";
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $("[data-hall]");
@@ -38,7 +39,14 @@ const serverNow = () => Date.now() + offset;
 let tries = 0;
 function connect() {
   const es = new EventSource("/hall/events");
-  es.addEventListener("open", () => setConn(connection(conn, "open")));
+  es.addEventListener("open", () => {
+    setConn(connection(conn, "open"));
+    // a new stream: its first event is the whole hall; drop what we guessed
+    mine = null;
+    seq = 0;
+    corrections.clear();
+    cancelAim();
+  });
   es.addEventListener("hall", (e) => {
     tries = 0;
     const d = JSON.parse(e.data);
@@ -61,7 +69,7 @@ function connect() {
       corrections.set(r.tag, [c[0] + was[0] - is[0], c[1] + was[1] - is[1]]);
     }
     for (const n of d.news ?? []) {
-      flashes.push({ pos: n.pos, at: n.at });
+      if (n.kind === "knock") flashes.push({ pos: n.pos, at: n.at }); // only a knock happens somewhere
       showNews(newsWords(n, you.tag, (tag) => robots.find((r) => r.tag === tag)?.name ?? "Someone"));
     }
     artifacts = d.artifacts;
@@ -71,6 +79,10 @@ function connect() {
     renderPeople();
     renderCollecting(before2);
     renderTheirs();
+    if (d.mine.welcome) {
+      const w = welcomeWords(d.mine.welcome);
+      if (w) showNews(w);
+    }
   });
   es.addEventListener("error", () => {
     setConn(connection(conn, "error"));
@@ -81,7 +93,7 @@ function connect() {
 }
 function setConn(c) {
   conn = c;
-  const msg = connectionMessage(c);
+  const msg = hallConnectionMessage(c);
   const status = $("[data-status]");
   status.textContent = msg;
   status.hidden = !msg;
@@ -151,8 +163,10 @@ async function arrange(slot, kind) {
   for (const s of document.querySelectorAll("[data-display] select")) s.disabled = true;
   $("[data-display-error]").textContent = "";
   try {
-    const r = await fetch("/hall/display", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slots }) });
+    const r = await fetch("/hall/display", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slots, was: kept.display }) });
     const j = await r.json().catch(() => ({}));
+    // changed somewhere else since this page saw it: show what it is now
+    if (r.status === 409 && j.error === "stale-display") kept = { ...kept, display: j.display };
     if (!r.ok) throw new Error(j.message ?? "The display didn't change.");
     kept = { ...kept, display: j.display };
   } catch (e) {
@@ -208,12 +222,51 @@ $("[data-their-close]").addEventListener("click", () => {
   looking = null;
   renderTheirs();
 });
+// ---- the directory: everyone's display, present or not, a page at a time
+let directory = [];
+let directoryNext = null;
+async function loadDirectory(more = false) {
+  const q = more && directoryNext ? `?before=${encodeURIComponent(directoryNext)}` : "";
+  const d = await fetch(`/hall/displays${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!d) return;
+  directory = more ? [...directory, ...d.entries] : d.entries;
+  directoryNext = d.next;
+  renderDirectory();
+}
+function renderDirectory() {
+  const list = $("[data-directory]");
+  if (!directory.length) {
+    list.replaceChildren(Object.assign(document.createElement("li"), { className: "none", textContent: "Nobody has arranged a display yet." }));
+  } else {
+    list.replaceChildren(
+      ...directory.map((e) => {
+        const li = document.createElement("li");
+        const here = robots.some((r) => r.tag === e.tag);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "who";
+        b.dataset.look = e.tag;
+        b.style.setProperty("--c", colourOf(e.colour));
+        b.textContent = e.tag === you?.tag ? "Your display" : `${e.name}'s display`;
+        b.addEventListener("click", () => look(e.tag));
+        const kinds = e.display.filter(Boolean).map((d) => `${KIND_NAMES[d.kind]} ×${d.count}`).join(", ");
+        li.append(b, ` ${kinds}${here ? " · here now" : ""}`);
+        return li;
+      }),
+    );
+  }
+  $("[data-directory-more]").hidden = !directoryNext;
+}
+$("[data-directory-more]").addEventListener("click", () => loadDirectory(true));
+$("[data-directory-refresh]").addEventListener("click", () => loadDirectory(false));
+
 // someone else's display: read-only, live, from their real deliveries
 function renderTheirs() {
   const card = $("[data-their]");
   card.hidden = !looking;
   if (!looking) return;
-  const r = robots.find((x) => x.tag === looking);
+  // someone here now (live), or someone from the directory (as listed)
+  const r = robots.find((x) => x.tag === looking) ?? directory.find((x) => x.tag === looking);
   $("#their-h").textContent = r ? `${r.name}'s display` : "They've left the hall";
   $("[data-their-places]").replaceChildren(
     ...(r?.display ?? []).map((d, i) => {
@@ -255,12 +308,21 @@ function myNow() {
 async function fire(l) {
   const from = myNow();
   if (!from || !canPlay(conn)) return;
-  seq += 1;
+  seq = Math.max(seq, from.seq) + 1;
   const sent = { dir: l.dir, power: l.power, seq };
   mine = { ...launch(from, sent, serverNow()), tag: you.tag };
   try {
-    const r = await fetch("/hall/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message ?? "The hall didn't take that launch.");
+    let r = await fetch("/hall/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) });
+    let j = await r.json().catch(() => ({}));
+    if (r.status === 409 && j.error === "stale-launch") {
+      // another tab launched since: catch up with the robot, and send it once more
+      seq = j.robot.seq + 1;
+      sent.seq = seq;
+      mine = { ...launch(j.robot, sent, serverNow()), tag: you.tag };
+      r = await fetch("/hall/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) });
+      j = await r.json().catch(() => ({}));
+    }
+    if (!r.ok) throw new Error(j.message ?? "The hall didn't take that launch.");
   } catch (e) {
     mine = null; // the server's snapshot stands
     $("[data-aim]").textContent = e.message || "The hall didn't answer. Try again.";
@@ -312,8 +374,10 @@ function draw() {
       p[1] += c[1];
     }
     if (isMe && aim) drawAim(p);
+    if (r.away) g.globalAlpha = 0.35; // a ghost while its player reconnects, cargo and all
     drawCargo(p, advance(snapOf(r), now).vel, r.carrying ?? [], now);
-    drawRobot(p, colourOf(r.colour), r.name, isMe);
+    drawRobot(p, colourOf(r.colour), r.away ? `${r.name} (reconnecting)` : r.name, isMe);
+    g.globalAlpha = 1;
     drawShield(p, shield(r.protectedUntil ?? 0, now));
   }
   requestAnimationFrame(draw);
@@ -536,7 +600,7 @@ canvas.probe = () => {
     you: you?.tag ?? null,
     robots: robots.map((x) => {
       const p = shownAt(snapOf(x), now);
-      return { tag: x.tag, pos: p, ...at(p), speed: Math.hypot(...advance(snapOf(x), now).vel) };
+      return { tag: x.tag, pos: p, ...at(p), speed: Math.hypot(...advance(snapOf(x), now).vel), away: !!x.away, home: x.home };
     }),
     aim,
     metre: r.width / HALL.w,
@@ -550,4 +614,5 @@ canvas.probe = () => {
 };
 
 connect();
+loadDirectory();
 requestAnimationFrame(draw);
