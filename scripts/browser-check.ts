@@ -70,6 +70,20 @@ async function freshStage(page: Page, set = "orbit"): Promise<void> {
   await page.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 0, null, { timeout: 3000 }).catch(() => null);
 }
 
+/** Presses a gesture button the way a keyboard visitor does: it's out of
+ * sight until focused (ADR 19), so a mouse click would test a path no
+ * mouse visitor has. */
+async function press(page: Page, sel: string): Promise<void> {
+  await page.focus(sel);
+  await page.keyboard.press("Enter");
+}
+
+/** Picks a set from the card's set picker, opening it first (ADR 19). */
+async function pickSet(page: Page, id: string): Promise<void> {
+  if (!(await page.locator("[data-sets]").isVisible())) await page.click("[data-sets-open]");
+  await page.click(`[data-sets] [data-set="${id}"]`);
+}
+
 /** The stage as the scene shows it: each object on the canvas. */
 const stageOf = (page: Page) => page.evaluate(() => (document.querySelector("[data-scene]") as any).probe().stage);
 
@@ -239,7 +253,7 @@ async function realtime(browser: Browser): Promise<void> {
   const aName = ((await a.textContent("[data-you]")) ?? "").trim();
   const offer = (await b.getAttribute('[data-gesture="throw:gold"]', "aria-label")) ?? "";
   check(offer.includes(aName), "B sees that A holds the gold sphere, and can take it", offer);
-  await b.click('[data-gesture="throw:gold"]');
+  await press(b, '[data-gesture="throw:gold"]');
   await b.waitForTimeout(300);
   await a.mouse.up();
   await a.waitForFunction(() => !(document.querySelector("[data-toast]") as HTMLElement).hidden, null, { timeout: 3000 }).catch(() => null);
@@ -328,7 +342,7 @@ async function chain(browser: Browser): Promise<void> {
   // B plucks the ribbon once chrome rides it: it's flung off on A's screen
   await b.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().stage && /catch/.test(document.querySelector("[data-scene]")!.getAttribute("data-heard") ?? "x") , null, { timeout: 3000 }).catch(() => null);
   await a.waitForTimeout(200);
-  await b.click('[data-gesture="pluck:ribbon"]');
+  await press(b, '[data-gesture="pluck:ribbon"]');
   check(await heard(a, "fling", 4000), "another visitor's pluck flings it off, on the first visitor's screen");
   // Undo on A takes back A's throw, never B's pluck
   await a.click("[data-undo]");
@@ -345,8 +359,8 @@ async function publishing(browser: Browser): Promise<void> {
   const page = await visitor(browser);
   await freshStage(page);
   check(await page.locator("[data-publish-open]").isDisabled(), "a quiet stage has nothing to leave");
-  await page.click('[data-gesture="tap:bell"]');
-  await page.click('[data-gesture="pluck:ribbon"]');
+  await press(page, '[data-gesture="tap:bell"]');
+  await press(page, '[data-gesture="pluck:ribbon"]');
   await page.waitForFunction(() => !(document.querySelector("[data-publish-open]") as HTMLButtonElement).disabled, null, { timeout: 3000 }).catch(() => null);
   await page.click("[data-publish-open]");
   const suggested = await page.inputValue("#publish-title");
@@ -511,7 +525,7 @@ async function viewports(browser: Browser): Promise<void> {
     });
     // with something playing on the stage
     await freshStage(page);
-    await page.click('[data-gesture="tap:bell"]');
+    await press(page, '[data-gesture="tap:bell"]');
     await page.waitForTimeout(800);
     const sw = await page.evaluate(() => document.documentElement.scrollWidth);
     check(sw === width, `${name}: no sideways scroll`, `${sw}px`);
@@ -521,7 +535,10 @@ async function viewports(browser: Browser): Promise<void> {
       const seen = await page.evaluate(() => (window as unknown as { touchSeen: boolean[] }).touchSeen);
       check(seen.length > 0 && seen.every(Boolean), "phone: styled as a touch screen all through its screenshot", seen.join(" → "));
       // every gesture button is a comfortable thumb's width
+      await page.focus("[data-gestures] [data-gesture]");
+      await twoFrames(page);
       const narrow = await page.$$eval("[data-gesture]", (els) => els.filter((e) => e.getBoundingClientRect().width < 44).length);
+      await page.focus("[data-scene]");
       check(narrow === 0, "phone: every gesture button is at least 44px wide", `${narrow} narrower`);
       // the row shows colours and numbers; each button names its exhibit
       // in full for screen readers and on hover (ADR 13)
@@ -661,7 +678,7 @@ async function phoneEdit(browser: Browser): Promise<void> {
   const page = await visitor(browser, PHONE);
   await page.waitForFunction(() => typeof (document.querySelector("[data-scene]") as any)?.probe === "function", null, { timeout: 8000 });
   await freshStage(page);
-  await page.click('[data-gesture="tap:bell"]');
+  await press(page, '[data-gesture="tap:bell"]');
   const controls = await page.locator('[data-view="bench"] button').filter({ visible: true }).all();
   const misses: string[] = [];
   for (const c of controls) {
@@ -690,7 +707,7 @@ async function phoneEdit(browser: Browser): Promise<void> {
     }, await c.elementHandle());
     if (!r.sceneIn || !r.controlIn || !r.sculptureIn || r.pageScroll !== 0) misses.push(`${r.id}${r.sceneIn ? "" : " scene-off"}${r.sculptureIn ? "" : " sculpture-off"}${r.controlIn ? "" : " control-off"}${r.pageScroll ? ` page-scrolled ${r.pageScroll}` : ""}`);
   }
-  check(controls.length >= 9 && misses.length === 0, "every stage control is worked with the stage on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
+  check(controls.length >= 5 && misses.length === 0, "every stage control is worked with the stage on screen", misses.length ? misses.slice(0, 6).join("; ") : `${controls.length} controls`);
   // scrolling the panel, for longer than the idle drift waits, leaves the
   // camera where it was (with motion on: reduced motion stops the drift anyway)
   const yaw = async () => Number(await page.locator("[data-scene]").getAttribute("data-yaw"));
@@ -710,13 +727,14 @@ async function phoneEdit(browser: Browser): Promise<void> {
   const scrolled = await page.locator("#panel").evaluate((p) => p.scrollHeight > p.clientHeight);
   const yawAfter = await yaw();
   await page.emulateMedia({ reducedMotion: "reduce" });
-  check(Number.isFinite(yawBefore) && scrolled && Math.abs(yawAfter - yawBefore) < 0.005, "scrolling the controls never turns the scene", `yaw ${yawBefore} → ${yawAfter}`);
+  check(Number.isFinite(yawBefore) && Math.abs(yawAfter - yawBefore) < 0.005, "scrolling the controls never turns the scene", `yaw ${yawBefore} → ${yawAfter}${scrolled ? "" : ", the panel fits without scrolling"}`);
   // and a gesture's effect shows in the scene while its button is on screen
   const ring = page.locator('[data-gesture="throw:gold"]');
   await ring.scrollIntoViewIfNeeded();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   const before = await sphereAt(page, "gold");
-  await ring.click();
+  await ring.focus();
+  await page.keyboard.press("Enter");
   const moved = await page.waitForFunction((p0) => { const q = (document.querySelector("[data-scene]") as any).probe().stage.spheres.gold.pos; return Math.hypot(q[0] - p0[0], q[1] - p0[1], q[2] - p0[2]) > 0.1; }, before, { timeout: 3000 }).then(() => true, () => false);
   await page.emulateMedia({ reducedMotion: "reduce" });
   check(moved, "and a thrown sphere flies in view as its button is pressed");
@@ -866,8 +884,8 @@ async function explore(browser: Browser): Promise<void> {
     const cardH = (await card.boundingBox())?.height ?? 999;
     check(await card.isVisible(), `${label}: it opens on the stage card`);
     check(cardH <= (label === "phone" ? 330 : 360), `${label}: and the card is compact`, `${Math.round(cardH)}px`);
-    const gestures = await page.locator("[data-gesture]").evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length);
-    check(gestures === 6, `${label}: every gesture is on the first screen, no editor to open`, `${gestures} gestures`);
+    const gestures = await page.locator("[data-gesture]").evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility() && e.closest("[data-gestures]")!.getBoundingClientRect().width > 4).length);
+    check(gestures === 0, `${label}: no gesture buttons on screen: the room is the controls (ADR 19)`, `${gestures} gestures`);
     const panels = await page.locator('input[type="range"], details.fine-tune, [data-parts]').count();
     check(panels === 0, `${label}: no sliders or parameter panels anywhere`, String(panels));
     const title = await page.locator("#bench-h").evaluate((h) => ({ text: h.textContent ?? "", cut: h.scrollWidth > h.clientWidth + 1 || h.scrollHeight > h.clientHeight + 1 }));
@@ -879,6 +897,46 @@ async function explore(browser: Browser): Promise<void> {
     await page.waitForTimeout(300);
     check((await card.isVisible()) && (await page.evaluate(() => document.activeElement?.id === "bench-h")), `${label}: Escape comes back to the stage, focus on its heading`);
     await page.screenshot({ path: `.shots/explore-${label}.png` });
+    await page.context().close();
+  }
+}
+
+// The room is the controls (ADR 19): the card shows no gesture buttons
+// until one has keyboard focus, the set row waits behind its picker, and
+// aiming at an object says how to touch it and what that does.
+async function controls(browser: Browser): Promise<void> {
+  console.log("\n— the room is the controls (ADR 19) —");
+  for (const [label, opts] of [["desktop", DESKTOP], ["phone", PHONE]] as const) {
+    const page = await visitor(browser, opts);
+    await freshStage(page);
+    // the row is hidden as a group (clipped to a pixel), which a button's
+    // own box doesn't show: measure the row's box
+    const shown = () => page.locator("[data-gesture]").evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility() && e.closest("[data-gestures]")!.getBoundingClientRect().width > 4).length);
+    const all = await page.locator("[data-gesture]").count();
+    check(all > 0 && (await shown()) === 0, `${label}: no gesture button on screen`, `${await shown()} of ${all}`);
+    check(!(await page.locator("[data-sets]").isVisible()) && (await page.locator("[data-sets-open]").isVisible()), `${label}: the set row is closed behind its picker`);
+    await page.focus("[data-gestures] [data-gesture]");
+    await twoFrames(page);
+    check((await shown()) === all, `${label}: a focused gesture button shows the row`, `${await shown()} of ${all}`);
+    await page.focus("[data-scene]");
+    await twoFrames(page);
+    check((await shown()) === 0, `${label}: and it hides again when focus leaves`);
+    // walk up within reach and aim at a sphere: the hint says hold to throw
+    await walk(page, 900);
+    await page.evaluate(() => {
+      const c = document.querySelector("[data-scene]") as any;
+      const g = c.probe().stage.spheres.gold.pos;
+      c.lookAtPoint(g[0], g[1] + 0.66, g[2]);
+    });
+    await page.waitForFunction(() => (document.querySelector("[data-scene]") as any).probe().fp.reticle.id === "gold", null, { timeout: 3000 }).catch(() => null);
+    const hint = page.locator("[data-aim-hint]");
+    const text = (await hint.isVisible()) ? ((await hint.textContent()) ?? "").trim() : "";
+    check(text === "Hold to throw", `${label}: aiming at a sphere says how to touch it`, text || "no hint");
+    await page.screenshot({ path: `.shots/controls-${label}.png` });
+    // and aiming at nothing says nothing
+    await page.evaluate(() => (document.querySelector("[data-scene]") as any).lookAtPoint(0, 30, -40));
+    await page.waitForTimeout(300);
+    check(!(await hint.isVisible()), `${label}: aiming at the sky shows no hint`);
     await page.context().close();
   }
 }
@@ -1087,13 +1145,15 @@ async function setRow(browser: Browser): Promise<void> {
   const a = await visitor(browser);
   await freshStage(a);
   const ids: string[] = await a.evaluate(async () => Object.keys((await import("/stage.js" as string)).SETS));
-  const shown = await a.$eval("[data-sets]", (el) => getComputedStyle(el).display !== "none");
+  const picker = await a.locator("[data-sets-open]").isVisible();
   if (ids.length < 2) {
-    check(!shown, "with one set, no set row", ids.join(", "));
+    check(!picker, "with one set, no set picker", ids.join(", "));
     await a.context().close();
     return;
   }
-  check(shown, "with more than one set, the card has a set row", ids.join(", "));
+  check(picker && !(await a.locator("[data-sets]").isVisible()), "with more than one set, the card has a set picker, closed (ADR 19)", ids.join(", "));
+  await a.click("[data-sets-open]");
+  check(await a.locator("[data-sets]").isVisible(), "the picker opens the set row");
   const row = await a.$$eval("[data-sets] button", (els) => els.map((e) => ({ set: (e as HTMLElement).dataset.set, label: e.getAttribute("aria-label") ?? "", pressed: e.getAttribute("aria-pressed"), w: e.getBoundingClientRect().width, text: (e.textContent ?? "").trim() })));
   check(row.length === ids.length && row.every((r) => r.label.startsWith("Play the ") && r.w >= 44 && r.text === ""), "an icon button per set, named, no words on screen", row.map((r) => r.label).join(" | "));
   check(row.filter((r) => r.pressed === "true").map((r) => r.set).join() === "orbit", "the set playing is pressed");
@@ -1102,8 +1162,8 @@ async function setRow(browser: Browser): Promise<void> {
     // a loop with gestures: choosing another set asks, and archives it
     await post(a, "/stage/gesture", { gesture: { kind: "tap", object: "bell", at: 1 } });
     await a.waitForFunction(() => document.querySelectorAll("[data-loop-ticks] .tick").length === 1, null, { timeout: 3000 }).catch(() => null);
-    await a.click('[data-sets] [data-set="orbit"]');
-    await a.click(`[data-sets] [data-set="${id}"]`);
+    await pickSet(a, "orbit");
+    await pickSet(a, id);
     const asked = await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false);
     check(asked, `${id}: over a loop with gestures, it asks first`);
     if (asked) await a.click("[data-ask-yes]");
@@ -1115,7 +1175,7 @@ async function setRow(browser: Browser): Promise<void> {
     check(follows, `${id}: a second visitor's stage follows`);
     await a.screenshot({ path: `.shots/set-${id}.png` });
     // a silent loop switches straight back, no question
-    await a.click('[data-sets] [data-set="orbit"]');
+    await pickSet(a, "orbit");
     const back = await a.waitForFunction(() => document.querySelector('[data-sets] [data-set="orbit"]')?.getAttribute("aria-pressed") === "true", null, { timeout: 3000 }).then(() => true, () => false);
     check(back && !(await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open)), `${id}: a quiet loop goes back to Orbit without asking`);
   }
@@ -1134,7 +1194,7 @@ async function doorsSection(browser: Browser): Promise<void> {
   const b = await visitor(browser, motion);
   await freshStage(a);
   await b.click('[data-go="bench"]');
-  await a.click('[data-sets] [data-set="doors"]');
+  await pickSet(a, "doors");
   if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
   const onB = await b.waitForFunction(() => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === "doors", null, { timeout: 3000 }).then(() => true, () => false);
   check(onB, "doors: chosen from the set row, a second visitor's stage shows the doors");
@@ -1144,7 +1204,7 @@ async function doorsSection(browser: Browser): Promise<void> {
   // within a second and both screens see it pass through
   const from = await sphereAt(b, "apricot");
   const t0 = Date.now();
-  await a.click('[data-gesture="throw:apricot"]');
+  await press(a, '[data-gesture="throw:apricot"]');
   const seen = await movedFrom(b, "apricot", from, 1500, t0);
   check(seen >= 0 && seen <= 1000, "doors: a throw by button shows on a second visitor's screen within a second", `${seen} ms`);
   check(await heard(a, "exit", 3000), "doors: the ball goes in one door and comes out of the other (thrower's screen)");
@@ -1195,7 +1255,7 @@ async function seesaw(browser: Browser): Promise<void> {
   const b = await visitor(browser, motion);
   await freshStage(a);
   await b.click('[data-go="bench"]');
-  await a.click('[data-sets] [data-set="seesaw"]');
+  await pickSet(a, "seesaw");
   if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
   const want = "throw:pebble throw:stone throw:boulder nudge:plank";
   const got = await a.waitForFunction((w) => [...document.querySelectorAll("[data-gestures] [data-gesture]")].map((e) => (e as HTMLElement).dataset.gesture).join(" ") === w, want, { timeout: 3000 }).then(() => true, () => false);
@@ -1227,7 +1287,7 @@ async function seesaw(browser: Browser): Promise<void> {
   await a.waitForTimeout(1500);
   // by button: the big stone dropped on the high end launches what's there
   const boulderB = await sphereAt(b, "boulder");
-  await a.click('[data-gesture="throw:boulder"]');
+  await press(a, '[data-gesture="throw:boulder"]');
   const sent2 = Date.now();
   const seen = await movedFrom(b, "boulder", boulderB, 3000, sent2);
   check(seen >= 0 && seen < 1000, "B sees A's big stone dropped by button within a second", `${seen} ms`);
@@ -1292,7 +1352,7 @@ async function chimesSection(browser: Browser): Promise<void> {
   const b = await visitor(browser, motion);
   await freshStage(a);
   await b.click('[data-go="bench"]');
-  await a.click('[data-sets] [data-set="chimes"]');
+  await pickSet(a, "chimes");
   if (await a.locator("[data-ask]").evaluate((d) => (d as HTMLDialogElement).open).catch(() => false)) await a.click("[data-ask-yes]");
   const onB = await b.waitForFunction(() => (document.querySelector("[data-scene]") as any)?.probe?.().stage?.set === "chimes", null, { timeout: 3000 }).then(() => true, () => false);
   check(onB, "chimes: chosen from the set row, a second visitor's stage shows the chime tree");
@@ -1303,7 +1363,7 @@ async function chimesSection(browser: Browser): Promise<void> {
   // and both screens hear it strike and the chimes knock each other
   const from = await sphereAt(b, "striker");
   const t0 = Date.now();
-  await a.click('[data-gesture="throw:striker"]');
+  await press(a, '[data-gesture="throw:striker"]');
   const seen = await movedFrom(b, "striker", from, 1500, t0);
   check(seen >= 0 && seen <= 1000, "chimes: a striker swing by button shows on a second visitor's screen within a second", `${seen} ms`);
   check(await heard(b, "strike", 3000), "chimes: the striker strikes a chime on the second visitor's screen");
@@ -1450,6 +1510,7 @@ async function webkitSection(chrome: Browser): Promise<void> {
 const SECTIONS: Record<string, (b: Browser) => Promise<void>> = {
   firstVisit,
   explore,
+  controls,
   opening,
   look,
   focus,
