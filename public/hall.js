@@ -159,6 +159,16 @@ export function checkLaunch(x) {
 
 /** A robot standing still at `pos` from server time `t`. */
 export const standing = (pos, t, home) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0, home });
+// ---- leaving (ADR 27)
+/** How long a disconnected player's robot waits for them, in ms. */
+export const GRACE_MS = 10_000;
+/** The `n` free safe spots nearest `at`, none where an artifact already
+ * is (`taken`): where a departed robot's cargo goes back on the floor. */
+export function nearestFree(at, taken, n) {
+  const free = SPOTS.filter((p) => !taken.some((t) => dist(t, p) < 2 * ARTIFACT_R));
+  return free.sort((p, q) => dist(p, at) - dist(q, at)).slice(0, n);
+}
+
 /** The step a server time falls in: snapshot times sit on this grid. */
 export const onGrid = (t) => t - (t % STEP_MS);
 

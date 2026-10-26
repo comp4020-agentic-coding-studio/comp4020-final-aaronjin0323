@@ -312,6 +312,28 @@ describe("together: where a knocked artifact lands", () => {
   });
 });
 
+// ADR 27: leaving and coming back
+describe("leaving: the grace, and where cargo goes back", () => {
+  test("a brief grace", () => {
+    expect(H.GRACE_MS).toBe(10_000);
+  });
+  test("released cargo goes to the free safe spots nearest where the robot was, one each", () => {
+    const at: V2 = [7.9, 4.2];
+    const got = H.nearestFree(at, [], 3);
+    expect(got.length).toBe(3);
+    expect(new Set(got.map((p: V2) => p.join())).size).toBe(3);
+    for (const p of got) expect(H.SPOTS.some((q: V2) => q[0] === p[0] && q[1] === p[1])).toBe(true);
+    const far = (p: V2) => Math.hypot(p[0] - at[0], p[1] - at[1]);
+    const others = H.SPOTS.filter((q: V2) => !got.some((p: V2) => p[0] === q[0] && p[1] === q[1]));
+    expect(Math.max(...got.map(far))).toBeLessThanOrEqual(Math.min(...others.map(far)));
+  });
+  test("never on top of an artifact already there", () => {
+    const taken = [H.SPOTS[0], H.SPOTS[1]];
+    const got = H.nearestFree(H.SPOTS[0], taken, 2);
+    for (const p of got) expect(taken.some((t: V2) => t[0] === p[0] && t[1] === p[1])).toBe(false);
+  });
+});
+
 describe("the rule uses only arithmetic every engine rounds the same", () => {
   test("no Math.sin, cos, pow, exp, atan2, hypot, random, or ** in public/hall.js", () => {
     const src = readFileSync("public/hall.js", "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
