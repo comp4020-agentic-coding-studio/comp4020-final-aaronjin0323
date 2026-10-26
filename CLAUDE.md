@@ -177,7 +177,7 @@ a person as their tag.
   commit. Never commit red.
 - Look at the page at 1440x900 and 390x844 before calling a page change
   done: `node scripts/browser-check.ts` against the local app plays it as
-  two visitors (drag a ball, ring the bell, pointers, keyboard, Leave it,
+  two visitors (drag a ball, ring the bell, pointers, aim, keyboard, Leave it,
   no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
   isn't in CI, which has no Chrome.
 
