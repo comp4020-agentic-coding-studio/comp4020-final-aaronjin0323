@@ -21,8 +21,9 @@
       <canvas class="hall" data-hall tabindex="0" aria-describedby="how" aria-label="The hall, seen from above. Your robot is the one with the white ring."></canvas>
     </div>
     <p class="aim" data-aim aria-live="polite"></p>
-    <p class="how" id="how">Drag back from your robot and let go to launch it: the further you pull, the harder it goes. Or focus the hall and use the keys: left and right turn the aim, up and down change the power, Enter or Space launches, Escape cancels.</p>
-    <p class="here">Here now: <span data-here>just you</span></p>
+    <p class="news" data-news aria-live="polite"></p>
+    <p class="how" id="how">Drag back from your robot and let go to launch it: the further you pull, the harder it goes. Or focus the hall and use the keys: left and right turn the aim, up and down change the power, Enter or Space launches, Escape cancels. A fast hit knocks one carried artifact loose from whoever it strikes, but never near their own zone, and never what they've already kept. Other players' zones are closed to you.</p>
+    <p class="here">Here now: <span class="here-list" data-here>just you</span></p>
 
     <div class="cards" data-cards hidden>
       <section class="card" aria-labelledby="cargo-h">
@@ -34,6 +35,12 @@
       <section class="card" aria-labelledby="collection-h">
         <h2 id="collection-h">Your collection</h2>
         <ul class="collection" data-collection></ul>
+      </section>
+      <section class="card wide" data-their hidden aria-labelledby="their-h">
+        <h2 id="their-h" tabindex="-1"></h2>
+        <p class="note">What they've chosen to show, with how many of each they've kept. You can look, not change.</p>
+        <ol class="display" data-their-places></ol>
+        <button type="button" class="close" data-their-close>Close</button>
       </section>
       <section class="card wide" aria-labelledby="display-h">
         <h2 id="display-h">Your display</h2>

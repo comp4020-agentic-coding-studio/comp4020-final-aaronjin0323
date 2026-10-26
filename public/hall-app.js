@@ -4,7 +4,7 @@
 // hall.js; the page only predicts your own launch until the server's answer
 // arrives. What's carried and kept comes only from the server's stream.
 import { ARTIFACT_R, HALL, HOMES, KINDS, PAD_R, ROBOT_R, STEP_MS, advance, launch, path } from "./hall.js";
-import { KEY_AIM_START, KIND_NAMES, aimFromPull, aimWords, behind, cargoSlots, cargoWords, keyAim, launchOfKeyAim, placeIn, slotChoices, trust } from "./hall-ui.js";
+import { KEY_AIM_START, KIND_NAMES, aimFromPull, aimWords, behind, cargoSlots, cargoWords, keyAim, launchOfKeyAim, newsWords, placeIn, readiness, shield, slotChoices, trust } from "./hall-ui.js";
 import { drawKind, kindIcon } from "./hall-draw.js";
 import { INITIAL_CONN, VISITOR_COLOURS, canPlay, connection, connectionMessage, retryDelay } from "./ui.js";
 
@@ -26,7 +26,12 @@ let aim = null; // { dir, power } while aiming
 let keyAiming = null; // { angle, power } while aiming by keys
 let lastKeyAim = KEY_AIM_START; // keys start from the last shot, so Enter again repeats it
 let pull = null; // the pointer, in hall metres, while dragging
-let correction = [0, 0]; // eased away when the server's snapshot differs from the prediction
+// where each robot was drawn minus where its new snapshot puts it, eased
+// away, so a robot never jumps when the server's word changes its path
+const corrections = new Map();
+let flashes = []; // knocks: where, and when (server ms)
+let looking = null; // the tag of the player whose display is open
+let newsUntil = 0;
 const serverNow = () => Date.now() + offset;
 
 // ---- the stream; a refused one is opened again, backing off (as on the stage)
@@ -39,18 +44,25 @@ function connect() {
     const d = JSON.parse(e.data);
     offset = d.serverTime - Date.now();
     you = d.you;
-    const before = myShown();
+    const now = serverNow();
+    const before = new Map(robots.map((r) => [r.tag, shownAt(snapOf(r), now)]));
     robots = d.robots;
     const server = robots.find((r) => r.tag === you.tag);
     if (server) {
       seq = Math.max(seq, server.seq);
-      const next = trust(mine, server);
-      if (next === server && mine) {
-        // the server's word on your launch: ease from where you saw it
-        mine = null;
-        const after = myShown();
-        if (before && after) correction = [before[0] - after[0] + correction[0], before[1] - after[1] + correction[1]];
-      }
+      if (trust(mine, server) === server) mine = null; // the server's word on your launch
+    }
+    // every robot whose path changed eases from where it was drawn
+    for (const r of robots) {
+      const was = before.get(r.tag);
+      if (!was) continue;
+      const is = shownAt(snapOf(r), now);
+      const c = corrections.get(r.tag) ?? [0, 0];
+      corrections.set(r.tag, [c[0] + was[0] - is[0], c[1] + was[1] - is[1]]);
+    }
+    for (const n of d.news ?? []) {
+      flashes.push({ pos: n.pos, at: n.at });
+      showNews(newsWords(n, you.tag, (tag) => robots.find((r) => r.tag === tag)?.name ?? "Someone"));
     }
     artifacts = d.artifacts;
     const before2 = kept;
@@ -58,6 +70,7 @@ function connect() {
     setConn(connection(conn, "state"));
     renderPeople();
     renderCollecting(before2);
+    renderTheirs();
   });
   es.addEventListener("error", () => {
     setConn(connection(conn, "error"));
@@ -149,12 +162,73 @@ async function arrange(slot, kind) {
   renderDisplay();
 }
 
+function showNews(text) {
+  $("[data-news]").textContent = text;
+  newsUntil = Date.now() + 6000;
+}
+setInterval(() => {
+  if (newsUntil && Date.now() > newsUntil) {
+    newsUntil = 0;
+    $("[data-news]").textContent = "";
+  }
+}, 500);
+
+// who's here: everyone else with the hall open, each with their display to look at
+let hereKey = "";
 function renderPeople() {
   $("[data-you]").hidden = false;
   $("[data-you-name]").textContent = you.name;
   $("[data-you-dot]").style.setProperty("--c", colourOf(you.colour));
-  const others = robots.filter((r) => r.tag !== you.tag).map((r) => r.name);
-  $("[data-here]").textContent = others.length ? others.join(", ") : "just you";
+  const others = robots.filter((r) => r.tag !== you.tag);
+  const key = others.map((r) => `${r.tag}:${r.name}:${r.colour}`).join();
+  if (key === hereKey) return;
+  hereKey = key;
+  const list = $("[data-here]");
+  if (!others.length) return list.replaceChildren("just you");
+  list.replaceChildren(
+    ...others.map((r) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "who";
+      b.dataset.look = r.tag;
+      b.style.setProperty("--c", colourOf(r.colour));
+      b.textContent = `${r.name}'s display`;
+      b.addEventListener("click", () => look(r.tag));
+      return b;
+    }),
+  );
+}
+function look(tag) {
+  looking = tag;
+  renderTheirs();
+  $("[data-their]").scrollIntoView({ block: "nearest" });
+  $("#their-h").focus();
+}
+$("[data-their-close]").addEventListener("click", () => {
+  looking = null;
+  renderTheirs();
+});
+// someone else's display: read-only, live, from their real deliveries
+function renderTheirs() {
+  const card = $("[data-their]");
+  card.hidden = !looking;
+  if (!looking) return;
+  const r = robots.find((x) => x.tag === looking);
+  $("#their-h").textContent = r ? `${r.name}'s display` : "They've left the hall";
+  $("[data-their-places]").replaceChildren(
+    ...(r?.display ?? []).map((d, i) => {
+      const li = document.createElement("li");
+      if (d) li.dataset.full = "";
+      const what = document.createElement("span");
+      what.className = "what";
+      what.textContent = d ? `${KIND_NAMES[d.kind][0].toUpperCase() + KIND_NAMES[d.kind].slice(1)} ×${d.count}` : "Empty";
+      const place = document.createElement("span");
+      place.className = "place";
+      place.textContent = `Place ${i + 1}`;
+      li.append(d ? kindIcon(d.kind, 44) : document.createElement("span"), what, place);
+      return li;
+    }),
+  );
 }
 
 // ---- where robots are: snapshots advanced on the shared clock, between steps smoothly
@@ -220,40 +294,85 @@ function draw() {
   g.lineWidth = 4;
   g.strokeRect(2, 2, px(HALL.w) - 4, px(HALL.h) - 4);
   drawZones();
-  for (const a of artifacts) drawKind(g, a.kind, px(a.pos[0]), px(a.pos[1]), px(ARTIFACT_R) * 1.15, reducedMotion.matches ? 0 : now / 1000);
+  for (const a of artifacts) drawArtifact(a, now);
+  drawFlashes(now);
 
-  // the difference from a prediction eases out, or goes at once with reduced motion
+  // corrections ease out, or go at once with reduced motion
   const keep = reducedMotion.matches ? 0 : 0.85;
-  correction = [correction[0] * keep, correction[1] * keep];
+  for (const [tag, c] of corrections) {
+    if (!robots.some((r) => r.tag === tag) || Math.hypot(c[0], c[1]) < 1e-3) corrections.delete(tag);
+    else corrections.set(tag, [c[0] * keep, c[1] * keep]);
+  }
   for (const r of robots) {
     const isMe = r.tag === you?.tag;
     const p = shownAt(snapOf(r), now);
-    if (isMe) {
-      p[0] += correction[0];
-      p[1] += correction[1];
+    const c = corrections.get(r.tag);
+    if (c) {
+      p[0] += c[0];
+      p[1] += c[1];
     }
     if (isMe && aim) drawAim(p);
     drawCargo(p, advance(snapOf(r), now).vel, r.carrying ?? [], now);
     drawRobot(p, colourOf(r.colour), r.name, isMe);
+    drawShield(p, shield(r.protectedUntil ?? 0, now));
   }
   requestAnimationFrame(draw);
 }
-// delivery zones: every pad faint and dashed; yours solid in your colour
-// (the panel says so in words; a label here would sit under the robot)
+// delivery zones: yours solid in your colour; another player's in theirs,
+// closed to you; nobody's, faint and dashed (the panel says so in words)
 function drawZones() {
   const myHome = kept?.home;
   HOMES.forEach((h, i) => {
     const mine = i === myHome;
+    const owner = mine ? null : robots.find((r) => r.tag !== you?.tag && r.home === i);
+    const c = mine ? colourOf(you?.colour) : owner ? colourOf(owner.colour) : null;
     g.beginPath();
     g.arc(px(h[0]), px(h[1]), px(PAD_R), 0, Math.PI * 2);
-    g.fillStyle = mine ? `${colourOf(you?.colour)}66` : "rgba(185,169,143,.18)";
+    g.fillStyle = mine ? `${c}66` : owner ? `${c}33` : "rgba(185,169,143,.18)";
     g.fill();
-    g.setLineDash(mine ? [] : [4, 4]);
-    g.strokeStyle = mine ? colourOf(you?.colour) : "rgba(185,169,143,.6)";
-    g.lineWidth = mine ? 4 : 1.5;
+    g.setLineDash(mine ? [] : owner ? [8, 4] : [4, 4]);
+    g.strokeStyle = c ?? "rgba(185,169,143,.6)";
+    g.lineWidth = mine ? 4 : owner ? 3 : 1.5;
     g.stroke();
     g.setLineDash([]);
   });
+}
+// an artifact: faded with a ring filling while it can't be taken yet
+function drawArtifact(a, now) {
+  const x = px(a.pos[0]), y = px(a.pos[1]);
+  const ready = readiness(a.readyAt ?? 0, now);
+  g.globalAlpha = ready < 1 ? 0.4 + 0.4 * ready : 1;
+  drawKind(g, a.kind, x, y, px(ARTIFACT_R) * 1.15, reducedMotion.matches ? 0 : now / 1000);
+  g.globalAlpha = 1;
+  if (ready >= 1) return;
+  g.beginPath();
+  g.arc(x, y, px(ARTIFACT_R) + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ready);
+  g.strokeStyle = "#26223d";
+  g.lineWidth = 2.5;
+  g.stroke();
+}
+// a knock: a ring opening out where it happened
+function drawFlashes(now) {
+  flashes = flashes.filter((f) => now - f.at < 700);
+  for (const f of flashes) {
+    const k = (now - f.at) / 700;
+    g.beginPath();
+    g.arc(px(f.pos[0]), px(f.pos[1]), px(ARTIFACT_R) + (reducedMotion.matches ? 10 : 30 * k), 0, Math.PI * 2);
+    g.strokeStyle = `rgba(217,96,74,${1 - k})`;
+    g.lineWidth = 3;
+    g.stroke();
+  }
+}
+// a shield round a robot that just dropped one: strong, then fading away
+function drawShield(p, strength) {
+  if (strength <= 0) return;
+  g.beginPath();
+  g.arc(px(p[0]), px(p[1]), px(ROBOT_R) + 14, 0, Math.PI * 2);
+  g.setLineDash([6, 4]);
+  g.strokeStyle = `rgba(79,134,198,${0.25 + 0.75 * strength})`;
+  g.lineWidth = 3;
+  g.stroke();
+  g.setLineDash([]);
 }
 // cargo trails behind a robot: what it carries, then rings for the room left
 function drawCargo(p, vel, carrying, now) {
@@ -344,7 +463,13 @@ const nearMe = (q) => {
 canvas.addEventListener("pointerdown", (e) => {
   if (!canPlay(conn) || dragging !== null) return;
   const q = toHall(e);
-  if (!nearMe(q)) return;
+  if (!nearMe(q)) {
+    // someone else's robot: look at their display
+    const now = serverNow();
+    const other = robots.find((r) => r.tag !== you?.tag && Math.hypot(q[0] - shownAt(snapOf(r), now)[0], q[1] - shownAt(snapOf(r), now)[1]) <= ROBOT_R * 1.4);
+    if (other) look(other.tag);
+    return;
+  }
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
   dragging = e.pointerId;
@@ -417,6 +542,8 @@ canvas.probe = () => {
     metre: r.width / HALL.w,
     artifacts: artifacts.map((a) => ({ ...a, ...at(a.pos) })),
     carrying: robots.find((x) => x.tag === you?.tag)?.carrying ?? [],
+    shields: Object.fromEntries(robots.map((x) => [x.tag, shield(x.protectedUntil ?? 0, now)])),
+    looking,
     kept,
     home: kept ? { pos: HOMES[kept.home], ...at(HOMES[kept.home]) } : null,
   };
