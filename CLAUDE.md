@@ -211,7 +211,8 @@ words are labels. Read `docs/adr/0013-show-dont-tell.md`.
   an accessible name and on hover/focus.
 - **Icons and colour over sentences.** Every action button is an icon with
   an accessible name and a tooltip; only the doors keep a word: Leave it,
-  Join in, Undo, Gallery. Who you are is your coloured dot; who's here is a
+  Join in, Undo, Gallery. The words for touching an object are the
+  reticle's hint (ADR 19), not the panel's. Who you are is your coloured dot; who's here is a
   row of dots; what someone holds wears their colour ring.
 - **No parameter panels.** Nothing on the stage is set with a slider or a
   number field. Objects are changed by touching them.
@@ -229,8 +230,13 @@ words are labels. Read `docs/adr/0013-show-dont-tell.md`.
   what's selected: the stage (its credits, Undo, Leave it) or a plinth (its
   title, credits, versions, Join in). No editor to open: touching an object
   on the stage is playing.
-- **The gesture buttons sit on the stage card**, one per object (throw
-  each sphere, pluck, ring), in tab order, each an ordinary gesture.
+- **The gesture buttons are on the stage card but out of sight** (ADR 19),
+  one per object, in tab order, each an ordinary gesture. They're visually
+  hidden until one has keyboard focus, when the row shows; without WebGL
+  they always show. The card on screen is the title, credits, sound, the
+  loop strip, Leave it, Undo, Start over and a set-picker button that
+  opens the set row (closed by default). Held by the browser check's
+  `controls` section.
 - **Escape and the Gallery button** return to the stage view, focus on
   the card's heading.
 
@@ -252,8 +258,14 @@ Read `docs/adr/0017-first-person.md`.
   sends a `poses` event to every stream at most 10 a second; a pose older
   than 5 s is dropped. Poses never reach the database or the `state` event.
   Held by `spec/poses.test.ts`.
-- **Every gesture keeps its button** in the panel, so playing never needs
-  walking. "Back to the stage" walks you back to your starting spot;
+- **The room teaches the controls (ADR 19).** When the reticle rests on
+  something, a hint beside it says how and what, in at most four words:
+  "Hold to throw", "Click to ring", "Let go to throw" while holding, "Tap"
+  on a touch screen. The verb is the set view's (`verb` on each button);
+  the wording is `aimHint` in `public/ui-logic.js`, held by
+  `spec/ui-logic.test.ts`.
+- **Every gesture keeps its button** in the panel (hidden until focused),
+  so playing never needs walking. "Back to the stage" walks you back to your starting spot;
   choosing a plinth from the row walks you in front of it.
 
 ### Phone and keyboard
