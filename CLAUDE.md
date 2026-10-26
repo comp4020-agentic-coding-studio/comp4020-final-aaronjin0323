@@ -39,7 +39,8 @@ Settled; change them here first, then in the code. The design is
 [ADR 22](docs/adr/0022-stack.md), seeing each other play
 [ADR 23](docs/adr/0023-aim-and-whose-ball.md), the hall
 [ADR 24](docs/adr/0024-the-hall-and-the-robot.md), collecting
-[ADR 25](docs/adr/0025-collecting-artifacts.md).
+[ADR 25](docs/adr/0025-collecting-artifacts.md), playing together
+[ADR 26](docs/adr/0026-playing-together-in-the-hall.md).
 
 ### Who is who
 
@@ -163,6 +164,29 @@ Settled; change them here first, then in the code. The design is
 - **Robots are presence:** in memory while a hall stream is open, never
   stored. What they carry and what's been collected is stored (below).
 
+### Together in the hall
+
+- **One clock for every robot** ([ADR 26](docs/adr/0026-playing-together-in-the-hall.md)):
+  snapshot times sit on a shared 20 ms grid and the tick steps every
+  robot together. Changes go out on the step they happen, so other
+  sessions see them well within a second; screens ease any correction.
+- **Robots bounce off each other** as equal masses. A **knock** needs a
+  closing speed of at least `KNOCK_SPEED`; the struck robot is the one
+  clearly (`KNOCK_CLEAR`) moving less towards the other, and a tie drops
+  nothing. The struck robot drops its newest carried artifact just
+  beyond it, away from the striker, unless it carries nothing, is
+  protected, or is within `SAFE_R` of its own zone. Strikers never drop.
+- **A dropped artifact waits `PICKUP_DELAY_MS`** before anyone can pick it
+  up (faded, a ring filling); **the robot that dropped it is protected
+  `DROP_PROTECT_MS`** (a fading shield). No numbers counting down.
+- **Zones are fair:** all drawn, yours solid in your colour, others' in
+  theirs; a zone that isn't yours is solid to your robot (in the shared
+  rule), and nothing is knocked loose near its owner's zone.
+- **Deposited is final**: no route, rule or trigger takes it back.
+- **Displays are public, read-only**: each robot carries its owner's real
+  display; "Here now" has a button to look at each. Only people with the
+  hall open appear; nobody is invented, and alone it plays the same.
+
 ### Collecting
 
 - **Three kinds of artifact, one set of rules** ([ADR 25](docs/adr/0025-collecting-artifacts.md)):
@@ -170,7 +194,7 @@ Settled; change them here first, then in the code. The design is
 - **Six available at a time**, in safe public spots (a fixed list in
   `public/hall.js`: inside the walls, clear of every delivery zone and of
   each other), topped up whenever one is picked up. Each has a UUID.
-- **Touching one collects it**, up to three carried. The server sees the
+- **Touching one collects it** once it's ready, up to three carried. The server sees the
   touch: a 50 ms tick walks each moving robot along its 20 ms steps
   against the artifacts. Pages never send a pickup, a deposit, a player ID
   or a count.
@@ -258,7 +282,8 @@ uploaded assets, runtime AI models, a physics library, VR, an infinite
 world, sliders or parameter panels, more rooms than the stage and the
 hall, leaderboards, rate limiting; puzzles, and goals beyond the
 collection loop the student asked for (ADR 25); in the hall, for now,
-trading, upgrades, combat, rounds, countdowns, expiry and decoration.
+trading, upgrades, elimination or combat upgrades (knocks, ADR 26, are
+the only contest), rounds, countdowns, expiry and decoration.
 
 ## The live museum is not a test fixture
 
