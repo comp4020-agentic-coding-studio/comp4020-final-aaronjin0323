@@ -2,11 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>The hall · Impossible Museum</title>
+  <meta name="description" content="A small top-down hall where every visitor has a round robot: drag back from yours and let go to launch it.">
+  <meta name="theme-color" content="#2b2747">
+  <link rel="stylesheet" href="/hall.css">
+  <script type="module" src="/hall-app.js"></script>
 </head>
 <body>
-  <h1>The hall</h1>
-  <canvas data-hall width="800" height="500"></canvas>
+  <header class="bar">
+    <h1>The hall</h1>
+    <p class="you" data-you hidden><span class="dot" data-you-dot aria-hidden="true"></span> You are <strong data-you-name></strong></p>
+    <a class="back" href="/">Back to the stage</a>
+  </header>
+  <main class="wrap">
+    <p class="status" data-status role="status" hidden></p>
+    <div class="frame">
+      <canvas class="hall" data-hall tabindex="0" aria-describedby="how" aria-label="The hall, seen from above. Your robot is the one with the white ring."></canvas>
+    </div>
+    <p class="aim" data-aim aria-live="polite"></p>
+    <p class="how" id="how">Drag back from your robot and let go to launch it: the further you pull, the harder it goes. Or focus the hall and use the keys: left and right turn the aim, up and down change the power, Enter or Space launches, Escape cancels.</p>
+    <p class="here">Here now: <span data-here>just you</span></p>
+    <noscript><p>The hall needs JavaScript.</p></noscript>
+  </main>
 </body>
 </html>
