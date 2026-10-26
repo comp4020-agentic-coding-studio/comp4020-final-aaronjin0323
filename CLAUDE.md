@@ -36,7 +36,8 @@ when evidence warrants it, with the reason recorded here and in an ADR.
 
 Settled; change them here first, then in the code. The design is
 [ADR 21](docs/adr/0021-one-stage-one-toy.md), the stack
-[ADR 22](docs/adr/0022-stack.md).
+[ADR 22](docs/adr/0022-stack.md), seeing each other play
+[ADR 23](docs/adr/0023-aim-and-whose-ball.md).
 
 ### Who is who
 
@@ -67,6 +68,10 @@ Settled; change them here first, then in the code. The design is
   small orb in their colour, with their name, while it's over the scene.
   Pointers are in memory only: at most 10 a second sent per page, dropped
   after 4 s, never stored.
+- **Aim is live** ([ADR 23](docs/adr/0023-aim-and-whose-ball.md)). While
+  someone drags a ball, everyone else sees a line in their colour from it,
+  the way it will go, and a halo round it. The aim rides on the pointer
+  and is held the same way: in memory only, checked like a flick.
 
 ### The performance
 
@@ -81,6 +86,12 @@ Settled; change them here first, then in the code. The design is
 - **Only arithmetic every engine rounds the same:** + − × ÷ and
   `Math.sqrt` in `public/fountain.js`, never `sin`, `cos`, `pow`, `exp` or
   `**`. Held by a source check in `spec/fountain.test.ts`.
+- **A ball carries who last moved it** (ADR 23). A flick makes it yours,
+  a ring makes every ball it pushes the ringer's, and a ball that knocks
+  another passes its mover on; a ring by a ball is credited to that
+  mover. For 1.5 s after, the ball trails and glows in their colour, and
+  the stage card says the latest chain in words. Part of the rule, so it
+  changes no position.
 - **The loop comes round gently.** In the last 1 s every ball eases home,
   so the wrap never jumps.
 - **The shared clock.** Each state event carries `serverTime`; the loop
@@ -138,7 +149,7 @@ is the whole museum plus `you` and `serverTime`.
 | `GET /exhibits/:id` | | every version, newest first | `404` |
 | `GET /archive?before=<id>` | | the next 10 cleared loops older than `id` | `400` |
 | `POST /me` | `{ name }` | rename | `400` |
-| `POST /pointer` | `{ p: [x, y, z] \| null }` | where your pointer is in the room, in memory only | `400` |
+| `POST /pointer` | `{ p: [x, y, z] \| null, aim?: { ball, v } }` | where your pointer is in the room, and the flick you're aiming, in memory only | `400` |
 | `POST /stage/gesture` | `{ gesture }` | add a gesture | `400` |
 | `POST /stage/undo` | | remove your newest gesture | `409 nothing-to-undo` |
 | `POST /stage/clear` | | archive the loop, start a silent one | `409 stage-empty` |
