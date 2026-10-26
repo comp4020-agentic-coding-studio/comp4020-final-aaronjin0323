@@ -316,6 +316,7 @@ async function hall(browser: Browser) {
 /** Drags your robot to launch so its path passes `ok`: the pull worked
  * out by the same rule the server runs. False if no launch from here does. */
 async function dragToward(page: Page, target: number[], ok: (p: number[]) => boolean): Promise<boolean> {
+  await page.evaluate(() => scrollTo(0, 0)); // the hall in view, whatever was opened below it
   await settled(page);
   const pr = await hallProbe(page);
   const me = meIn(pr);
@@ -391,6 +392,85 @@ async function collect(browser: Browser) {
   await b.context().close();
 }
 
+/** Drags your robot straight at `target` at `power`. */
+async function fling(page: Page, target: number[], power: number) {
+  await page.evaluate(() => scrollTo(0, 0));
+  await settled(page);
+  const pr = await hallProbe(page);
+  const me = meIn(pr);
+  const dx = target[0] - me.pos[0], dy = target[1] - me.pos[1];
+  const len = Math.hypot(dx, dy);
+  const pull = power * H.PULL_MAX;
+  await page.mouse.move(me.x, me.y);
+  await page.mouse.down();
+  await page.mouse.move(me.x - (dx / len) * pull * pr.metre, me.y - (dy / len) * pull * pr.metre, { steps: 6 });
+  await page.mouse.up();
+}
+
+async function together(browser: Browser) {
+  console.log("\n— together: real displays to look at, and a fast hit knocks one loose (ADR 26) —");
+  const a = await hallVisitor(browser);
+  const b = await hallVisitor(browser);
+  const ta = (await hallProbe(a)).you, tb = (await hallProbe(b)).you;
+  // a collects one and shows it
+  const pa = await hallProbe(a);
+  const mineA = meIn(pa).pos;
+  const near = (pr: any, from: number[]) => [...pr.artifacts].filter((x: any) => x.readyAt <= Date.now() + 5e9).sort((p: any, q: any) => Math.hypot(p.pos[0] - from[0], p.pos[1] - from[1]) - Math.hypot(q.pos[0] - from[0], q.pos[1] - from[1]))[0];
+  const ta1 = near(pa, mineA);
+  await reach(a, ta1.pos, (p) => H.touches(p, ta1.pos));
+  await a.waitForFunction(() => (document.querySelector("[data-hall]") as any).probe().carrying.length > 0, null, { timeout: 5000 });
+  const homeA = (await hallProbe(a)).home.pos;
+  await reach(a, homeA, (p) => H.atHome(p, homeA));
+  await a.waitForFunction(() => Object.values((document.querySelector("[data-hall]") as any).probe().kept.collection).some((n: any) => n > 0), null, { timeout: 6000 });
+  const kind = Object.entries((await hallProbe(a)).kept.collection).find(([, n]) => (n as number) > 0)![0];
+  await a.selectOption("#slot-1", kind);
+  await a.waitForFunction((k) => (document.querySelector("[data-hall]") as any).probe().kept.display[0] === k, kind, { timeout: 3000 });
+  // b looks at it, by the button and by clicking a's robot
+  await b.click(`[data-look="${ta}"]`);
+  const shown = await b.waitForFunction((k) => !document.querySelector("[data-their]")!.hasAttribute("hidden") && /×\d/.test(document.querySelector("[data-their-places] li")?.textContent ?? "") && (document.querySelector("[data-their-places] li")?.textContent ?? "").toLowerCase().includes(k === "fish" ? "fish" : k === "cloud" ? "cloud" : "door"), kind, { timeout: 3000 }).then(() => true, () => false);
+  check(shown, "another player sees your real display, with its count");
+  check((await b.locator("[data-their] select").count()) === 0, "and can only look, not change it");
+  await b.click("[data-their-close]");
+  await b.evaluate(() => scrollTo(0, 0)); // opening the card scrolled down to it; click where the robot is now
+  await settled(b, ta);
+  const ra = meIn(await hallProbe(b), ta);
+  await b.mouse.click(ra.x, ra.y);
+  check(await b.locator("[data-their]").isVisible(), "clicking their robot opens it too");
+  await b.screenshot({ path: ".shots/hall-their-display.png", fullPage: true });
+  await b.click("[data-their-close]");
+
+  // b picks one up and stands in the open
+  const pb = await hallProbe(b);
+  const tb1 = near(pb, meIn(pb).pos);
+  await reach(b, tb1.pos, (p) => H.touches(p, tb1.pos));
+  await b.waitForFunction(() => (document.querySelector("[data-hall]") as any).probe().carrying.length > 0, null, { timeout: 5000 });
+  await settled(b);
+  const homeB = (await hallProbe(b)).home.pos;
+  if (H.inSafe(meIn(await hallProbe(b)).pos, homeB)) await dragToward(b, [H.HALL.w / 2, H.HALL.h / 2], (p) => !H.inSafe(p, homeB) && Math.hypot(p[0] - homeB[0], p[1] - homeB[1]) > H.SAFE_R + 0.6);
+  await settled(b);
+  // a closes in, stops short, then hits b hard
+  let knocked = false;
+  for (let tries = 0; tries < 4 && !knocked; tries++) {
+    await settled(a);
+    await settled(a, tb);
+    const target = meIn(await hallProbe(a), tb).pos;
+    if (Math.hypot(meIn(await hallProbe(a)).pos[0] - target[0], meIn(await hallProbe(a)).pos[1] - target[1]) > 2.6)
+      await dragToward(a, target, (p) => Math.hypot(p[0] - target[0], p[1] - target[1]) < 2.4);
+    await settled(a);
+    await fling(a, meIn(await hallProbe(a), tb).pos, 1);
+    knocked = await b.waitForFunction(() => /knocked .* loose from you/.test(document.querySelector("[data-news]")?.textContent ?? ""), null, { timeout: 2500 }).then(() => true, () => false);
+  }
+  check(knocked, "a fast hit knocks one loose, and the struck player is told", (await b.textContent("[data-news]")) ?? "");
+  check(/^You knocked/.test((await a.textContent("[data-news]")) ?? ""), "the one who hit is told too", (await a.textContent("[data-news]")) ?? "");
+  const pr = await hallProbe(b);
+  check(pr.shields[tb] > 0, "the struck robot shows a shield");
+  check(pr.artifacts.some((x: any) => x.readyAt > Date.now() - 2000), "and the dropped artifact waits before anyone can take it");
+  await b.screenshot({ path: ".shots/hall-knock.png" });
+  check(Object.values(pr.kept.collection).every((n: any) => n >= 0) && (await hallProbe(a)).kept.collection[kind] >= 1, "nobody's kept collection changed");
+  await a.context().close();
+  await b.context().close();
+}
+
 async function noWebGL(browser: Browser) {
   console.log("\n— without WebGL —");
   const page = await visitor(browser, DESKTOP, () => {
@@ -416,7 +496,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, collect, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, hall, collect, together, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
