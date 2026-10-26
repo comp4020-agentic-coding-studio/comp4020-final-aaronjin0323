@@ -123,6 +123,37 @@ Settled; change them here first, then in the code. The design is
   it; nothing scrolls sideways.
 - **Every animation has a `prefers-reduced-motion` path.**
 
+## The contract
+
+Every `POST` takes and answers JSON and refuses a cross-site `Origin` with
+`403 cross-origin`; every refusal is `{ error, message }`. A `state` event
+is the whole museum plus `you` and `serverTime`.
+
+| Route | Body | Does | Refusals |
+|---|---|---|---|
+| `GET /` | | the page, with the plinths listed in HTML | |
+| `GET /readme/` | | README.md rendered | |
+| `GET /me` | | `{ tag, name, colour }` | |
+| `GET /events` | | SSE: `state`, `pointers` | |
+| `GET /exhibits/:id` | | every version, newest first | `404` |
+| `GET /archive?before=<id>` | | the next 10 cleared loops older than `id` | `400` |
+| `POST /me` | `{ name }` | rename | `400` |
+| `POST /pointer` | `{ p: [x, y, z] \| null }` | where your pointer is in the room, in memory only | `400` |
+| `POST /stage/gesture` | `{ gesture }` | add a gesture | `400` |
+| `POST /stage/undo` | | remove your newest gesture | `409 nothing-to-undo` |
+| `POST /stage/clear` | | archive the loop, start a silent one | `409 stage-empty` |
+| `POST /stage/bring-back` | `{ archivedId, replace? }` | a cleared loop back on the stage | `409 stage-busy`, `404`, `400` |
+| `POST /stage/join` | `{ versionId, replace? }` | a version onto the stage | `409 stage-busy`, `404`, `400` |
+| `POST /publish` | `{ title, slot \| exhibitId, replace? }` | leave the loop on a plinth | `409 stage-empty`, `409 slot-taken`, `404`, `400` |
+| `POST /exhibits/:id/restore` | `{ versionId }` | an old version again, as the newest | `404`, `400` |
+| `POST /exhibits/:id/display` | `{ slot, replace? }` | a storeroom exhibit onto a plinth | `409 slot-taken`, `404`, `400` |
+| `POST /exhibits/:id/store` | | off its plinth, into the storeroom | `409 slot-empty`, `404` |
+
+Held by `spec/store.test.ts` (over `:memory:`) and `spec/http.test.ts`
+(against the running app, including a gesture reaching another visitor's
+stream within 1000 ms). Logs are one line per event, `event key=value`,
+a person as their tag.
+
 ## How to work in here
 
 - **Decide before code.** A change starts here (and as an ADR when there
