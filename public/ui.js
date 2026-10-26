@@ -22,6 +22,10 @@ export function connection(c, event) {
   return c;
 }
 export const canPlay = (c) => c.status === "live" && c.hasState;
+/** How long to wait before opening a stream again after the browser gave
+ * up on one (any answer that isn't a stream, like a proxy's 502), by how
+ * many tries in a row have failed: 1 s, doubling, at most 15 s. */
+export const retryDelay = (tries) => Math.min(15_000, 1000 * 2 ** Math.min(tries, 4));
 export function connectionMessage(c) {
   if (canPlay(c)) return "";
   return c.everLive ? "Connection lost, reconnecting. You can watch; play comes back when it does." : "Connecting…";

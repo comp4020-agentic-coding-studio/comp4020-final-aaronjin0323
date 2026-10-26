@@ -39,6 +39,16 @@ describe("the connection", () => {
   });
 });
 
+describe("a stream that gave up is opened again", () => {
+  test("soon at first, backing off to at most 15 s, and never zero", () => {
+    const d = [0, 1, 2, 3, 4, 5, 10, 50].map((n) => ui.retryDelay(n));
+    expect(d[0]).toBeGreaterThan(0);
+    expect(d[0]).toBeLessThanOrEqual(1000);
+    for (let i = 1; i < d.length; i++) expect(d[i]).toBeGreaterThanOrEqual(d[i - 1]);
+    expect(Math.max(...d)).toBe(15_000);
+  });
+});
+
 describe("a flick from a drag", () => {
   test("the ball goes the way you dragged, faster the further, never past V_MAX", () => {
     const v = ui.flickFrom([0, 1, 0], [0.5, 1, 0]);
