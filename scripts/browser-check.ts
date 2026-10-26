@@ -48,9 +48,12 @@ const gestureCount = (page: Page) => page.evaluate(() => document.querySelectorA
 /** Waits until this page's loop strip shows `n` gestures; ms taken, or -1. */
 const ticks = (page: Page, n: number, ms = 1500, since = Date.now()) =>
   page.waitForFunction((n) => document.querySelectorAll("[data-ticks] .tick").length === n, n, { timeout: ms }).then(() => Date.now() - since, () => -1);
+/** Two drawn frames: what's on screen has caught up with the last state. */
+const drawn = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 async function quietStage(page: Page) {
   await post(page, "/stage/clear");
   await ticks(page, 0);
+  await drawn(page);
 }
 
 async function viewports(browser: Browser) {
