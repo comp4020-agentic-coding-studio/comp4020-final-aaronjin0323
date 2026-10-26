@@ -276,6 +276,23 @@ describe("together: robots meeting", () => {
   });
 });
 
+describe("together: what makes a knock", () => {
+  const at = (pos: V2, vel: V2, home = 5) => ({ pos, vel, t: 0, seq: 0, home });
+  const fast = () => (H as any).collide(at([6, 5], [7, 0]), at([6.85, 5], [0, 0]));
+  test("a clear, fast hit, away from the struck robot's zone, unprotected: a knock", () => {
+    expect(H.knocks(fast(), 0, 0)).toBe(true);
+  });
+  test("not when slow, a tie, protected, or near the struck robot's own zone", () => {
+    expect(H.knocks((H as any).collide(at([6, 5], [H.KNOCK_SPEED - 0.3, 0]), at([6.85, 5], [0, 0])), 0, 0)).toBe(false);
+    expect(H.knocks((H as any).collide(at([6, 5], [5, 0]), at([6.85, 5], [-5, 0])), 0, 0)).toBe(false);
+    expect(H.knocks(fast(), 1000, 999)).toBe(false); // protected until 1000
+    expect(H.knocks(fast(), 1000, 1000)).toBe(true);
+    const h = H.HOMES[5];
+    const nearHome = (H as any).collide(at([h[0] - 0.85, h[1] - 1.2], [7, 0]), at([h[0], h[1] - 1.2], [0, 0]));
+    expect(H.knocks(nearHome, 0, 0)).toBe(false);
+  });
+});
+
 describe("together: where a knocked artifact lands", () => {
   test("just beyond the struck robot, away from the striker, inside the walls and out of every zone", () => {
     const away: V2 = [1, 0];

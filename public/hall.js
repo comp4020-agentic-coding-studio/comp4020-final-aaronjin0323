@@ -103,6 +103,19 @@ export function collide(a, b) {
   return { a: na, b: nb, closing, struck, n };
 }
 
+/**
+ * Whether a collision (from `collide`) knocks an artifact loose from the
+ * struck robot: fast enough, a clear struck robot, that robot not
+ * protected at `now`, and not within SAFE_R of its own zone. The same for
+ * everyone; whether it carries anything is the store's to say.
+ */
+export function knocks(c, protectedUntil, now) {
+  if (!c || c.closing < KNOCK_SPEED || !c.struck) return false;
+  if (now < protectedUntil) return false;
+  const r = c.struck === "a" ? c.a : c.b;
+  return !(Number.isInteger(r.home) && inSafe(r.pos, HOMES[r.home]));
+}
+
 /** Where an artifact knocked loose from a robot at `pos` lands: just
  * beyond it along `away` (a unit vector from the striker), inside the
  * walls, and out of every zone (moved towards the middle if it fell in). */
