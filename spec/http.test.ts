@@ -3,6 +3,8 @@
 // second. There is one shared stage, so these run in order, in one file,
 // and never assume it starts quiet.
 import { describe, expect, inject, test } from "vitest";
+// @ts-ignore -- plain JS module shared with the page
+import * as H from "../public/hall.js";
 
 const BASE: string = inject("baseUrl");
 
@@ -285,6 +287,92 @@ describe("the hall", { concurrent: false }, () => {
     expect(await sb.next("hall", (d) => !!robotOf(d, ta))).not.toBeNull();
     sa.close();
     expect(await sb.next("hall", (d) => !robotOf(d, ta), 2000)).not.toBeNull();
+    sb.close();
+  });
+});
+
+// ADR 25: the server sees every touch; a page never says what it picked up or owns
+describe("collecting in the hall", { concurrent: false }, () => {
+  const mineOf = (d: any) => d.robots.find((r: any) => r.tag === d.you.tag);
+  /** A launch from `from` (a snapshot) whose path passes `ok` at some point, or null. */
+  function aimAt(from: any, target: number[], ok: (p: number[]) => boolean) {
+    const dx = target[0] - from.pos[0], dy = target[1] - from.pos[1];
+    for (let power = 0.2; power <= 1.0001; power += 0.05) {
+      const l = { dir: [dx, dy], power: Math.min(1, Math.round(power * 100) / 100), seq: 0 };
+      if ((H.path(from, l) as number[][]).some(ok)) return l;
+    }
+    return null;
+  }
+  test("the stream shows the floor, every robot's cargo and zone, and your own collection and display", async () => {
+    const a = visitor();
+    const s = await a.stream("/hall/events");
+    const d = (await s.next("hall", (x) => !!mineOf(x)))!.data;
+    expect(d.artifacts.length).toBe(H.MAX_AVAILABLE);
+    for (const x of d.artifacts) {
+      expect(x.id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(H.KINDS).toContain(x.kind);
+    }
+    const me = mineOf(d);
+    expect(me.carrying).toEqual([]);
+    expect(me.pos).toEqual(H.HOMES[me.home]);
+    expect(d.mine).toEqual({ home: me.home, collection: { fish: 0, cloud: 0, door: 0 }, display: [null, null, null, null] });
+    s.close();
+  });
+  test("launch into an artifact and it's carried; launch home and it's yours, counted once", async () => {
+    const a = visitor();
+    const s = await a.stream("/hall/events");
+    let d = (await s.next("hall", (x) => !!mineOf(x)))!.data;
+    let me = mineOf(d);
+    // the first artifact some launch from home passes over
+    let target: any = null, l: any = null;
+    for (const x of d.artifacts) {
+      l = aimAt(me, x.pos, (p) => H.touches(p, x.pos));
+      if (l) {
+        target = x;
+        break;
+      }
+    }
+    expect(target).not.toBeNull();
+    expect((await a.post("/hall/launch", { ...l, seq: 1 })).status).toBe(200);
+    const got = await s.next("hall", (x) => mineOf(x)?.carrying.some((c: any) => c.id === target.id), 5000);
+    expect(got).not.toBeNull();
+    expect(got!.data.artifacts.some((x: any) => x.id === target.id)).toBe(false);
+    expect(got!.data.artifacts.length).toBe(H.MAX_AVAILABLE); // topped up
+    expect(got!.data.mine.collection[target.kind]).toBe(0); // carried isn't kept yet
+    // wait for it to stop, then home
+    await new Promise((r) => setTimeout(r, 3500));
+    d = s.events.filter((e) => e.type === "hall").at(-1)!.data;
+    const offset = d.serverTime - s.events.at(-1)!.at;
+    me = H.advance(mineOf(d), Date.now() + offset);
+    expect(me.vel).toEqual([0, 0]);
+    const home = H.HOMES[mineOf(d).home];
+    const back = aimAt(me, home, (p) => H.atHome(p, home));
+    expect(back).not.toBeNull();
+    expect((await a.post("/hall/launch", { ...back, seq: 2 })).status).toBe(200);
+    const kept = await s.next("hall", (x) => x.mine.collection[target.kind] >= 1 && mineOf(x).carrying.length === 0, 5000);
+    expect(kept).not.toBeNull();
+    const n = Object.values(kept!.data.mine.collection as Record<string, number>).reduce((p, q) => p + q, 0);
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n).toBeLessThanOrEqual(3);
+    // shown on the display, with nothing the page says about counts or who it is
+    const slots = [target.kind, null, null, null];
+    const r = await a.post("/hall/display", { slots });
+    expect(r.status).toBe(200);
+    expect(r.json.display).toEqual(slots);
+    expect(await s.next("hall", (x) => x.mine.display[0] === target.kind)).not.toBeNull();
+    s.close();
+  });
+  test("a page can't claim a pickup, a count, someone's ID, or a kind it doesn't own", async () => {
+    const a = visitor(), b = visitor();
+    const sb = await b.stream("/hall/events");
+    const d = (await sb.next("hall", (x) => !!mineOf(x)))!.data;
+    const id = d.artifacts[0].id;
+    for (const path of ["/hall/pickup", "/hall/deposit", "/hall/collect"]) expect((await a.post(path, { id })).status).toBe(404);
+    expect((await a.post("/hall/display", { slots: ["fish", null, null, null] })).json.error).toBe("not-owned");
+    expect((await a.post("/hall/display", { slots: [null, null, null, null], collection: { fish: 99 } })).status).toBe(400);
+    expect((await a.post("/hall/display", { slots: [null, null, null, null], pid: "someone-else" })).status).toBe(400);
+    expect((await a.post("/hall/display", { slots: ["fish", "fish", null, null] })).status).toBe(400);
+    expect((await sb.next("hall", (x) => !x.artifacts.some((y: any) => y.id === id), 300))).toBeNull();
     sb.close();
   });
 });

@@ -146,10 +146,3 @@ export function path(r, l) {
   }
   return pts;
 }
-
-/** Where the n-th robot to arrive starts: spread along the hall's middle. */
-export function spawnAt(n) {
-  const slots = 7;
-  const i = n % slots;
-  return [HALL.w / 2 + (i % 2 === 0 ? 1 : -1) * Math.floor((i + 1) / 2) * 1.6, HALL.h / 2];
-}

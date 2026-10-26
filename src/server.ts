@@ -63,14 +63,24 @@ function pointersSoon() {
     for (const c of clients) send(c.res, "pointers", list);
   }, POINTER_EVERY_MS);
 }
-// ---- the hall's streams: robots' snapshots, on every change (ADR 24)
-const hall = createHall();
+// ---- the hall's streams: robots' snapshots, the floor, and your own
+// collection, on every change (ADR 24, 25)
+const hall = createHall(store);
 const hallClients = new Set<Client>();
+const HALL_TICK_MS = 50;
 function hallBroadcast() {
   const now = Date.now();
   const robots = hall.view((pid) => store.who(pid) ?? { tag: "", name: "Someone", colour: 0 }, now);
-  for (const c of hallClients) send(c.res, "hall", { robots, you: store.who(c.pid), serverTime: now });
+  const artifacts = hall.floor();
+  for (const c of hallClients) {
+    const mine = { home: hall.homeOf(c.pid), collection: store.collection(c.pid), display: store.displayOf(c.pid) };
+    send(c.res, "hall", { robots, artifacts, mine, you: store.who(c.pid), serverTime: now });
+  }
 }
+// the server sees every touch: each tick walks moving robots along their steps
+setInterval(() => {
+  if (hall.tick(Date.now())) hallBroadcast();
+}, HALL_TICK_MS).unref();
 
 setInterval(() => {
   for (const c of [...clients, ...hallClients]) c.res.write(": beat\n\n");
@@ -263,6 +273,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return refuse(res, r);
     }
     json(res, 200, { robot: { ...store.who(v.pid), ...r.robot } });
+    return hallBroadcast();
+  }
+  if (path === "/hall/display") {
+    if (Object.keys(body).some((k) => k !== "slots")) return refuse(res, { status: 400, error: "bad-display", message: "The display is { slots }" });
+    const r = store.arrange(v.pid, body.slots);
+    if (!r.ok) {
+      log("refused", { event: "display", tag: v.tag, error: r.error });
+      return refuse(res, r);
+    }
+    log("display", { tag: v.tag, slots: r.display.join(",") });
+    json(res, 200, r);
     return hallBroadcast();
   }
   if (path === "/me") return done(store.rename(v.pid, body.name), "rename", { name: body.name });
