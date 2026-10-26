@@ -380,8 +380,14 @@ function renderGestures() {
 function renderSets() {
   const box = $("[data-sets]");
   const ids = Object.keys(SETS);
-  box.hidden = ids.length < 2;
+  const picker = $("[data-sets-open]");
+  picker.hidden = ids.length < 2;
   const set = state.draft.parts?.set ?? "";
+  // the picker wears the icon of the set on the stage
+  if (picker.dataset.set !== set) {
+    picker.dataset.set = set;
+    $("[data-sets-icon]").innerHTML = viewOf(set)?.icon ?? "";
+  }
   if (!box.children.length) {
     box.replaceChildren(
       ...ids.map((id) => {
@@ -396,9 +402,17 @@ function renderSets() {
   for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.set === set));
 }
 
+// The set row waits behind its picker (ADR 19), and closes once a set is picked.
+function openSets(open) {
+  $("[data-sets]").hidden = !open;
+  $("[data-sets-open]").setAttribute("aria-expanded", String(open));
+}
+$("[data-sets-open]").addEventListener("click", () => openSets($("[data-sets]").hidden));
+
 $("[data-sets]").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-set]");
   if (!b || b.disabled || !state) return;
+  openSets(false);
   const set = b.dataset.set;
   if (set === state.draft.parts?.set) return;
   const busy = (state.draft.parts?.gestures.length ?? 0) > 0;

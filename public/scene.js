@@ -13,8 +13,8 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { GLIDE, LOOP, STAGE, THROW, VISITOR_COLOURS, gestureMoment, isHoldable, loopMoment, setOf } from "./stage.js";
 import { createStageView } from "./stageview.js";
-import { heldLook } from "./sets/views.js";
-import { clearFrame } from "./ui-logic.js";
+import { heldLook, viewOf } from "./sets/views.js";
+import { aimHint, clearFrame } from "./ui-logic.js";
 import { EYE, REACH, START, clampPitch, collide, forward, lookDir, nearestHit, plinthNear, standBefore, step, throwVelocity } from "./walk.js";
 import { createAvatars } from "./avatars.js";
 
@@ -707,6 +707,8 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
 
   // ---- the reticle: what your hand would touch, straight ahead
   const reticleEl = canvas.parentElement?.querySelector("[data-reticle]") ?? null;
+  const hintEl = canvas.parentElement?.querySelector("[data-aim-hint]") ?? null;
+  const touchScreen = matchMedia("(hover: none) and (pointer: coarse)");
   let reticle = null; // { id, point: [x, y, z] (world), local: (stage frame), t }
   // The set's view says what the dot can rest on (its `aim`), in the
   // stage's own frame: the holder is only lifted, never turned or scaled.
@@ -735,6 +737,13 @@ export async function createScene(canvas, { reducedMotion, time, onPick, covers 
     if (reticleEl && reticleEl.dataset.on !== on) {
       if (on) reticleEl.dataset.on = on;
       else delete reticleEl.dataset.on;
+    }
+    // and how to touch it, in the set's own words (ADR 19)
+    if (hintEl) {
+      const id = holding ?? reticle?.id ?? null;
+      const text = aimHint(viewOf(liveSet())?.buttons ?? [], id, { holdable: canHold(id), holding, touch: touchScreen.matches });
+      if (hintEl.textContent !== text) hintEl.textContent = text;
+      hintEl.hidden = !text;
     }
   }
 

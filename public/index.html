@@ -65,6 +65,8 @@
   <div class="stage" data-stage>
     <canvas class="scene" data-scene tabindex="0" aria-label="The gallery in first person, with the stage in front of you. Click to look around with the mouse (Esc lets go), walk with W A S D or the arrow keys, and hold the button on a sphere to pick it up and let go to throw it; click the ribbon or the bell to play them. On a phone, the pad bottom left walks, a drag looks, and the hand button bottom right grabs and throws. Every gesture is also a button in the panel."></canvas>
     <span class="reticle" data-reticle aria-hidden="true"></span>
+    <!-- how to touch what the reticle rests on, and what it does (ADR 19); the canvas's own name says it for screen readers -->
+    <span class="aim-hint" data-aim-hint aria-hidden="true" hidden></span>
     <p class="fp-hint" data-hint title="Click to look around, W A S D to walk, hold to grab and throw"><span class="sr-only">Click to look around, W A S D to walk, hold to grab and throw</span><svg aria-hidden="true"><use href="#i-mouse"/></svg><svg aria-hidden="true"><use href="#i-keys"/></svg></p>
     <div class="joy" data-joy aria-hidden="true"><span class="joy-knob" data-joy-knob></span></div>
     <button type="button" class="hand" data-hand aria-label="Hand: hold to pick up what the dot is on, let go to throw" title="Hold to grab, let go to throw"><svg aria-hidden="true"><use href="#i-hand"/></svg></button>
@@ -94,15 +96,18 @@
       </div>
       <p class="sr-only" data-bench-about></p>
       <div class="loop" data-loop aria-hidden="true"><span class="loop-ticks" data-loop-ticks></span><span class="loop-head" data-loop-head></span></div>
-      <!-- one button per object, from the set on the stage (public/sets/<id>-view.js, `buttons`) -->
-      <div class="gestures" role="group" aria-label="Play the stage" data-gestures></div>
-      <!-- the sets: one icon each, the current one pressed; hidden while there is only one -->
-      <div class="sets" role="group" aria-label="Choose what's on the stage" data-sets hidden></div>
+      <!-- the sets: one icon each, the current one pressed; behind the picker below, closed by default -->
+      <div class="sets" id="sets-row" role="group" aria-label="Choose what's on the stage" data-sets hidden></div>
       <div class="bench-actions">
         <button type="button" class="primary" data-publish-open data-edit aria-label="Leave it: put this performance on a plinth for others to find" title="Put this performance on a plinth">Leave it</button>
         <button type="button" class="quiet undo" data-undo data-edit aria-label="Undo your last gesture" title="Undo your last gesture">Undo</button>
         <button type="button" class="icon" data-clear data-edit aria-label="Start over (this loop is archived)" title="Start over (this loop is archived)"><svg aria-hidden="true"><use href="#i-clear"/></svg></button>
+        <button type="button" class="icon set-pick" data-sets-open aria-expanded="false" aria-controls="sets-row" aria-label="Choose what's on the stage" title="Choose what's on the stage" hidden><svg aria-hidden="true" viewBox="0 0 24 24" data-sets-icon></svg></button>
       </div>
+      <!-- one button per object, from the set on the stage (public/sets/<id>-view.js, `buttons`);
+           out of sight until one has keyboard focus: the room is the controls (ADR 19);
+           after the actions, so showing and hiding it never moves them under a pointer -->
+      <div class="gestures" role="group" aria-label="Play the stage" data-gestures></div>
       <form class="publish" data-publish hidden aria-labelledby="publish-h">
         <h3 id="publish-h" class="sr-only">Leave this performance on a plinth</h3>
         <label for="publish-title">Title</label>
