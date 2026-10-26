@@ -138,6 +138,51 @@ describe("the preview", () => {
   });
 });
 
+// ADR 25: where artifacts may be, where you deliver, and what counts as a touch
+describe("collecting: places and touches", () => {
+  const d = (a: number[], b: number[]) => Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+  test("three kinds, six on the floor, three carried, four display slots", () => {
+    expect(H.KINDS).toEqual(["fish", "cloud", "door"]);
+    expect(H.MAX_AVAILABLE).toBe(6);
+    expect(H.CARRY_MAX).toBe(3);
+    expect(H.DISPLAY_SLOTS).toBe(4);
+  });
+  test("eight delivery zones, inside the walls, reachable by a robot, apart", () => {
+    expect(H.HOMES.length).toBe(8);
+    for (const h of H.HOMES) {
+      expect(h[0] - H.PAD_R).toBeGreaterThanOrEqual(0);
+      expect(h[1] - H.PAD_R).toBeGreaterThanOrEqual(0);
+      expect(h[0] + H.PAD_R).toBeLessThanOrEqual(H.HALL.w);
+      expect(h[1] + H.PAD_R).toBeLessThanOrEqual(H.HALL.h);
+      // a robot's centre can stand in it
+      expect(H.atHome([Math.min(Math.max(h[0], H.ROBOT_R), H.HALL.w - H.ROBOT_R), Math.min(Math.max(h[1], H.ROBOT_R), H.HALL.h - H.ROBOT_R)], h)).toBe(true);
+    }
+    for (const a of H.HOMES) for (const b of H.HOMES) if (a !== b) expect(d(a, b)).toBeGreaterThan(2 * H.PAD_R);
+  });
+  test("every safe spot is inside the walls, clear of every zone, and apart, with room for six", () => {
+    expect(H.SPOTS.length).toBeGreaterThanOrEqual(H.MAX_AVAILABLE * 2);
+    for (const p of H.SPOTS) {
+      expect(p[0]).toBeGreaterThanOrEqual(H.ROBOT_R + H.ARTIFACT_R);
+      expect(p[0]).toBeLessThanOrEqual(H.HALL.w - H.ROBOT_R - H.ARTIFACT_R);
+      expect(p[1]).toBeGreaterThanOrEqual(H.ROBOT_R + H.ARTIFACT_R);
+      expect(p[1]).toBeLessThanOrEqual(H.HALL.h - H.ROBOT_R - H.ARTIFACT_R);
+      // a robot touching it can't also be in a zone
+      for (const h of H.HOMES) expect(d(p, h)).toBeGreaterThan(H.PAD_R + H.ROBOT_R + H.ARTIFACT_R);
+    }
+    for (const a of H.SPOTS) for (const b of H.SPOTS) if (a !== b) expect(d(a, b)).toBeGreaterThan(2 * H.ARTIFACT_R);
+  });
+  test("a touch is the robot's edge reaching the artifact's", () => {
+    const a = [5, 5];
+    expect(H.touches([5 + H.ROBOT_R + H.ARTIFACT_R - 0.01, 5], a)).toBe(true);
+    expect(H.touches([5 + H.ROBOT_R + H.ARTIFACT_R + 0.01, 5], a)).toBe(false);
+  });
+  test("in your zone means your robot's centre is on the pad", () => {
+    const h = H.HOMES[0];
+    expect(H.atHome([h[0] + H.PAD_R - 0.01, h[1]], h)).toBe(true);
+    expect(H.atHome([h[0] + H.PAD_R + 0.01, h[1]], h)).toBe(false);
+  });
+});
+
 describe("the rule uses only arithmetic every engine rounds the same", () => {
   test("no Math.sin, cos, pow, exp, atan2, hypot, random, or ** in public/hall.js", () => {
     const src = readFileSync("public/hall.js", "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");

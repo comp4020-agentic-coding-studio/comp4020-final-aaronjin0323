@@ -26,6 +26,36 @@ export const DRAG = 0.6;
 export const WALL_BOUNCE = 0.75;
 /** Slower than this, in m/s, a robot stops. */
 export const STOP = 0.05;
+// ---- collecting (ADR 25): the numbers and places, in the same one place
+/** Three kinds, one set of rules. */
+export const KINDS = ["fish", "cloud", "door"];
+export const ARTIFACT_R = 0.3;
+/** How many are on the floor at once, how many a robot carries, display slots. */
+export const MAX_AVAILABLE = 6;
+export const CARRY_MAX = 3;
+export const DISPLAY_SLOTS = 4;
+/** Delivery zones: eight pads round the walls, each PAD_R round. */
+export const PAD_R = 0.9;
+const IN = 1.1; // a pad's centre from its walls
+export const HOMES = [
+  [IN, IN], [HALL.w / 2, IN], [HALL.w - IN, IN], [HALL.w - IN, HALL.h / 2],
+  [HALL.w - IN, HALL.h - IN], [HALL.w / 2, HALL.h - IN], [IN, HALL.h - IN], [IN, HALL.h / 2],
+];
+const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
+/** Where artifacts may appear: a grid inside the walls, keeping only the
+ * spots where a robot touching one can't also be standing in a zone. */
+export const SPOTS = [];
+for (let x = 2.6; x < HALL.w - 2; x += 1.8) {
+  for (let y = 2.8; y < HALL.h - 2; y += 1.5) {
+    const p = [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+    if (HOMES.every((h) => dist(p, h) > PAD_R + ROBOT_R + ARTIFACT_R)) SPOTS.push(p);
+  }
+}
+/** A robot at `pos` touches an artifact at `at`. */
+export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
+/** A robot at `pos` is in the zone centred at `home`. */
+export const atHome = (pos, home) => dist(pos, home) < PAD_R;
+
 export const HZ = 50;
 export const STEP_MS = 1000 / HZ;
 const DT = STEP_MS / 1000;
