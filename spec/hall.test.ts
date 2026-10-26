@@ -183,6 +183,118 @@ describe("collecting: places and touches", () => {
   });
 });
 
+// ADR 26: one clock, robots meeting, knocks, fair zones
+describe("together: the clock", () => {
+  test("snapshot times sit on the shared 20 ms grid", () => {
+    expect(H.onGrid(1047)).toBe(1040);
+    expect(H.onGrid(1040)).toBe(1040);
+  });
+  test("a robot keeps its zone through advancing and launching", () => {
+    const r = { ...still(mid, 0), home: 3 };
+    expect(H.advance(r, 500).home).toBe(3);
+    expect(H.launch(r, go([1, 0], 1), 0).home).toBe(3);
+  });
+});
+
+describe("together: zones", () => {
+  const d = (a: number[], b: number[]) => Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+  test("a zone that isn't yours is solid: launched straight at it, a robot never enters", () => {
+    const pad = H.HOMES[1]; // the middle of the top wall
+    let r: any = H.launch({ ...still([pad[0], pad[1] + 3], 0), home: 0 }, go([0, -1], 1), 0);
+    let closest = 99;
+    for (let t = 20; t < 4000; t += 20) {
+      r = H.advance(r, t);
+      closest = Math.min(closest, d(r.pos, pad));
+    }
+    expect(closest).toBeGreaterThanOrEqual(H.PAD_R + H.ROBOT_R - 1e-9);
+  });
+  test("pushed off a zone in a corner, a robot still never leaves the hall", () => {
+    for (let i = 0; i < 40; i++) {
+      const home = (i + 4) % 8; // never the corner zones it's thrown into
+      const dir: V2 = [((i * 7) % 11) - 5 || -1, ((i * 5) % 9) - 4 || -1];
+      let r: any = H.launch({ ...still([2 + (i % 4) * 0.3, 2 + (i % 3) * 0.4], 0), home }, go(dir, 1), 0);
+      for (let t = 20; t < 3000; t += 20) {
+        r = H.advance(r, t);
+        expect(r.pos[0]).toBeGreaterThanOrEqual(H.ROBOT_R - 1e-9);
+        expect(r.pos[0]).toBeLessThanOrEqual(H.HALL.w - H.ROBOT_R + 1e-9);
+        expect(r.pos[1]).toBeGreaterThanOrEqual(H.ROBOT_R - 1e-9);
+        expect(r.pos[1]).toBeLessThanOrEqual(H.HALL.h - H.ROBOT_R + 1e-9);
+      }
+    }
+  });
+  test("sliding along a wall into a corner zone, it's stopped by the zone and stays inside the wall", () => {
+    let r: any = H.launch({ ...still([H.ROBOT_R, 3.2], 0), home: 4 }, go([0, -1], 1), 0);
+    for (let t = 20; t < 2000; t += 20) {
+      r = H.advance(r, t);
+      expect(r.pos[0]).toBeGreaterThanOrEqual(H.ROBOT_R - 1e-9);
+      expect(r.pos[1]).toBeGreaterThanOrEqual(H.ROBOT_R - 1e-9);
+    }
+  });
+  test("your own zone you can drive into", () => {
+    const pad = H.HOMES[1];
+    let r: any = H.launch({ ...still([pad[0], pad[1] + 3], 0), home: 1 }, go([0, -1], 1), 0);
+    let entered = false;
+    for (let t = 20; t < 4000; t += 20) {
+      r = H.advance(r, t);
+      if (H.atHome(r.pos, pad)) entered = true;
+    }
+    expect(entered).toBe(true);
+  });
+  test("near your own zone, inside SAFE_R, is safe from knocks", () => {
+    const h = H.HOMES[0];
+    expect(H.inSafe([h[0] + H.SAFE_R - 0.01, h[1]], h)).toBe(true);
+    expect(H.inSafe([h[0] + H.SAFE_R + 0.01, h[1]], h)).toBe(false);
+  });
+});
+
+describe("together: robots meeting", () => {
+  const at = (pos: V2, vel: V2) => ({ pos, vel, t: 0, seq: 0 });
+  test("apart, or touching but parting, nothing happens", () => {
+    expect((H as any).collide(at([2, 2], [1, 0]), at([5, 2], [0, 0]))).toBeNull();
+    expect((H as any).collide(at([2, 2], [-1, 0]), at([2 + 2 * H.ROBOT_R - 0.05, 2], [1, 0]))).toBeNull();
+  });
+  test("closing, they bounce as equal masses: separated, momentum kept, closing speed reported", () => {
+    const a = at([2, 2], [6, 0]), b = at([2 + 2 * H.ROBOT_R - 0.04, 2], [0, 0]);
+    const c = (H as any).collide(a, b);
+    expect(c.closing).toBeCloseTo(6, 9);
+    expect(c.a.vel[0] + c.b.vel[0]).toBeCloseTo(6, 9);
+    expect(c.b.vel[0]).toBeGreaterThan(c.a.vel[0]);
+    const gap = Math.sqrt((c.a.pos[0] - c.b.pos[0]) ** 2 + (c.a.pos[1] - c.b.pos[1]) ** 2);
+    expect(gap).toBeGreaterThanOrEqual(2 * H.ROBOT_R - 1e-9);
+  });
+  test("the struck robot is the one clearly moving less towards the other; a near tie strikes nobody", () => {
+    const hit = (H as any).collide(at([2, 2], [6, 0]), at([2.85, 2], [-1, 0]));
+    expect(hit.struck).toBe("b");
+    expect((H as any).collide(at([2, 2], [1, 0]), at([2.85, 2], [-6, 0])).struck).toBe("a");
+    expect((H as any).collide(at([2, 2], [3, 0]), at([2.85, 2], [-3.2, 0])).struck).toBeNull();
+  });
+  test("a knock needs KNOCK_SPEED: a gentle bump is just a bump", () => {
+    const soft = (H as any).collide(at([2, 2], [H.KNOCK_SPEED - 0.5, 0]), at([2.85, 2], [0, 0]));
+    expect(soft.closing).toBeLessThan(H.KNOCK_SPEED);
+    expect(H.KNOCK_SPEED).toBeGreaterThan(H.LAUNCH_MAX / 2);
+    expect(H.KNOCK_SPEED).toBeLessThan(H.LAUNCH_MAX);
+  });
+});
+
+describe("together: where a knocked artifact lands", () => {
+  test("just beyond the struck robot, away from the striker, inside the walls and out of every zone", () => {
+    const away: V2 = [1, 0];
+    const p = H.dropSpot(mid, away);
+    expect(p[0]).toBeGreaterThan(mid[0] + H.ROBOT_R);
+    for (let i = 0; i < 200; i++) {
+      const pos: V2 = [H.ROBOT_R + ((i * 37) % 150) / 10, H.ROBOT_R + ((i * 53) % 91) / 10];
+      const n: V2 = [((i * 7) % 11) - 5 || 1, ((i * 3) % 7) - 3];
+      const len = Math.sqrt(n[0] * n[0] + n[1] * n[1]);
+      const q = H.dropSpot(pos, [n[0] / len, n[1] / len]);
+      expect(q[0]).toBeGreaterThanOrEqual(H.ARTIFACT_R);
+      expect(q[0]).toBeLessThanOrEqual(H.HALL.w - H.ARTIFACT_R);
+      expect(q[1]).toBeGreaterThanOrEqual(H.ARTIFACT_R);
+      expect(q[1]).toBeLessThanOrEqual(H.HALL.h - H.ARTIFACT_R);
+      for (const h of H.HOMES) expect(Math.sqrt((q[0] - h[0]) ** 2 + (q[1] - h[1]) ** 2)).toBeGreaterThan(H.PAD_R);
+    }
+  });
+});
+
 describe("the rule uses only arithmetic every engine rounds the same", () => {
   test("no Math.sin, cos, pow, exp, atan2, hypot, random, or ** in public/hall.js", () => {
     const src = readFileSync("public/hall.js", "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");

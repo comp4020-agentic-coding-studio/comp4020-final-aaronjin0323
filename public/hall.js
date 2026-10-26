@@ -56,6 +56,68 @@ export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
 /** A robot at `pos` is in the zone centred at `home`. */
 export const atHome = (pos, home) => dist(pos, home) < PAD_R;
 
+// ---- together (ADR 26): robots meeting, knocks, and fair zones
+/** Robots bounce off each other keeping this share of their closing speed. */
+export const ROBOT_BOUNCE = 0.8;
+/** A knock needs at least this closing speed, in m/s (full power is LAUNCH_MAX). */
+export const KNOCK_SPEED = 4.5;
+/** The struck robot is moving less towards the other by at least this; less is a tie. */
+export const KNOCK_CLEAR = 0.5;
+/** A dropped artifact waits this long before anyone can pick it up, in ms. */
+export const PICKUP_DELAY_MS = 1000;
+/** A robot that dropped one can't be knocked again for this long, in ms. */
+export const DROP_PROTECT_MS = 3000;
+/** Within this of its own zone's centre, nothing is knocked loose from a robot. */
+export const SAFE_R = PAD_R + 1.2;
+export const inSafe = (pos, home) => dist(pos, home) < SAFE_R;
+
+const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
+/** Keeps a robot's centre inside the walls. Changes `p`. */
+function inside(p) {
+  p[0] = clamp(p[0], ROBOT_R, HALL.w - ROBOT_R);
+  p[1] = clamp(p[1], ROBOT_R, HALL.h - ROBOT_R);
+}
+
+/**
+ * Two robots at the same moment: null unless they overlap and are closing.
+ * Otherwise they bounce as equal masses, and it says how fast they closed,
+ * along which line (from a to b), and which was struck: the one moving
+ * less towards the other by at least KNOCK_CLEAR, or null for a tie.
+ */
+export function collide(a, b) {
+  const d = [b.pos[0] - a.pos[0], b.pos[1] - a.pos[1]];
+  const len = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
+  if (len >= 2 * ROBOT_R || len < 1e-9) return null;
+  const n = [d[0] / len, d[1] / len];
+  const aInto = a.vel[0] * n[0] + a.vel[1] * n[1];
+  const bInto = -(b.vel[0] * n[0] + b.vel[1] * n[1]);
+  const closing = aInto + bInto;
+  if (closing <= 0) return null;
+  const j = ((1 + ROBOT_BOUNCE) / 2) * closing;
+  const half = (2 * ROBOT_R - len) / 2;
+  const na = { ...a, pos: [a.pos[0] - n[0] * half, a.pos[1] - n[1] * half], vel: [a.vel[0] - j * n[0], a.vel[1] - j * n[1]] };
+  const nb = { ...b, pos: [b.pos[0] + n[0] * half, b.pos[1] + n[1] * half], vel: [b.vel[0] + j * n[0], b.vel[1] + j * n[1]] };
+  inside(na.pos);
+  inside(nb.pos);
+  const struck = aInto > bInto + KNOCK_CLEAR ? "b" : bInto > aInto + KNOCK_CLEAR ? "a" : null;
+  return { a: na, b: nb, closing, struck, n };
+}
+
+/** Where an artifact knocked loose from a robot at `pos` lands: just
+ * beyond it along `away` (a unit vector from the striker), inside the
+ * walls, and out of every zone (moved towards the middle if it fell in). */
+export function dropSpot(pos, away) {
+  const reach = ROBOT_R + ARTIFACT_R + 0.2;
+  const q = [clamp(pos[0] + away[0] * reach, ARTIFACT_R, HALL.w - ARTIFACT_R), clamp(pos[1] + away[1] * reach, ARTIFACT_R, HALL.h - ARTIFACT_R)];
+  for (const h of HOMES) {
+    if (dist(q, h) > PAD_R + ARTIFACT_R) continue;
+    const c = [HALL.w / 2 - h[0], HALL.h / 2 - h[1]];
+    const cl = Math.sqrt(c[0] * c[0] + c[1] * c[1]);
+    return [h[0] + (c[0] / cl) * (PAD_R + ARTIFACT_R + 0.1), h[1] + (c[1] / cl) * (PAD_R + ARTIFACT_R + 0.1)];
+  }
+  return q;
+}
+
 export const HZ = 50;
 export const STEP_MS = 1000 / HZ;
 const DT = STEP_MS / 1000;
@@ -83,7 +145,9 @@ export function checkLaunch(x) {
 }
 
 /** A robot standing still at `pos` from server time `t`. */
-export const standing = (pos, t) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0 });
+export const standing = (pos, t, home) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0, home });
+/** The step a server time falls in: snapshot times sit on this grid. */
+export const onGrid = (t) => t - (t % STEP_MS);
 
 /** One step: slow down, move, and come off any wall. Changes `r`. */
 function step(r) {
@@ -105,6 +169,26 @@ function step(r) {
   else if (p[0] > hiX) [p[0], v[0]] = [hiX, -v[0] * WALL_BOUNCE];
   if (p[1] < lo) [p[1], v[1]] = [lo, -v[1] * WALL_BOUNCE];
   else if (p[1] > hiY) [p[1], v[1]] = [hiY, -v[1] * WALL_BOUNCE];
+  // a zone that isn't this robot's is solid to it, like a wall (ADR 26)
+  if (!Number.isInteger(r.home)) return;
+  for (let i = 0; i < HOMES.length; i++) {
+    if (i === r.home) continue;
+    const h = HOMES[i];
+    const d = [p[0] - h[0], p[1] - h[1]];
+    const len = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
+    const min = PAD_R + ROBOT_R;
+    if (len >= min || len < 1e-9) continue;
+    const n = [d[0] / len, d[1] / len];
+    p[0] = h[0] + n[0] * min;
+    p[1] = h[1] + n[1] * min;
+    const vn = v[0] * n[0] + v[1] * n[1];
+    if (vn < 0) {
+      v[0] -= (1 + WALL_BOUNCE) * vn * n[0];
+      v[1] -= (1 + WALL_BOUNCE) * vn * n[1];
+    }
+  }
+  // the walls win: a zone in a corner mustn't push a robot through one
+  inside(p);
 }
 
 /**
@@ -112,7 +196,7 @@ function step(r) {
  * snapshot (the remainder waits for the next step). A fresh object.
  */
 export function advance(r, to) {
-  const out = { pos: [r.pos[0], r.pos[1]], vel: [r.vel[0], r.vel[1]], t: r.t, seq: r.seq };
+  const out = { pos: [r.pos[0], r.pos[1]], vel: [r.vel[0], r.vel[1]], t: r.t, seq: r.seq, home: r.home };
   const steps = Math.floor((to - r.t) / STEP_MS);
   if (!(steps > 0)) return out;
   out.t = r.t + steps * STEP_MS;
