@@ -119,6 +119,33 @@ async function pointers(browser: Browser) {
   await b.context().close();
 }
 
+async function aim(browser: Browser) {
+  console.log("\n— you see someone aim before they flick, and whose ball it is after (ADR 23) —");
+  const a = await visitor(browser);
+  const b = await visitor(browser);
+  await quietStage(a);
+  await ticks(b, 0);
+  const ta = await a.evaluate(async () => (await (await fetch("/me")).json()).tag);
+  const nameA = await a.evaluate(() => document.querySelector("[data-you-name]")!.textContent);
+  const gold = (await probe(a)).balls.gold;
+  await a.mouse.move(gold.x, gold.y);
+  await a.mouse.down();
+  await a.mouse.move(gold.x + 50, gold.y + 80, { steps: 6 });
+  const seen = await b.waitForFunction((t) => (document.querySelector("[data-scene]") as any).probe().aims.some((x: any) => x.tag === t && x.ball === "gold"), ta, { timeout: 1500 }).then(() => true, () => false);
+  check(seen, "while one visitor drags gold, the other sees their aim on gold");
+  await b.screenshot({ path: ".shots/aim-seen.png" });
+  await a.mouse.up();
+  const dropped = await b.waitForFunction((t) => !(document.querySelector("[data-scene]") as any).probe().aims.some((x: any) => x.tag === t), ta, { timeout: 1500 }).then(() => true, () => false);
+  check(dropped, "and the aim goes when they let go");
+  const carried = await b.waitForFunction((t) => (document.querySelector("[data-scene]") as any).probe().movers.gold === t, ta, { timeout: 21_000 }).then(() => true, () => false);
+  check(carried, "the flicked ball shows who moved it on the other screen");
+  await b.screenshot({ path: ".shots/whose-ball.png" });
+  const told = await b.waitForFunction((n) => (document.querySelector("[data-story]")?.textContent ?? "").startsWith(`${n} flicked gold`), nameA, { timeout: 21_000 }).then(() => true, () => false);
+  check(told, "and the stage card says who flicked it", await b.evaluate(() => document.querySelector("[data-story]")?.textContent ?? ""));
+  await a.context().close();
+  await b.context().close();
+}
+
 async function keyboard(browser: Browser) {
   console.log("\n— keyboard only —");
   const page = await visitor(browser);
@@ -201,7 +228,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, keyboard, "leave-it": leaveIt, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
