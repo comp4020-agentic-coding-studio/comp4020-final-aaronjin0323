@@ -2,11 +2,126 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Impossible Museum</title>
+  <meta name="description" content="A small shared gallery where visitors play an impossible fountain together, and leave what they played on plinths for the next visitors.">
+  <meta name="theme-color" content="#2b2747">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='10' cy='9' r='5' fill='%233aa6a0'/%3E%3Ccircle cx='22' cy='9' r='5' fill='%23e9785f'/%3E%3Cpath d='M9 28c0-6 3-9 7-9s7 3 7 9z' fill='%23e3b45a'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <h1>Impossible Museum</h1>
-  <!--museum-->
+  <a class="skip" href="#panel">Skip to the controls</a>
+  <header class="top">
+    <div class="brand">
+      <h1>Impossible Museum</h1>
+      <p class="lede">Flick a ball, ring the bell, leave it on a plinth.</p>
+    </div>
+    <div class="people" data-people hidden>
+      <div class="you">
+        <span class="dot" data-you-dot aria-hidden="true"></span>
+        <span><span class="sr-only">You are </span><strong data-you-name></strong></span>
+        <button type="button" class="link" data-rename-open data-play>Rename</button>
+      </div>
+      <form class="rename" data-rename hidden>
+        <label for="rename-input">Your name</label>
+        <input id="rename-input" name="name" maxlength="24" autocomplete="nickname" required>
+        <button type="submit">Save</button>
+        <button type="button" class="link" data-rename-cancel>Cancel</button>
+      </form>
+      <div class="here"><span class="here-label">Here now</span> <ul class="here-list" data-here></ul></div>
+    </div>
+  </header>
+
+  <div class="scene-wrap" data-scene-wrap>
+    <canvas class="scene" data-scene tabindex="0" aria-label="The gallery. The fountain is in the middle; six plinths stand round it. Drag a ball to flick it, click the bell to ring it, drag empty space to look round, click a plinth to go to it. Every gesture is also a button in the panel."></canvas>
+    <p class="hint" data-hint aria-hidden="true">Drag a ball to flick it · click the bell</p>
+    <button type="button" class="back" data-back hidden>Back to the stage</button>
+    <p class="status" data-status role="status" hidden></p>
+  </div>
+
+  <main class="panel" id="panel" tabindex="-1">
+    <nav class="tabs" aria-label="The stage and the plinths" data-tabs hidden></nav>
+
+    <section class="listing-wrap" data-static aria-labelledby="listing-h">
+      <h2 id="listing-h">On the plinths</h2>
+      <!--museum-->
+      <p class="note">Playing the fountain needs JavaScript.</p>
+    </section>
+
+    <section class="card" data-card="stage" hidden aria-labelledby="stage-h">
+      <h2 id="stage-h" tabindex="-1">The stage</h2>
+      <p class="based" data-based hidden></p>
+      <div class="loop" data-loop aria-hidden="true"><span class="ticks" data-ticks></span><span class="head" data-head></span></div>
+      <p class="credits"><span data-credits-label>Playing:</span> <span data-credits></span></p>
+      <div class="gestures" role="group" aria-label="Play the fountain" data-gestures></div>
+      <div class="actions">
+        <button type="button" class="primary" data-publish-open data-play>Leave it on a plinth</button>
+        <button type="button" data-undo data-play>Undo mine</button>
+        <button type="button" class="quiet" data-clear data-play>Start over</button>
+      </div>
+      <form class="publish" data-publish hidden>
+        <h3>Leave it on a plinth</h3>
+        <label for="publish-title">Title</label>
+        <input id="publish-title" name="title" maxlength="40" required>
+        <fieldset>
+          <legend>Where</legend>
+          <div class="targets" data-targets></div>
+        </fieldset>
+        <p class="error" data-publish-error role="alert"></p>
+        <div class="actions">
+          <button type="submit" class="primary" data-play>Leave it</button>
+          <button type="button" class="quiet" data-publish-cancel>Cancel</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" data-card="plinth" hidden aria-labelledby="plinth-h">
+      <p class="where" data-plinth-where></p>
+      <h2 id="plinth-h" tabindex="-1" data-plinth-title></h2>
+      <div data-plinth-full hidden>
+        <p class="credits">Played by <span data-plinth-credits></span></p>
+        <div class="actions">
+          <button type="button" class="primary" data-join data-play>Join in on the stage</button>
+          <button type="button" class="quiet" data-store data-play>Move to the storeroom</button>
+        </div>
+        <h3>Versions</h3>
+        <ol class="versions" data-versions aria-live="polite"></ol>
+      </div>
+      <div data-plinth-empty hidden>
+        <p>Nothing here yet. Play something on the stage, then leave it here.</p>
+        <button type="button" class="primary" data-publish-here data-play>Leave the stage's loop here</button>
+      </div>
+    </section>
+
+    <section class="drawers" data-drawers hidden>
+      <details>
+        <summary>Storeroom <span class="count" data-store-count></span></summary>
+        <p class="note">Exhibits taken off a plinth, with every version kept.</p>
+        <ul class="shelf" data-storeroom></ul>
+      </details>
+      <details>
+        <summary>Cleared loops <span class="count" data-archive-count></span></summary>
+        <p class="note">Whatever left the stage. Bring any back.</p>
+        <ul class="shelf" data-archive></ul>
+      </details>
+    </section>
+
+    <p class="toast" data-toast role="alert" hidden></p>
+    <footer class="foot"><a href="/readme/">About this museum</a></footer>
+  </main>
+
+  <dialog class="ask" data-ask aria-labelledby="ask-text">
+    <form method="dialog">
+      <p id="ask-text" data-ask-text></p>
+      <div class="actions">
+        <button value="yes" class="primary" data-ask-yes>Yes</button>
+        <button value="no" class="quiet" autofocus>Cancel</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
