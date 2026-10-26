@@ -40,7 +40,7 @@ type Entry = {
 /** What happened that a page might show. */
 export type News =
   | { kind: "knock"; by: string; from: string; artifact: { id: string; kind: string }; pos: number[]; at: number }
-  | { kind: "released"; tag: string; count: number; at: number };
+  | { kind: "released"; tag: string; name: string; count: number; at: number };
 /** How a visitor's join went: a robot kept for them, recovered after a
  * restart, or new (saying how much cargo went back while they were away). */
 export type Welcome = { kind: "restored" } | { kind: "recovered"; carrying: number } | { kind: "new"; released: number };
@@ -69,7 +69,7 @@ export function createHall(store: Store, { now = Date.now(), random = Math.rando
     const back = store.releaseCargo(pid, t, nearestFree(at, floor.map((f) => f.pos), n));
     if (!back.length) return 0;
     refresh();
-    news.push({ kind: "released", tag: tagOf(pid), count: back.length, at: t });
+    news.push({ kind: "released", tag: tagOf(pid), name: store.who(pid)?.name ?? "Someone", count: back.length, at: t });
     log("release", { tag: tagOf(pid), count: back.length });
     return back.length;
   }

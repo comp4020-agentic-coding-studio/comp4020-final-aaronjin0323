@@ -1,7 +1,8 @@
 // The hall page's decisions, as small pure functions (ADR 24). No DOM and
 // no fetch, so spec/hall-ui.test.ts holds them without a browser. The
 // movement numbers themselves are all in hall.js.
-import { CARRY_MAX, DROP_PROTECT_MS, HALL, KINDS, MIN_PULL, PICKUP_DELAY_MS, PULL_MAX } from "./hall.js";
+import { CARRY_MAX, DROP_PROTECT_MS, GRACE_MS, HALL, KINDS, MIN_PULL, PICKUP_DELAY_MS, PULL_MAX } from "./hall.js";
+import { canPlay } from "./ui.js";
 
 /**
  * A launch from a pull: away from where the pointer is, harder the further
@@ -93,8 +94,9 @@ export function placeIn(display, slot, kind) {
 
 // ---- together (ADR 26)
 
-/** A knock in words, as `you` see it. `name(tag)` names a player. */
+/** What happened, in words, as `you` see it. `name(tag)` names a player. */
 export function newsWords(n, you, name) {
+  if (n.kind === "released") return `${n.name ?? name(n.tag)} left: ${n.count} artifact${n.count === 1 ? "" : "s"} went back to the hall.`;
   const what = `a ${KIND_NAMES[n.artifact.kind]}`;
   if (n.from === you) return `${name(n.by)} knocked ${what} loose from you. You're shielded for a moment.`;
   if (n.by === you) return `You knocked ${what} loose from ${name(n.from)}. It's free to take in a moment.`;
@@ -104,3 +106,18 @@ export function newsWords(n, you, name) {
 export const readiness = (readyAt, now) => (now >= readyAt ? 1 : Math.max(0, 1 - (readyAt - now) / PICKUP_DELAY_MS));
 /** How strong a robot's shield is at `now`: 1 just knocked, fading to 0. */
 export const shield = (protectedUntil, now) => (now >= protectedUntil ? 0 : Math.min(1, (protectedUntil - now) / DROP_PROTECT_MS));
+
+// ---- leaving and coming back (ADR 27)
+const n_ = (n) => `${n} artifact${n === 1 ? "" : "s"}`;
+/** How a join went, in words: "" when there's nothing to say. */
+export function welcomeWords(w) {
+  if (w.kind === "restored") return "Welcome back: your robot waited for you.";
+  if (w.kind === "recovered") return `The hall restarted. Your robot is back in your zone${w.carrying ? `, still carrying ${w.carrying}` : ""}.`;
+  if (w.kind === "new" && w.released) return `You were away too long: the ${n_(w.released)} you carried went back to the hall.`;
+  return "";
+}
+/** The hall's connection, in words: how long your robot waits for you. */
+export function hallConnectionMessage(c) {
+  if (canPlay(c)) return "";
+  return c.everLive ? `Connection lost, reconnecting. Your robot waits ${GRACE_MS / 1000} seconds for you; after that, what it carries goes back to the hall.` : "Connecting…";
+}

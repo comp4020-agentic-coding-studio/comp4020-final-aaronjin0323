@@ -139,3 +139,25 @@ describe("together", () => {
     expect(ui.shield(0, 9000)).toBe(0);
   });
 });
+
+// ADR 27: leaving and coming back, in words
+describe("leaving and coming back", () => {
+  test("coming back says what happened, honestly", () => {
+    expect(ui.welcomeWords({ kind: "restored" })).toBe("Welcome back: your robot waited for you.");
+    expect(ui.welcomeWords({ kind: "recovered", carrying: 2 })).toBe("The hall restarted. Your robot is back in your zone, still carrying 2.");
+    expect(ui.welcomeWords({ kind: "recovered", carrying: 0 })).toBe("The hall restarted. Your robot is back in your zone.");
+    expect(ui.welcomeWords({ kind: "new", released: 1 })).toBe("You were away too long: the 1 artifact you carried went back to the hall.");
+    expect(ui.welcomeWords({ kind: "new", released: 3 })).toBe("You were away too long: the 3 artifacts you carried went back to the hall.");
+    expect(ui.welcomeWords({ kind: "new", released: 0 })).toBe("");
+  });
+  test("losing the connection says how long the robot waits", () => {
+    expect(ui.hallConnectionMessage({ status: "reconnecting", hasState: false, everLive: true })).toBe("Connection lost, reconnecting. Your robot waits 10 seconds for you; after that, what it carries goes back to the hall.");
+    expect(ui.hallConnectionMessage({ status: "live", hasState: true, everLive: true })).toBe("");
+    expect(ui.hallConnectionMessage({ status: "connecting", hasState: false, everLive: false })).toBe("Connecting…");
+  });
+  test("someone's grace running out, in words", () => {
+    const name = () => "Someone";
+    expect(ui.newsWords({ kind: "released", tag: "aaaa", name: "Rosy Wren", count: 2, at: 0 }, "bbbb", name)).toBe("Rosy Wren left: 2 artifacts went back to the hall.");
+    expect(ui.newsWords({ kind: "released", tag: "aaaa", name: "Rosy Wren", count: 1, at: 0 }, "bbbb", name)).toBe("Rosy Wren left: 1 artifact went back to the hall.");
+  });
+});

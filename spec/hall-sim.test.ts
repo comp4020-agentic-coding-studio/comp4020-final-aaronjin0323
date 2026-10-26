@@ -248,7 +248,7 @@ describe("not back in time", () => {
       expect(Math.hypot(f.pos[0] - where[0], f.pos[1] - where[1])).toBeLessThan(4);
     }
     expect(w.store.db.prepare("SELECT COUNT(*) AS c FROM artifacts").get().c).toBe(before);
-    expect(w.news.filter((n) => n.kind === "released")).toEqual([{ kind: "released", tag: w.tagOf(b), count: 2, at: expect.any(Number) }]);
+    expect(w.news.filter((n) => n.kind === "released")).toEqual([{ kind: "released", tag: w.tagOf(b), name: w.store.who(b).name, count: 2, at: expect.any(Number) }]);
     const back = w.hall.join(b, w.now());
     expect(back).toMatchObject({ kind: "new", released: 2 });
     expect(w.robot(b).pos).toEqual(H.HOMES[1]);
