@@ -1,7 +1,7 @@
 // The hall page's decisions, as small pure functions (ADR 24). No DOM and
 // no fetch, so spec/hall-ui.test.ts holds them without a browser. The
 // movement numbers themselves are all in hall.js.
-import { MIN_PULL, PULL_MAX } from "./hall.js";
+import { CARRY_MAX, KINDS, MIN_PULL, PULL_MAX } from "./hall.js";
 
 /**
  * A launch from a pull: away from where the pointer is, harder the further
@@ -54,3 +54,35 @@ export function aimWords({ dir, power }) {
  * arrives; an older one, sent for someone else's change, doesn't undo it.
  */
 export const trust = (mine, server) => (mine && server.seq < mine.seq ? mine : server);
+
+// ---- collecting (ADR 25): what the page shows of cargo and the display,
+// always from the server's word
+
+/** The kinds' names, for the screen. */
+export const KIND_NAMES = { fish: "luminous fish", cloud: "rain cloud", door: "door onto stars" };
+/** CARRY_MAX slots: what's carried, in order, then null for room left. */
+export const cargoSlots = (carrying) => Array.from({ length: CARRY_MAX }, (_, i) => carrying[i]?.kind ?? null);
+/** Cargo in words: what, how much room is left, and what to do when full. */
+export function cargoWords(carrying) {
+  const names = carrying.map((c) => KIND_NAMES[c.kind]).join(", ");
+  if (!carrying.length) return `Carrying nothing. Room for ${CARRY_MAX}.`;
+  if (carrying.length >= CARRY_MAX) return `Full: ${CARRY_MAX} of ${CARRY_MAX} (${names}). Take them to your zone.`;
+  return `Carrying ${carrying.length} of ${CARRY_MAX}: ${names}. Room for ${CARRY_MAX - carrying.length} more.`;
+}
+/** The unit way behind a robot: where it came from, or below it when still. */
+export function behind(vel) {
+  const s = Math.hypot(vel[0], vel[1]);
+  return s < 1e-9 ? [0, 1] : [-vel[0] / s, -vel[1] / s];
+}
+
+/** What a display slot can hold: empty, or a kind you own. */
+export const slotChoices = (collection) => [null, ...KINDS.filter((k) => collection[k] > 0)];
+/** The display with `kind` in `slot`: if that kind was shown elsewhere it
+ * moves, swapping with what was in `slot`, so each kind shows once. */
+export function placeIn(display, slot, kind) {
+  const out = [...display];
+  const was = kind === null ? -1 : out.indexOf(kind);
+  if (was >= 0 && was !== slot) out[was] = out[slot];
+  out[slot] = kind;
+  return out;
+}

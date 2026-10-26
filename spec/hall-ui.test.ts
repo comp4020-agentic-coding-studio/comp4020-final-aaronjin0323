@@ -70,3 +70,40 @@ describe("your own robot while a launch is in flight", () => {
     expect(ui.trust(null, snap(0, 3))).toEqual(snap(0, 3));
   });
 });
+
+// ADR 25: cargo and the display, in words and slots
+describe("cargo", () => {
+  test("three slots behind the robot: what it carries, then the room left", () => {
+    expect(ui.cargoSlots([{ id: "a", kind: "door" }])).toEqual(["door", null, null]);
+    expect(ui.cargoSlots([])).toEqual([null, null, null]);
+  });
+  test("in words, with the room left and what to do when full", () => {
+    expect(ui.cargoWords([])).toBe("Carrying nothing. Room for 3.");
+    expect(ui.cargoWords([{ id: "a", kind: "fish" }, { id: "b", kind: "door" }])).toBe("Carrying 2 of 3: luminous fish, door onto stars. Room for 1 more.");
+    expect(ui.cargoWords([{ id: "a", kind: "fish" }, { id: "b", kind: "fish" }, { id: "c", kind: "cloud" }])).toBe("Full: 3 of 3 (luminous fish, luminous fish, rain cloud). Take them to your zone.");
+  });
+  test("behind a moving robot is the way it came; behind a still one is below it", () => {
+    const b = ui.behind([3, 4]);
+    expect(b[0]).toBeCloseTo(-0.6, 9);
+    expect(b[1]).toBeCloseTo(-0.8, 9);
+    expect(ui.behind([0, 0])).toEqual([0, 1]);
+  });
+});
+
+describe("arranging the display", () => {
+  const have = { fish: 2, cloud: 0, door: 1 };
+  test("a slot offers empty, and every kind you own", () => {
+    expect(ui.slotChoices(have)).toEqual([null, "fish", "door"]);
+  });
+  test("putting a kind in a slot moves it there if it was shown elsewhere, swapping what was there", () => {
+    expect(ui.placeIn([null, null, null, null], 2, "fish")).toEqual([null, null, "fish", null]);
+    expect(ui.placeIn(["fish", null, "door", null], 2, "fish")).toEqual(["door", null, "fish", null]);
+    expect(ui.placeIn(["fish", null, null, null], 0, null)).toEqual([null, null, null, null]);
+  });
+  test("whatever it makes has each kind once", () => {
+    let d: (string | null)[] = [null, null, null, null];
+    for (const [slot, kind] of [[0, "fish"], [1, "door"], [3, "fish"], [1, "fish"], [2, "door"]] as const) d = ui.placeIn(d, slot, kind);
+    const kinds = d.filter((k) => k);
+    expect(new Set(kinds).size).toBe(kinds.length);
+  });
+});
