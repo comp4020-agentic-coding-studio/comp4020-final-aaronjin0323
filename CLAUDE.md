@@ -37,7 +37,8 @@ when evidence warrants it, with the reason recorded here and in an ADR.
 Settled; change them here first, then in the code. The design is
 [ADR 21](docs/adr/0021-one-stage-one-toy.md), the stack
 [ADR 22](docs/adr/0022-stack.md), seeing each other play
-[ADR 23](docs/adr/0023-aim-and-whose-ball.md).
+[ADR 23](docs/adr/0023-aim-and-whose-ball.md), the hall
+[ADR 24](docs/adr/0024-the-hall-and-the-robot.md).
 
 ### Who is who
 
@@ -128,6 +129,33 @@ Settled; change them here first, then in the code. The design is
   deploy or a cold start), so the page opens a new one: 1 s, doubling, at
   most 15 s apart. Held by the browser check's `reconnect`.
 
+### The hall
+
+- **A compact top-down 2D hall at `/hall/`**, beside the stage, not
+  instead of it ([ADR 24](docs/adr/0024-the-hall-and-the-robot.md)). Each
+  visitor with the hall open has a round robot in their colour.
+- **Drag back from your robot to aim, let go to launch.** It goes the
+  opposite way to the pull, harder the further you pull, up to full power.
+  While you aim, the hall shows the path it will take, bounces included,
+  and the power. A pull shorter than `MIN_PULL` cancels. The keyboard does
+  the same: arrows turn the aim and change the power, Enter or Space
+  launches, Escape cancels. Touch is a drag like the mouse.
+- **The server says where every robot is.** A client sends only a launch
+  (`dir`, `power` 0--1), never a position. The server keeps each robot as
+  a snapshot (position, velocity, server time) and sends it on every
+  change; every screen advances snapshots on the shared clock with the
+  same rule. Your own launch is predicted at once and eased onto the
+  server's snapshot.
+- **One rule, `public/hall.js`**, shared by the server and the page: every
+  movement number lives there (hall size, robot radius, `LAUNCH_MAX`,
+  `PULL_MAX`, slowing down, wall bounce), and `advance` steps at 60 Hz with
+  + − × ÷ and `Math.sqrt` only, held by a source check.
+- **A launch replaces the velocity**, at most `LAUNCH_MAX`, so repeated
+  launches never add up. Robots slow to a stop and rebound off the walls,
+  losing some speed; they pass through each other for now.
+- **Robots are presence:** in memory while a hall stream is open, never
+  stored. Nothing yet in the hall to collect, trade or upgrade.
+
 ### The page
 
 - **Words for actions.** Buttons say what they do ("Leave it", "Join in",
@@ -150,6 +178,8 @@ is the whole museum plus `you` and `serverTime`.
 | `GET /readme/` | | README.md rendered | |
 | `GET /me` | | `{ tag, name, colour }` | |
 | `GET /events` | | SSE: `state`, `pointers` | |
+| `GET /hall/` | | the hall | |
+| `GET /hall/events` | | SSE: `hall`, every robot's snapshot plus `you` and `serverTime` (ms) | |
 | `GET /exhibits/:id` | | every version, newest first | `404` |
 | `GET /archive?before=<id>` | | the next 10 cleared loops older than `id` | `400` |
 | `POST /me` | `{ name }` | rename | `400` |
@@ -163,6 +193,7 @@ is the whole museum plus `you` and `serverTime`.
 | `POST /exhibits/:id/restore` | `{ versionId }` | an old version again, as the newest | `404`, `400` |
 | `POST /exhibits/:id/display` | `{ slot, replace? }` | a storeroom exhibit onto a plinth | `409 slot-taken`, `404`, `400` |
 | `POST /exhibits/:id/store` | | off its plinth, into the storeroom | `409 slot-empty`, `404` |
+| `POST /hall/launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot` (no hall open), `400` |
 
 Held by `spec/store.test.ts` (over `:memory:`) and `spec/http.test.ts`
 (against the running app, including a gesture reaching another visitor's
@@ -182,15 +213,17 @@ a person as their tag.
 - Look at the page at 1440x900 and 390x844 before calling a page change
   done: `node scripts/browser-check.ts` against the local app plays it as
   two visitors (drag a ball, ring the bell, pointers, aim, keyboard, Leave it,
-  a refused stream, no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
+  a refused stream, the hall, no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
   isn't in CI, which has no Chrome.
 
 ## Out of scope
 
-Bodies, faces or customisable avatars, chat, accounts and passwords,
+Faces or customisable avatars (the hall's robot is a plain round token in
+your colour, ADR 24), chat, accounts and passwords,
 uploaded assets, runtime AI models, a physics library, VR, an infinite
-world, sliders or parameter panels, multiple rooms, leaderboards,
-economies, puzzles or goals, rate limiting.
+world, sliders or parameter panels, more rooms than the stage and the
+hall, leaderboards, economies, puzzles or goals, rate limiting; in the
+hall, for now, artifacts, trading, upgrades and decoration.
 
 ## The live museum is not a test fixture
 
