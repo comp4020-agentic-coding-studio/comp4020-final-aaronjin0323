@@ -23,6 +23,25 @@
     <p class="aim" data-aim aria-live="polite"></p>
     <p class="how" id="how">Drag back from your robot and let go to launch it: the further you pull, the harder it goes. Or focus the hall and use the keys: left and right turn the aim, up and down change the power, Enter or Space launches, Escape cancels.</p>
     <p class="here">Here now: <span data-here>just you</span></p>
+
+    <div class="cards" data-cards hidden>
+      <section class="card" aria-labelledby="cargo-h">
+        <h2 id="cargo-h">Cargo</h2>
+        <p class="cargo" data-cargo aria-live="polite"></p>
+        <p class="note">Touch an artifact to pick it up. Enter your zone, the pad in your colour, to keep what you carry.</p>
+        <p class="kept" data-kept role="status"></p>
+      </section>
+      <section class="card" aria-labelledby="collection-h">
+        <h2 id="collection-h">Your collection</h2>
+        <ul class="collection" data-collection></ul>
+      </section>
+      <section class="card wide" aria-labelledby="display-h">
+        <h2 id="display-h">Your display</h2>
+        <p class="note">Four places to show what you've collected. Choose a kind for each; its count shows with it.</p>
+        <ol class="display" data-display></ol>
+        <p class="error" data-display-error role="alert"></p>
+      </section>
+    </div>
     <noscript><p>The hall needs JavaScript.</p></noscript>
   </main>
 </body>
