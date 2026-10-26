@@ -165,7 +165,10 @@ a person as their tag.
   (`DB_PATH=$(mktemp -d)/x.db PORT=8080 node src/server.ts`) before every
   commit. Never commit red.
 - Look at the page at 1440x900 and 390x844 before calling a page change
-  done.
+  done: `node scripts/browser-check.ts` against the local app plays it as
+  two visitors (drag a ball, ring the bell, pointers, keyboard, Leave it,
+  no WebGL, no script) and screenshots into `.shots/`. Read the shots; it
+  isn't in CI, which has no Chrome.
 
 ## Out of scope
 
