@@ -38,7 +38,8 @@ Settled; change them here first, then in the code. The design is
 [ADR 21](docs/adr/0021-one-stage-one-toy.md), the stack
 [ADR 22](docs/adr/0022-stack.md), seeing each other play
 [ADR 23](docs/adr/0023-aim-and-whose-ball.md), the hall
-[ADR 24](docs/adr/0024-the-hall-and-the-robot.md).
+[ADR 24](docs/adr/0024-the-hall-and-the-robot.md), collecting
+[ADR 25](docs/adr/0025-collecting-artifacts.md).
 
 ### Who is who
 
@@ -118,6 +119,11 @@ Settled; change them here first, then in the code. The design is
 
 ### Live
 
+- **The store migrates safely.** Migrations are numbered (`user_version`);
+  before applying any to an existing file the server copies it beside
+  itself (`VACUUM INTO <db>.before-v<n>-<time>`), and each runs in a
+  transaction that rolls back whole on any failure. Existing tables are
+  never dropped or rewritten.
 - **SSE with the whole state in every event**, on connect and after every
   change, plus a 15 s heartbeat. Pointers go in a separate `pointers`
   event.
@@ -155,7 +161,33 @@ Settled; change them here first, then in the code. The design is
   launches never add up. Robots slow to a stop and rebound off the walls,
   losing some speed; they pass through each other for now.
 - **Robots are presence:** in memory while a hall stream is open, never
-  stored. Nothing yet in the hall to collect, trade or upgrade.
+  stored. What they carry and what's been collected is stored (below).
+
+### Collecting
+
+- **Three kinds of artifact, one set of rules** ([ADR 25](docs/adr/0025-collecting-artifacts.md)):
+  a luminous flying fish, a rain-filled cloud, a small door onto stars.
+- **Six available at a time**, in safe public spots (a fixed list in
+  `public/hall.js`: inside the walls, clear of every delivery zone and of
+  each other), topped up whenever one is picked up. Each has a UUID.
+- **Touching one collects it**, up to three carried. The server sees the
+  touch: a 50 ms tick walks each moving robot along its 20 ms steps
+  against the artifacts. Pages never send a pickup, a deposit, a player ID
+  or a count.
+- **Your delivery zone** is one of eight pads round the walls, assigned
+  when you first enter the hall and stored. Your robot starts there.
+  Entering it delivers everything you carry.
+- **An artifact is available, carried or deposited, never two**: one row,
+  one `state`, a CHECK, and a trigger allowing only available → carried →
+  deposited. Pickup and deposit are single conditional UPDATEs in a
+  transaction, so they're atomic, and doing either twice changes nothing.
+- **Cargo shows behind the robot**: what it carries, and the room left,
+  for everyone to see. Counts and cargo come only from the server's
+  stream; nothing past movement is predicted.
+- **Nothing is lost:** cargo waits while you're away, collections never
+  expire, and there are no rounds or countdowns.
+- **Your display** is four fixed slots, each empty or one kind you own,
+  each kind once, shown with how many you have. Saved on the server.
 
 ### The page
 
@@ -195,6 +227,7 @@ is the whole museum plus `you` and `serverTime`.
 | `POST /exhibits/:id/display` | `{ slot, replace? }` | a storeroom exhibit onto a plinth | `409 slot-taken`, `404`, `400` |
 | `POST /exhibits/:id/store` | | off its plinth, into the storeroom | `409 slot-empty`, `404` |
 | `POST /hall/launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot` (no hall open), `400` |
+| `POST /hall/display` | `{ slots: [kind \| null, ×4] }` | arrange your display | `409 not-owned`, `400` |
 
 Held by `spec/store.test.ts` (over `:memory:`) and `spec/http.test.ts`
 (against the running app, including a gesture reaching another visitor's
@@ -223,8 +256,9 @@ Faces or customisable avatars (the hall's robot is a plain round token in
 your colour, ADR 24), chat, accounts and passwords,
 uploaded assets, runtime AI models, a physics library, VR, an infinite
 world, sliders or parameter panels, more rooms than the stage and the
-hall, leaderboards, economies, puzzles or goals, rate limiting; in the
-hall, for now, artifacts, trading, upgrades and decoration.
+hall, leaderboards, rate limiting; puzzles, and goals beyond the
+collection loop the student asked for (ADR 25); in the hall, for now,
+trading, upgrades, combat, rounds, countdowns, expiry and decoration.
 
 ## The live museum is not a test fixture
 
