@@ -1,7 +1,7 @@
 // The hall page's decisions, as small pure functions (ADR 24). No DOM and
 // no fetch, so spec/hall-ui.test.ts holds them without a browser. The
 // movement numbers themselves are all in hall.js.
-import { CARRY_MAX, KINDS, MIN_PULL, PULL_MAX } from "./hall.js";
+import { CARRY_MAX, HALL, KINDS, MIN_PULL, PULL_MAX } from "./hall.js";
 
 /**
  * A launch from a pull: away from where the pointer is, harder the further
@@ -69,10 +69,14 @@ export function cargoWords(carrying) {
   if (carrying.length >= CARRY_MAX) return `Full: ${CARRY_MAX} of ${CARRY_MAX} (${names}). Take them to your zone.`;
   return `Carrying ${carrying.length} of ${CARRY_MAX}: ${names}. Room for ${CARRY_MAX - carrying.length} more.`;
 }
-/** The unit way behind a robot: where it came from, or below it when still. */
-export function behind(vel) {
+/** The unit way behind a robot at `pos`: where it came from; when it's
+ * still, towards the middle of the hall, so its cargo never meets a wall. */
+export function behind(vel, pos) {
   const s = Math.hypot(vel[0], vel[1]);
-  return s < 1e-9 ? [0, 1] : [-vel[0] / s, -vel[1] / s];
+  if (s >= 1e-9) return [-vel[0] / s, -vel[1] / s];
+  const dx = HALL.w / 2 - pos[0], dy = HALL.h / 2 - pos[1];
+  const d = Math.hypot(dx, dy);
+  return d < 1e-9 ? [0, 1] : [dx / d, dy / d];
 }
 
 /** What a display slot can hold: empty, or a kind you own. */

@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 // @ts-ignore -- plain JS module shared with the page
 import * as hallUi from "../public/hall-ui.js";
 // @ts-ignore -- plain JS module shared with the page
-import { MIN_PULL, PULL_MAX, checkLaunch } from "../public/hall.js";
+import { HALL, HOMES, MIN_PULL, PULL_MAX, ROBOT_R, checkLaunch } from "../public/hall.js";
 
 const ui: any = hallUi;
 
@@ -82,11 +82,20 @@ describe("cargo", () => {
     expect(ui.cargoWords([{ id: "a", kind: "fish" }, { id: "b", kind: "door" }])).toBe("Carrying 2 of 3: luminous fish, door onto stars. Room for 1 more.");
     expect(ui.cargoWords([{ id: "a", kind: "fish" }, { id: "b", kind: "fish" }, { id: "c", kind: "cloud" }])).toBe("Full: 3 of 3 (luminous fish, luminous fish, rain cloud). Take them to your zone.");
   });
-  test("behind a moving robot is the way it came; behind a still one is below it", () => {
-    const b = ui.behind([3, 4]);
+  test("behind a moving robot is the way it came; a still one's cargo trails towards the middle, never into a wall", () => {
+    const b = ui.behind([3, 4], [5, 5]);
     expect(b[0]).toBeCloseTo(-0.6, 9);
     expect(b[1]).toBeCloseTo(-0.8, 9);
-    expect(ui.behind([0, 0])).toEqual([0, 1]);
+    for (const h of HOMES) {
+      const t = ui.behind([0, 0], h);
+      // the last of three cargo slots stays inside the hall
+      const far = [h[0] + t[0] * 4.5 * ROBOT_R, h[1] + t[1] * 4.5 * ROBOT_R]; // as far as the page draws the third
+      expect(far[0]).toBeGreaterThan(0);
+      expect(far[0]).toBeLessThan(HALL.w);
+      expect(far[1]).toBeGreaterThan(0);
+      expect(far[1]).toBeLessThan(HALL.h);
+    }
+    expect(ui.behind([0, 0], [HALL.w / 2, HALL.h / 2])).toEqual([0, 1]);
   });
 });
 
