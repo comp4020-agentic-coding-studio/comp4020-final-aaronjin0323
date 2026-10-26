@@ -162,6 +162,24 @@ describe("the stage, live", { concurrent: false }, () => {
     expect((await a.post("/pointer", { p: [99, 0, 0] })).status).toBe(400);
     s.close();
   });
+  test("an aim rides on the pointer to other visitors, checked like a flick (ADR 23)", async () => {
+    const a = visitor(), b = visitor();
+    const ta = (await a.me()).tag;
+    const s = await b.stream();
+    await a.stream();
+    const aim = { ball: "gold", v: [1.5, -2, 0.25] };
+    expect((await a.post("/pointer", { p: [0.75, 1, 0], aim })).status).toBe(200);
+    const got = await s.next("pointers", (d) => d.some((p: any) => p.tag === ta && p.aim?.ball === "gold"), 1000);
+    expect(got!.data.find((p: any) => p.tag === ta).aim).toEqual(aim);
+    // letting go drops it
+    expect((await a.post("/pointer", { p: [0.75, 1, 0] })).status).toBe(200);
+    expect(await s.next("pointers", (d) => d.some((p: any) => p.tag === ta && !p.aim), 1000)).not.toBeNull();
+    for (const bad of [{ ball: "nope", v: [0, 0, 0] }, { ball: "gold", v: [99, 0, 0] }, { ball: "gold", v: [1, 2] }, { ball: "gold", v: [0, 0, 0], at: 1 }, "gold"]) {
+      expect((await a.post("/pointer", { p: [0, 1, 0], aim: bad })).status).toBe(400);
+    }
+    expect((await a.post("/pointer", { p: null, aim })).status).toBe(400);
+    s.close();
+  });
 });
 
 describe("exhibits", { concurrent: false }, () => {

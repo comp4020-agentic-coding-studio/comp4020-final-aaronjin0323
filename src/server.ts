@@ -6,6 +6,8 @@ import { readFileSync, statSync, createReadStream } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { marked } from "marked";
 import { openStore } from "./db.ts";
+// @ts-ignore -- plain JS module shared with the page
+import { checkGesture } from "../public/fountain.js";
 import { log } from "./log.ts";
 import { renderListing } from "./html.ts";
 
@@ -38,7 +40,8 @@ function visitorOf(req: IncomingMessage, res: ServerResponse) {
 // ---- the stream: every open page, who it is, and the state it last got
 type Client = { res: ServerResponse; pid: string; tag: string };
 const clients = new Set<Client>();
-const pointers = new Map<string, { tag: string; name: string; colour: number; p: number[]; at: number }>();
+type Aim = { ball: string; v: number[] };
+const pointers = new Map<string, { tag: string; name: string; colour: number; p: number[]; aim?: Aim; at: number }>();
 
 const send = (res: ServerResponse, event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 function stateFor(c: Client, base: ReturnType<typeof store.state>) {
@@ -55,7 +58,7 @@ function pointersSoon() {
     pointerTimer = null;
     const now = Date.now();
     for (const [k, p] of pointers) if (now - p.at > POINTER_TTL_MS) pointers.delete(k);
-    const list = [...pointers.values()].map(({ tag, name, colour, p }) => ({ tag, name, colour, p }));
+    const list = [...pointers.values()].map(({ tag, name, colour, p, aim }) => ({ tag, name, colour, p, ...(aim ? { aim } : {}) }));
     for (const c of clients) send(c.res, "pointers", list);
   }, POINTER_EVERY_MS);
 }
@@ -135,6 +138,12 @@ const readme = () =>
 
 const isPointer = (p: unknown): p is number[] =>
   Array.isArray(p) && p.length === 3 && p.every((x) => typeof x === "number" && Number.isFinite(x)) && Math.abs(p[0]) <= 8 && Math.abs(p[2]) <= 8 && p[1] >= 0 && p[1] <= 4;
+/** An aim is a flick being made: its ball and speed, checked as a flick is (ADR 23). */
+function aimOf(a: unknown): Aim | null {
+  if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).some((k) => k !== "ball" && k !== "v")) return null;
+  const r = checkGesture({ kind: "flick", ...(a as object), at: 0 });
+  return r.ok ? { ball: (r.gesture as any).ball, v: (r.gesture as any).v } : null;
+}
 const idIn = (path: string, re: RegExp) => {
   const m = re.exec(path);
   return m ? Number(m[1]) : null;
@@ -208,8 +217,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   };
 
   if (path === "/pointer") {
+    const aim = body.aim === undefined ? undefined : aimOf(body.aim);
+    if (aim === null || (aim && body.p === null)) return refuse(res, { status: 400, error: "bad-aim", message: "aim is { ball, v } for a flick, with a pointer" });
     if (body.p === null) pointers.delete(v.tag);
-    else if (isPointer(body.p)) pointers.set(v.tag, { tag: v.tag, name: v.name, colour: v.colour, p: body.p.map((x) => Math.round(x * 1000) / 1000), at: now });
+    else if (isPointer(body.p)) pointers.set(v.tag, { tag: v.tag, name: v.name, colour: v.colour, p: body.p.map((x) => Math.round(x * 1000) / 1000), aim, at: now });
     else return refuse(res, { status: 400, error: "bad-pointer", message: "p is [x, y, z] in the room, or null" });
     pointersSoon();
     return json(res, 200, { ok: true });
