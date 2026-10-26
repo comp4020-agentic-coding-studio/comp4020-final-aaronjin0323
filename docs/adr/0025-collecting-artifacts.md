@@ -1,6 +1,7 @@
 # 25. Collecting artifacts in the hall, kept on the server
 
-- **Status:** accepted, week 12
+- **Status:** accepted, week 12; what happens to cargo when its player
+  leaves is superseded by [ADR 27](0027-leaving-and-coming-back.md)
 - **Decides:** how artifacts appear, are carried and are kept; the
   personal display; how the store changes safely
 

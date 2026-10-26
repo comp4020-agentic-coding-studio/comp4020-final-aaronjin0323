@@ -40,7 +40,8 @@ Settled; change them here first, then in the code. The design is
 [ADR 23](docs/adr/0023-aim-and-whose-ball.md), the hall
 [ADR 24](docs/adr/0024-the-hall-and-the-robot.md), collecting
 [ADR 25](docs/adr/0025-collecting-artifacts.md), playing together
-[ADR 26](docs/adr/0026-playing-together-in-the-hall.md).
+[ADR 26](docs/adr/0026-playing-together-in-the-hall.md), leaving and coming
+back [ADR 27](docs/adr/0027-leaving-and-coming-back.md).
 
 ### Who is who
 
@@ -164,6 +165,35 @@ Settled; change them here first, then in the code. The design is
 - **Robots are presence:** in memory while a hall stream is open, never
   stored. What they carry and what's been collected is stored (below).
 
+### Leaving and coming back
+
+- **A grace of `GRACE_MS` (10 s)** after a visitor's last hall stream
+  closes ([ADR 27](docs/adr/0027-leaving-and-coming-back.md)). Their robot
+  is a ghost: faded, colliding with nobody, collecting, delivering and
+  knocking nothing, and unknockable. Back in time: the same robot, where
+  it is, with its cargo. Not: its cargo returns to the free safe spots
+  nearest it, ready, and it leaves; they're told when they return.
+- **Leaving never delivers**, and nor does coming back.
+- **No race:** a join steps the hall to now first, so a passed deadline
+  fires before it; releases are conditional per artifact, so twice is
+  once.
+- **Restarts:** every holder of carried cargo gets the grace from the
+  start (back in time: in their zone, still carrying). A sweep every
+  second releases cargo held by anyone with no robot and no grace.
+- **Identity is the cookie, nothing more.** The same browser keeps its
+  collection across refreshes, tabs, restarts and redeploys. Cleared
+  data, a private window or another device is a new visitor, with no way
+  to claim the old collection; the page says so. Never claim otherwise.
+- **The directory of displays**: everyone who has arranged one, present
+  or not, newest change first, 12 a page by a keyset cursor. Absent
+  visitors appear only there, never as robots.
+- **Limits on size and shape**: bodies over 4 KB `413`, at most 4 hall
+  streams per visitor `429`, bounded pages, unknown fields refused.
+- **Stale actions:** a launch whose `seq` isn't newer is `409
+  stale-launch`; a display change sends the layout it was based on
+  (`was`), `409 stale-display` if that changed. Both answer with the
+  current state, and a new stream's first event resyncs the page.
+
 ### Together in the hall
 
 - **One clock for every robot** ([ADR 26](docs/adr/0026-playing-together-in-the-hall.md)):
@@ -200,7 +230,7 @@ Settled; change them here first, then in the code. The design is
   or a count.
 - **Your delivery zone** is one of eight pads round the walls, assigned
   when you first enter the hall and stored. Your robot starts there.
-  Entering it delivers everything you carry.
+  Moving in it delivers everything you carry; standing in it doesn't.
 - **An artifact is available, carried or deposited, never two**: one row,
   one `state`, a CHECK, and a trigger allowing only available → carried →
   deposited. Pickup and deposit are single conditional UPDATEs in a
@@ -208,8 +238,8 @@ Settled; change them here first, then in the code. The design is
 - **Cargo shows behind the robot**: what it carries, and the room left,
   for everyone to see. Counts and cargo come only from the server's
   stream; nothing past movement is predicted.
-- **Nothing is lost:** cargo waits while you're away, collections never
-  expire, and there are no rounds or countdowns.
+- **Collections never expire**, and there are no rounds or countdowns.
+  Cargo is another matter (below).
 - **Your display** is four fixed slots, each empty or one kind you own,
   each kind once, shown with how many you have. Saved on the server.
 
@@ -225,8 +255,8 @@ Settled; change them here first, then in the code. The design is
 
 ## The contract
 
-Every `POST` takes and answers JSON and refuses a cross-site `Origin` with
-`403 cross-origin`; every refusal is `{ error, message }`. A `state` event
+Every `POST` takes and answers JSON, refuses a body over 4 KB with `413
+too-large` and a cross-site `Origin` with `403 cross-origin`; every refusal is `{ error, message }`. A `state` event
 is the whole museum plus `you` and `serverTime`.
 
 | Route | Body | Does | Refusals |
@@ -250,8 +280,9 @@ is the whole museum plus `you` and `serverTime`.
 | `POST /exhibits/:id/restore` | `{ versionId }` | an old version again, as the newest | `404`, `400` |
 | `POST /exhibits/:id/display` | `{ slot, replace? }` | a storeroom exhibit onto a plinth | `409 slot-taken`, `404`, `400` |
 | `POST /exhibits/:id/store` | | off its plinth, into the storeroom | `409 slot-empty`, `404` |
-| `POST /hall/launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot` (no hall open), `400` |
-| `POST /hall/display` | `{ slots: [kind \| null, ×4] }` | arrange your display | `409 not-owned`, `400` |
+| `POST /hall/launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot` (no hall open), `409 stale-launch`, `400` |
+| `POST /hall/display` | `{ slots: [kind \| null, ×4], was }` | arrange your display, from the layout you saw | `409 not-owned`, `409 stale-display`, `400` |
+| `GET /hall/displays?before=<cursor>` | | the directory: 12 displays, newest change first, and the next cursor | `400` |
 
 Held by `spec/store.test.ts` (over `:memory:`) and `spec/http.test.ts`
 (against the running app, including a gesture reaching another visitor's
