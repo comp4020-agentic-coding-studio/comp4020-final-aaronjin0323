@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 // @ts-ignore -- plain JS module shared with the page
 import { MAX_GESTURES, MAX_PER_VISITOR, checkGesture } from "../public/fountain.js";
+// @ts-ignore -- plain JS module shared with the page
+import { CARRY_MAX, DISPLAY_SLOTS, HOMES, KINDS, MAX_AVAILABLE, SPOTS, touches } from "../public/hall.js";
 
 export type Who = { tag: string; name: string; colour: number };
 export type Gesture = { kind: string; at: number; by: string; seq: number; [k: string]: unknown };
@@ -18,7 +20,9 @@ const ARCHIVE_SHOWN = 10;
 const ADJ = ["Coral", "Amber", "Misty", "Lunar", "Copper", "Velvet", "Sunny", "Quiet", "Indigo", "Silver", "Mossy", "Rosy"];
 const NOUN = ["Heron", "Otter", "Lark", "Finch", "Hare", "Moth", "Wren", "Ibis", "Owl", "Newt", "Fox", "Crane"];
 
-const MIGRATIONS = [
+/** Every change to the schema, in order; `user_version` says how many are
+ * applied. Add to the end, never edit one that has shipped. */
+export const MIGRATIONS = [
   `CREATE TABLE visitors (pid TEXT PRIMARY KEY, tag TEXT NOT NULL UNIQUE, name TEXT NOT NULL, colour INTEGER NOT NULL, created_at INTEGER NOT NULL);
    CREATE TABLE loops (id INTEGER PRIMARY KEY, gestures TEXT NOT NULL, based_on INTEGER, next_seq INTEGER NOT NULL DEFAULT 1, started_at INTEGER NOT NULL, archived_at INTEGER);
    CREATE UNIQUE INDEX one_live_loop ON loops ((archived_at IS NULL)) WHERE archived_at IS NULL;
@@ -27,20 +31,61 @@ const MIGRATIONS = [
      gestures TEXT NOT NULL, credits TEXT NOT NULL, left_by TEXT NOT NULL, restored_from INTEGER, created_at INTEGER NOT NULL, UNIQUE (exhibit_id, n));
    CREATE TRIGGER versions_no_update BEFORE UPDATE ON versions BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
    CREATE TRIGGER versions_no_delete BEFORE DELETE ON versions BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;`,
+  // 2: collecting in the hall (ADR 25). An artifact is one row in exactly one state.
+  `CREATE TABLE artifacts (
+     id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('fish', 'cloud', 'door')), x REAL NOT NULL, y REAL NOT NULL,
+     state TEXT NOT NULL CHECK (state IN ('available', 'carried', 'deposited')),
+     holder TEXT REFERENCES visitors(pid), owner TEXT REFERENCES visitors(pid),
+     spawned_at INTEGER NOT NULL, picked_at INTEGER, deposited_at INTEGER,
+     CHECK ((state = 'available' AND holder IS NULL AND owner IS NULL)
+         OR (state = 'carried' AND holder IS NOT NULL AND owner IS NULL)
+         OR (state = 'deposited' AND holder IS NULL AND owner IS NOT NULL)));
+   CREATE INDEX artifacts_available ON artifacts (state) WHERE state = 'available';
+   CREATE INDEX artifacts_carried ON artifacts (holder) WHERE state = 'carried';
+   CREATE INDEX artifacts_owned ON artifacts (owner, kind) WHERE state = 'deposited';
+   CREATE TRIGGER artifacts_one_way BEFORE UPDATE ON artifacts
+     WHEN NOT ((OLD.state = 'available' AND NEW.state = 'carried') OR (OLD.state = 'carried' AND NEW.state = 'deposited'))
+     BEGIN SELECT RAISE(ABORT, 'an artifact only goes available, carried, deposited'); END;
+   CREATE TRIGGER artifacts_kept BEFORE DELETE ON artifacts BEGIN SELECT RAISE(ABORT, 'artifacts are never deleted'); END;
+   CREATE TABLE hall_players (pid TEXT PRIMARY KEY REFERENCES visitors(pid), home INTEGER NOT NULL, joined_at INTEGER NOT NULL);
+   CREATE TABLE display_slots (pid TEXT NOT NULL REFERENCES visitors(pid), slot INTEGER NOT NULL CHECK (slot BETWEEN 1 AND 4),
+     kind TEXT NOT NULL CHECK (kind IN ('fish', 'cloud', 'door')), PRIMARY KEY (pid, slot), UNIQUE (pid, kind));`,
 ];
+
+/**
+ * Brings a database up to the newest migration. Before changing a file that
+ * already has data, it copies it beside itself (`<path>.before-v<n>-<now>`),
+ * and each migration runs in a transaction that rolls back whole if any
+ * statement fails, so a failed upgrade leaves the file as it was.
+ */
+export function migrate(db: DatabaseSync, path: string, migrations: string[], now: number) {
+  const from = (db.prepare("PRAGMA user_version").get() as Row).user_version as number;
+  if (from >= migrations.length) return { from, to: from, backup: null };
+  let backup: string | null = null;
+  if (from > 0 && path !== ":memory:") {
+    backup = `${path}.before-v${from}-${now}`;
+    db.prepare("VACUUM INTO ?").run(backup);
+  }
+  for (let i = from; i < migrations.length; i++) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(migrations[i]);
+      db.exec(`PRAGMA user_version = ${i + 1}`);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+  return { from, to: migrations.length, backup };
+}
 
 type Row = Record<string, any>;
 
 export function openStore(path: string) {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;");
-  const version = (db.prepare("PRAGMA user_version").get() as Row).user_version as number;
-  for (let i = version; i < MIGRATIONS.length; i++) {
-    db.exec("BEGIN");
-    db.exec(MIGRATIONS[i]);
-    db.exec(`PRAGMA user_version = ${i + 1}`);
-    db.exec("COMMIT");
-  }
+  migrate(db, path, MIGRATIONS, Date.now());
 
   const tx = <T>(fn: () => T): T => {
     db.exec("BEGIN IMMEDIATE");
@@ -129,6 +174,13 @@ export function openStore(path: string) {
     if (!replace) return fail(409, "slot-taken", `Plinth ${slot} holds "${latestOf(there.id).title}"`);
     db.prepare("UPDATE exhibits SET slot = NULL WHERE id = ?").run(there.id);
     return null;
+  }
+
+  /** How many of each kind a visitor has, counted from what they delivered. */
+  function collection(pid: string): Record<string, number> {
+    const out: Record<string, number> = Object.fromEntries((KINDS as string[]).map((k) => [k, 0]));
+    for (const r of db.prepare("SELECT kind, COUNT(*) AS c FROM artifacts WHERE state = 'deposited' AND owner = ? GROUP BY kind").all(pid) as Row[]) out[r.kind] = r.c;
+    return out;
   }
 
   return {
@@ -293,6 +345,77 @@ export function openStore(path: string) {
     archivedBefore(before: number) {
       const rows = db.prepare("SELECT * FROM loops WHERE archived_at IS NOT NULL AND id < ? ORDER BY id DESC LIMIT ?").all(before, ARCHIVE_SHOWN + 1) as Row[];
       return { loops: rows.slice(0, ARCHIVE_SHOWN).map((r) => ({ id: r.id, gestures: gesturesOf(r), credits: credits(gesturesOf(r)), archivedAt: new Date(r.archived_at).toISOString() })), more: rows.length > ARCHIVE_SHOWN };
+    },
+
+    // ---- collecting in the hall (ADR 25). Every change is one conditional
+    // statement, so it's atomic, and repeating it changes nothing.
+
+    /** The visitor's delivery zone (an index into HOMES), assigned once. */
+    hallHome(pid: string, now: number): number {
+      return tx(() => {
+        const r = db.prepare("SELECT home FROM hall_players WHERE pid = ?").get(pid) as Row | undefined;
+        if (r) return r.home as number;
+        const n = (db.prepare("SELECT COUNT(*) AS c FROM hall_players").get() as Row).c as number;
+        db.prepare("INSERT INTO hall_players (pid, home, joined_at) VALUES (?, ?, ?)").run(pid, n % HOMES.length, now);
+        return n % HOMES.length;
+      });
+    },
+
+    /** Tops the floor up to MAX_AVAILABLE, at free safe spots no robot in
+     * `avoid` is touching. How many it added. */
+    fillFloor(now: number, avoid: number[][] = [], random: () => number = Math.random): number {
+      return tx(() => {
+        const taken = db.prepare("SELECT x, y FROM artifacts WHERE state = 'available'").all() as Row[];
+        let free = (SPOTS as number[][]).filter((p) => !taken.some((t) => t.x === p[0] && t.y === p[1]) && !avoid.some((r) => touches(r, p)));
+        let added = 0;
+        for (let n = taken.length; n < MAX_AVAILABLE && free.length; n++, added++) {
+          const p = free[Math.floor(random() * free.length)];
+          free = free.filter((q) => q !== p);
+          const kind = KINDS[Math.floor(random() * KINDS.length)];
+          db.prepare("INSERT INTO artifacts (id, kind, x, y, state, spawned_at) VALUES (?, ?, ?, ?, 'available', ?)").run(randomUUID(), kind, p[0], p[1], now);
+        }
+        return added;
+      });
+    },
+    floor: () => (db.prepare("SELECT id, kind, x, y FROM artifacts WHERE state = 'available' ORDER BY spawned_at, id").all() as Row[]).map((r) => ({ id: r.id, kind: r.kind, pos: [r.x, r.y] })),
+    cargo: (pid: string) => (db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string })),
+
+    /** A touch: the artifact is the visitor's to carry if it's still
+     * available and they carry fewer than CARRY_MAX. */
+    pickUp(pid: string, id: string, now: number) {
+      const r = db
+        .prepare(`UPDATE artifacts SET state = 'carried', holder = ?, picked_at = ? WHERE id = ? AND state = 'available'
+                  AND (SELECT COUNT(*) FROM artifacts WHERE state = 'carried' AND holder = ?) < ?`)
+        .run(pid, now, id, pid, CARRY_MAX);
+      return { ok: true as const, picked: r.changes === 1 };
+    },
+    /** In their zone: everything the visitor carries becomes theirs. */
+    deliver(pid: string, now: number) {
+      const r = db.prepare("UPDATE artifacts SET state = 'deposited', owner = holder, holder = NULL, deposited_at = ? WHERE state = 'carried' AND holder = ?").run(now, pid);
+      return { ok: true as const, delivered: Number(r.changes) };
+    },
+    collection,
+
+    displayOf(pid: string): (string | null)[] {
+      const out: (string | null)[] = Array(DISPLAY_SLOTS).fill(null);
+      for (const r of db.prepare("SELECT slot, kind FROM display_slots WHERE pid = ?").all(pid) as Row[]) out[r.slot - 1] = r.kind;
+      return out;
+    },
+    /** The visitor's display: DISPLAY_SLOTS entries, each null or a kind
+     * they own, each kind once. Replaces the whole layout at once. */
+    arrange(pid: string, slots: unknown) {
+      if (!Array.isArray(slots) || slots.length !== DISPLAY_SLOTS) return fail(400, "bad-display", `The display is ${DISPLAY_SLOTS} slots`);
+      if (!slots.every((k) => k === null || (KINDS as string[]).includes(k))) return fail(400, "bad-display", "Each slot is empty or a kind of artifact");
+      const kinds = slots.filter((k): k is string => k !== null);
+      if (new Set(kinds).size !== kinds.length) return fail(400, "bad-display", "Each kind goes in one slot; its count shows there");
+      return tx(() => {
+        const have = collection(pid);
+        const missing = kinds.find((k) => !have[k]);
+        if (missing) return fail(409, "not-owned", `You haven't collected a ${missing} yet`);
+        db.prepare("DELETE FROM display_slots WHERE pid = ?").run(pid);
+        slots.forEach((k, i) => k && db.prepare("INSERT INTO display_slots (pid, slot, kind) VALUES (?, ?, ?)").run(pid, i + 1, k));
+        return { ok: true as const, display: slots as (string | null)[] };
+      });
     },
 
     /** The whole state every page gets: the stage, the plinths, the
