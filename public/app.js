@@ -18,6 +18,7 @@ import {
   loopNow,
   publishBody,
   publishTargets,
+  retryDelay,
   suggestTitle,
 } from "./ui.js";
 
@@ -92,11 +93,15 @@ async function gesture(g) {
   if (!r.ok && state) scene?.update(state, you);
 }
 
-// ---- the stream
+// ---- the stream. The browser retries a dropped stream by itself, but
+// gives up for good on an answer that isn't one (a proxy's 502 during a
+// deploy or a cold start); then the page opens a new one, backing off.
+let tries = 0;
 function connect() {
   const es = new EventSource("/events");
   es.addEventListener("open", () => setConn(connection(conn, "open")));
   es.addEventListener("state", (e) => {
+    tries = 0;
     const s = JSON.parse(e.data);
     offset = clockOffset(s.serverTime, Date.now());
     state = s;
@@ -105,7 +110,12 @@ function connect() {
     render();
   });
   es.addEventListener("pointers", (e) => scene?.setPointers(JSON.parse(e.data)));
-  es.addEventListener("error", () => setConn(connection(conn, "error")));
+  es.addEventListener("error", () => {
+    setConn(connection(conn, "error"));
+    if (es.readyState !== EventSource.CLOSED) return;
+    es.close();
+    setTimeout(connect, retryDelay(tries++));
+  });
 }
 function setConn(c) {
   conn = c;

@@ -203,6 +203,23 @@ async function leaveIt(browser: Browser) {
   await page.context().close();
 }
 
+async function reconnect(browser: Browser) {
+  console.log("\n— a refused stream comes back on its own —");
+  // A proxy answers 502 while a machine starts or a deploy swaps; a browser's
+  // EventSource gives up for good on any answer that isn't a stream.
+  const ctx = await browser.newContext({ reducedMotion: "reduce", ...DESKTOP });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => check(false, "no script errors", e.message));
+  let refused = 0;
+  await page.route("**/events", (route) => (refused++ < 2 ? route.fulfill({ status: 502, body: "Bad gateway" }) : route.continue()));
+  await page.goto(`${APP}/?v=${Date.now()}`);
+  const t0 = Date.now();
+  const live = await page.waitForFunction(() => document.body.dataset.conn === "live", null, { timeout: 15_000 }).then(() => true, () => false);
+  check(live && refused >= 2, "after the stream is refused twice, the page connects by itself", `${refused} refused, ${Date.now() - t0} ms`);
+  check(live && !(await page.locator('[data-gesture="ring"]').isDisabled()), "and play comes back");
+  await ctx.close();
+}
+
 async function noWebGL(browser: Browser) {
   console.log("\n— without WebGL —");
   const page = await visitor(browser, DESKTOP, () => {
@@ -228,7 +245,7 @@ async function noScript(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, "no-webgl": noWebGL, "no-script": noScript };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { viewports, flick, pointers, aim, keyboard, "leave-it": leaveIt, reconnect, "no-webgl": noWebGL, "no-script": noScript };
 const browser = await chromium.launch({ executablePath: CHROME, headless: !process.env.HEADED });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) if (!only || only === name) await run(browser);
