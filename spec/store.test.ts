@@ -1,384 +1,208 @@
-import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
-import { CAP_EACH, checkPerformance, events, LOOP, SETS } from "../public/stage.js";
-import { ARCHIVE_LIST, CLAIM_MS, migrate, MIGRATIONS, openStore, type Store, tagOf } from "../src/db.ts";
+// The store's rules (CLAUDE.md, "The performance" and "Exhibits"), over an
+// in-memory database with an injected clock.
+import { describe, expect, test } from "vitest";
+import { openStore } from "../src/db.ts";
 
-// The store's rules over ":memory:" with an injected clock (CLAUDE.md, "The
-// checks"): the stage's loop, sphere claims, versions, archiving, slots and
-// migrations. The HTTP tests hold the same rules through the routes.
+const T0 = Date.parse("2026-11-01T00:00:00Z");
+const ring = (at: number) => ({ kind: "ring", at });
+const flick = (ball: string, at: number) => ({ kind: "flick", ball, v: [1, -2, 0], at });
 
-const ANA = "00000000-0000-4000-8000-0000000000a1";
-const BO = "00000000-0000-4000-8000-0000000000b2";
-const T0 = new Date("2026-11-01T10:00:00.000Z");
-const at = (ms: number): Date => new Date(T0.getTime() + ms);
-
-let store: Store;
-beforeEach(() => {
-  store = openStore(":memory:");
-  store.ensureVisitor(ANA, "Coral Heron", 0, T0);
-  store.ensureVisitor(BO, "Teal Finch", 1, T0);
-});
-
-const ok = <T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> => {
-  expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
-  return r as Extract<T, { ok: true }>;
+function fresh() {
+  const s: any = openStore(":memory:");
+  const a = s.visitor(null, T0);
+  const b = s.visitor(null, T0);
+  return { s, a: a.pid, b: b.pid };
+}
+// the store's results, read loosely: the shapes are what the tests check
+const ok = (r: any): any => {
+  expect(r.ok, JSON.stringify(r)).toBe(true);
+  return r;
 };
 
-const tap = (at = 1) => ({ kind: "tap", object: "bell", at });
-const pluck = (at = 1, u = 0.2) => ({ kind: "pluck", object: "ribbon", at, u });
-const toss = (object = "teal", at = 1) => ({ kind: "throw", object, at, from: [0.3, 0.4, 0.2], v: [0.5, 1.5, -0.4] });
-const gestures = () => store.snapshot(T0).draft.parts!.gestures;
+describe("visitors", () => {
+  test("a new visitor gets a name, a colour and a tag; the pid is never in the state", () => {
+    const { s, a } = fresh();
+    const v = s.visitor(a, T0);
+    expect(v.pid).toBe(a);
+    expect(v.name).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(v.tag).toMatch(/^[0-9a-f]{8}$/);
+    s.addGesture(a, ring(1), T0);
+    expect(JSON.stringify(s.state([]))).not.toContain(a);
+  });
+  test("an unknown or missing pid is a new visitor", () => {
+    const { s } = fresh();
+    expect(s.visitor("not-a-real-one", T0).pid).not.toBe("not-a-real-one");
+  });
+  test("rename takes 1-24 characters after trimming, never truncating", () => {
+    const { s, a } = fresh();
+    expect(ok(s.rename(a, "  Ada  ")).visitor.name).toBe("Ada");
+    for (const bad of ["", "   ", "x".repeat(25), 7 as unknown as string]) expect(s.rename(a, bad)).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("the stage", () => {
+  test("a gesture is kept with who made it; a bad one is refused", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, flick("teal", 2), T0));
+    expect(s.state([]).stage.gestures).toMatchObject([{ kind: "flick", ball: "teal", at: 2 }]);
+    expect(s.addGesture(a, { kind: "flick", ball: "teal", at: 2 }, T0)).toMatchObject({ ok: false, status: 400 });
+  });
+  test("past 10 your own oldest drops; past 30 the oldest of all", () => {
+    const { s, a, b } = fresh();
+    for (let i = 0; i < 12; i++) ok(s.addGesture(a, ring(i), T0));
+    let g = s.state([]).stage.gestures;
+    expect(g.length).toBe(10);
+    expect(g.map((x: any) => x.at)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    const c = s.visitor(null, T0).pid;
+    for (let i = 0; i < 10; i++) ok(s.addGesture(b, ring(i + 0.5), T0));
+    for (let i = 0; i < 11; i++) ok(s.addGesture(c, ring(i + 0.25), T0));
+    g = s.state([]).stage.gestures;
+    expect(g.length).toBe(30);
+    // c's 11th pushed out c's own first (the per-visitor cap), so a and b keep 10 each
+    const tags = s.state([]).stage.credits;
+    expect(tags.map((x: any) => x.count).sort()).toEqual([10, 10, 10]);
+  });
+  test("over 30 from many visitors, the oldest of all drops", () => {
+    const s: any = openStore(":memory:");
+    const ps = Array.from({ length: 4 }, () => s.visitor(null, T0).pid);
+    for (let i = 0; i < 31; i++) ok(s.addGesture(ps[i % 4], ring(i * 0.5), T0));
+    const g = s.state([]).stage.gestures;
+    expect(g.length).toBe(30);
+    expect(g.some((x: any) => x.at === 0)).toBe(false);
+  });
+  test("undo removes only your own newest gesture", () => {
+    const { s, a, b } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.addGesture(b, ring(2), T0));
+    ok(s.addGesture(a, ring(3), T0));
+    ok(s.undo(b));
+    expect(s.state([]).stage.gestures.map((x: any) => x.at)).toEqual([1, 3]);
+  });
+  test("undo with nothing of yours is a 409", () => {
+    const { s, a, b } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    expect(s.undo(b)).toMatchObject({ ok: false, status: 409, error: "nothing-to-undo" });
+  });
+  test("start over archives the loop and leaves a silent one; a silent stage can't be cleared", () => {
+    const { s, a } = fresh();
+    expect(s.clear(a, T0)).toMatchObject({ ok: false, status: 409, error: "stage-empty" });
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.clear(a, T0 + 1000));
+    const st = s.state([]);
+    expect(st.stage.gestures).toEqual([]);
+    expect(st.archived.length).toBe(1);
+    expect(st.archived[0].gestures.length).toBe(1);
+  });
+  test("a cleared loop can be brought back; over a busy stage only with replace, archiving it", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.clear(a, T0 + 1));
+    const old = s.state([]).archived[0].id;
+    ok(s.addGesture(a, ring(5), T0 + 2));
+    expect(s.bringBack(old, false, T0 + 3)).toMatchObject({ ok: false, status: 409, error: "stage-busy" });
+    ok(s.bringBack(old, true, T0 + 3));
+    const st = s.state([]);
+    expect(st.stage.gestures.map((x: any) => x.at)).toEqual([1]);
+    expect(st.archived.some((x: any) => x.gestures[0]?.at === 5)).toBe(true);
+  });
+});
+
+describe("exhibits and versions", () => {
+  test("leave it on an empty plinth makes version 1, crediting everyone who played", () => {
+    const { s, a, b } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.addGesture(b, ring(2), T0));
+    ok(s.addGesture(b, ring(3), T0));
+    ok(s.publish(a, { title: "Bell storm", slot: 2 }, T0));
+    const slot = s.state([]).slots.find((x: any) => x.slot === 2);
+    expect(slot.exhibit.latest).toMatchObject({ n: 1, title: "Bell storm" });
+    const h = ok(s.history(slot.exhibit.id)).versions;
+    expect(h[0].credits.map((c: any) => c.count).sort()).toEqual([1, 2]);
+    expect(h[0].leftBy.tag).toBe(s.visitor(a, T0).tag);
+    expect(s.state([]).stage.gestures.length).toBe(3); // the loop stays
+  });
+  test("an empty stage can't be left; a title must be 1-40 characters", () => {
+    const { s, a } = fresh();
+    expect(s.publish(a, { title: "x", slot: 1 }, T0)).toMatchObject({ ok: false, status: 409, error: "stage-empty" });
+    ok(s.addGesture(a, ring(1), T0));
+    for (const title of ["", "  ", "x".repeat(41)]) expect(s.publish(a, { title, slot: 1 }, T0)).toMatchObject({ ok: false, status: 400 });
+    for (const slot of [0, 7, 1.5]) expect(s.publish(a, { title: "ok", slot }, T0)).toMatchObject({ ok: false, status: 400 });
+  });
+  test("a taken plinth is never silently replaced; with replace, the old exhibit goes to the storeroom whole", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.publish(a, { title: "First", slot: 1 }, T0));
+    const first = s.state([]).slots[0].exhibit.id;
+    expect(s.publish(a, { title: "Second", slot: 1 }, T0)).toMatchObject({ ok: false, status: 409, error: "slot-taken" });
+    ok(s.publish(a, { title: "Second", slot: 1, replace: true }, T0));
+    const st = s.state([]);
+    expect(st.slots[0].exhibit.latest.title).toBe("Second");
+    expect(st.storeroom.map((x: any) => x.id)).toEqual([first]);
+    ok(s.display(first, 4, false));
+    expect(s.state([]).slots[3].exhibit.id).toBe(first);
+  });
+  test("a new version of an exhibit adds to it; restore publishes an old one again as the newest", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.publish(a, { title: "One", slot: 3 }, T0));
+    const id = s.state([]).slots[2].exhibit.id;
+    ok(s.addGesture(a, ring(2), T0));
+    ok(s.publish(a, { title: "Two", exhibitId: id }, T0 + 1));
+    const v1 = ok(s.history(id)).versions.find((v: any) => v.n === 1);
+    ok(s.restore(id, v1.id, a, T0 + 2));
+    const h = ok(s.history(id)).versions;
+    expect(h.map((v: any) => v.n)).toEqual([3, 2, 1]);
+    expect(h[0]).toMatchObject({ title: "One", restoredFrom: 1 });
+    expect(h[0].gestures).toEqual(v1.gestures);
+  });
+  test("versions can't be changed or deleted, even by SQL", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.publish(a, { title: "Kept", slot: 1 }, T0));
+    expect(() => s.db.exec("UPDATE versions SET title = 'x'")).toThrow(/immutable/);
+    expect(() => s.db.exec("DELETE FROM versions")).toThrow(/immutable/);
+  });
+  test("join in brings a version to the stage; over a busy stage only with replace, archiving it", () => {
+    const { s, a, b } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.publish(a, { title: "Shared", slot: 5 }, T0));
+    const id = s.state([]).slots[4].exhibit.id;
+    const vid = ok(s.history(id)).versions[0].id;
+    expect(s.join(vid, false, T0)).toMatchObject({ ok: false, status: 409, error: "stage-busy" });
+    ok(s.join(vid, true, T0));
+    const st = s.state([]);
+    expect(st.stage.basedOn).toMatchObject({ title: "Shared", n: 1 });
+    expect(st.archived.length).toBe(1);
+    ok(s.addGesture(b, ring(4), T0));
+    expect(s.state([]).stage.gestures.length).toBe(2);
+    expect(s.join(99999, true, T0)).toMatchObject({ ok: false, status: 404 });
+  });
+  test("taking an exhibit off its plinth keeps it in the storeroom; an empty plinth can't be taken off", () => {
+    const { s, a } = fresh();
+    ok(s.addGesture(a, ring(1), T0));
+    ok(s.publish(a, { title: "Away", slot: 6 }, T0));
+    const id = s.state([]).slots[5].exhibit.id;
+    ok(s.store(id));
+    expect(s.store(id)).toMatchObject({ ok: false, status: 409, error: "slot-empty" });
+    expect(s.state([]).storeroom[0].id).toBe(id);
+    expect(ok(s.history(id)).versions.length).toBe(1);
+  });
+});
 
 describe("migrations", () => {
-  it("seeds three starter performances on plinths 1-3, each one playing and setting something off", () => {
-    const s = store.snapshot(T0);
-    expect(s.slots.map((x) => x.slot)).toEqual([1, 2, 3, 4, 5, 6]);
-    const starters = s.slots.slice(0, 3).map((x) => x.exhibit!);
-    for (const e of starters) {
-      expect(e.latest.recipe).toBe("stage");
-      expect(e.latest.publishedBy).toBeNull();
-      expect(checkPerformance(e.latest.parts), e.latest.title).toEqual({ ok: true });
-      const happened = events(e.latest.parts, 0, LOOP).map((x) => x.kind);
-      expect(happened.some((k) => ["catch", "ring", "fling", "knock", "hop"].includes(k)), `${e.latest.title}: ${happened}`).toBe(true);
-    }
-  });
-
-  it("seeds one starter per new set on plinths 4-6 (ADR 18), each playing and setting something off", () => {
-    const s = store.snapshot(T0);
-    const starters = s.slots.slice(3).map((x) => x.exhibit);
-    expect(starters.map((e) => e?.latest.parts.set)).toEqual(["chimes", "doors", "seesaw"]);
-    for (const e of starters) {
-      expect(e!.latest.publishedBy).toBeNull();
-      expect(checkPerformance(e!.latest.parts), e!.latest.title).toEqual({ ok: true });
-      expect(new Set(events(e!.latest.parts, 0, LOOP).map((x) => x.kind)).size, e!.latest.title).toBeGreaterThanOrEqual(3);
-    }
-  });
-
-  it("puts a new set's starter in the storeroom when its plinth is taken", () => {
-    const db = new DatabaseSync(":memory:");
-    migrate(db, MIGRATIONS.slice(0, 3));
-    db.exec(`INSERT INTO exhibits (slot, created_at) VALUES (5, '2026-11-03T00:00:00.000Z')`);
-    migrate(db);
-    const rows = db.prepare("SELECT e.slot, v.title FROM exhibits e JOIN versions v ON v.exhibit_id = e.id WHERE json_extract(v.parts, '$.set') = 'doors'").all();
-    expect(rows).toEqual([{ slot: null, title: "Wrong Door, Right Bounce" }]);
-  });
-
-  it("moves exhibits made with the old recipes to the storeroom, every version kept", () => {
-    const s = store.snapshot(T0);
-    expect(s.storeroom.map((e) => e.latest.recipe).sort()).toEqual(["arches", "bloom", "loop"]);
-    for (const e of s.storeroom) expect(store.history(e.id)!.versions.length).toBe(e.versionCount);
-  });
-
-  it("starts a silent loop on the stage", () => {
-    expect(store.snapshot(T0).draft).toMatchObject({ recipe: "stage", parts: { set: "orbit", gestures: [] } });
-  });
-
-  it("runs each migration once: reopening never seeds again", () => {
-    const db = new DatabaseSync(":memory:");
-    migrate(db);
-    migrate(db);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
-    expect(db.prepare("SELECT COUNT(*) AS c FROM versions").get()).toEqual({ c: 9 });
-  });
-
-  it("archives a sculpture left on the old workbench, recoverably", () => {
-    const db = new DatabaseSync(":memory:");
-    migrate(db, MIGRATIONS.slice(0, 2));
-    db.exec(`INSERT INTO drafts (recipe, parts, created_at) VALUES ('loop', '{}', '2026-10-30T00:00:00.000Z')`);
-    migrate(db);
-    const rows = db.prepare("SELECT recipe, archived_at IS NOT NULL AS archived FROM drafts ORDER BY id").all();
-    expect(rows).toEqual([
-      { recipe: "loop", archived: 1 },
-      { recipe: "stage", archived: 0 },
-    ]);
-  });
-
-  it("refuses a database newer than the code", () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec(`PRAGMA user_version = ${MIGRATIONS.length + 1}`);
-    expect(() => migrate(db)).toThrow(/only knows/);
-  });
-
-  it("rolls a failed migration back whole", () => {
-    const db = new DatabaseSync(":memory:");
-    expect(() => migrate(db, ["CREATE TABLE a (x); CREATE TABLE a (x);"])).toThrow();
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-    expect(db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'a'").get()).toEqual({ c: 0 });
-  });
-});
-
-describe("visitors", () => {
-  it("creates a visitor once and keeps the first name", () => {
-    expect(store.ensureVisitor(ANA, "Other", 3, T0).created).toBe(false);
-    expect(store.visitor(ANA)).toEqual({ pid: ANA, name: "Coral Heron", colour: 0 });
-    expect(store.view(ANA)).toEqual({ tag: tagOf(ANA), name: "Coral Heron", colour: 0 });
-    expect(tagOf(ANA)).not.toBe(tagOf(BO));
-  });
-});
-
-describe("gestures", () => {
-  it("adds a gesture with its author, and credits them", () => {
-    ok(store.gesture(ANA, tap(2.5), T0));
-    expect(gestures()).toEqual([{ ...tap(2.5), by: tagOf(ANA) }]);
-    expect(store.snapshot(T0).draft.contributors).toMatchObject([{ tag: tagOf(ANA), edits: 1 }]);
-  });
-
-  it("refuses a bad gesture without writing anything", () => {
-    expect(store.gesture(ANA, { kind: "tap", object: "bell", at: 99 }, T0)).toMatchObject({ ok: false, error: "bad-request" });
-    expect(store.gesture(ANA, { ...tap(), by: tagOf(BO) }, T0)).toMatchObject({ ok: false, error: "bad-request" });
-    expect(gestures()).toEqual([]);
-  });
-
-  it("keeps at most CAP_EACH from anyone, dropping their own oldest", () => {
-    ok(store.gesture(BO, pluck(0.5), T0));
-    for (let i = 0; i < CAP_EACH + 3; i++) ok(store.gesture(ANA, tap(i * 0.5), T0));
-    const g = gestures();
-    expect(g.filter((x) => x.by === tagOf(ANA))).toHaveLength(CAP_EACH);
-    expect(g[0]).toEqual({ ...pluck(0.5), by: tagOf(BO) });
-  });
-
-  it("undo removes your own newest gesture, never anyone else's", () => {
-    ok(store.gesture(ANA, tap(1), T0));
-    ok(store.gesture(BO, pluck(2), T0));
-    ok(store.gesture(ANA, tap(3), T0));
-    ok(store.undo(ANA, T0));
-    expect(gestures()).toEqual([
-      { ...tap(1), by: tagOf(ANA) },
-      { ...pluck(2), by: tagOf(BO) },
-    ]);
-    ok(store.undo(ANA, T0));
-    expect(gestures()).toEqual([{ ...pluck(2), by: tagOf(BO) }]);
-    expect(store.undo(ANA, T0)).toMatchObject({ ok: false, error: "nothing-to-undo" });
-    expect(gestures()).toHaveLength(1);
-  });
-});
-
-describe("claims", () => {
-  it("a throw needs your claim, and ends it", () => {
-    expect(store.gesture(ANA, toss("teal"), T0)).toMatchObject({ ok: false, error: "taken" });
-    ok(store.grab(ANA, "teal", T0));
-    ok(store.gesture(ANA, toss("teal"), T0));
-    expect(store.claims(T0)).toEqual([]);
-    expect(store.gesture(ANA, toss("teal"), T0)).toMatchObject({ ok: false, error: "taken" });
-  });
-
-  it("grabbing takes a sphere from whoever holds it, and says who lost it", () => {
-    ok(store.grab(ANA, "gold", T0));
-    const r = ok(store.grab(BO, "gold", at(500)));
-    expect(r.from).toEqual({ tag: tagOf(ANA), name: "Coral Heron", colour: 0 });
-    expect(store.claims(at(500)).map((c) => [c.part, c.pid])).toEqual([["gold", BO]]);
-    // the throw that lost it is refused, naming who has it now
-    expect(store.gesture(ANA, toss("gold"), at(600))).toMatchObject({ ok: false, error: "taken", holder: { tag: tagOf(BO) } });
-    ok(store.gesture(BO, toss("gold"), at(700)));
-  });
-
-  it("only spheres can be grabbed", () => {
-    expect(store.grab(ANA, "bell", T0)).toMatchObject({ ok: false, error: "bad-request" });
-    expect(store.grab(ANA, "nobody", T0)).toMatchObject({ ok: false, error: "bad-request" });
-  });
-});
-
-// Choosing a set (ADR 18), with a tiny set registered for this test only:
-// the server runs on SETS, so a second set is a second entry there.
-describe("choosing a set", () => {
-  const still = { startState: () => ({ n: 0 }), tick: () => {}, apply: () => {}, copyState: (s: { n: number }) => ({ ...s }), view: () => ({}), ease: (v: object) => v, positions: () => [[0, 0, 0]] };
-  const blocks = { id: "blocks", name: "Blocks", objects: ["block", "lamp"], holdable: ["block"], gestures: { throw: { objects: ["block"] }, tap: { objects: ["lamp"] } }, colour: { block: 1, lamp: 2 }, fingerprint: { gestures: [], hash: "", events: 0 }, ...still };
-  beforeEach(() => {
-    (SETS as Record<string, unknown>).blocks = blocks;
-    return () => {
-      delete (SETS as Record<string, unknown>).blocks;
-    };
-  });
-
-  it("switching to another set archives a loop with gestures and starts a silent one on the new set", () => {
-    ok(store.gesture(ANA, tap(), T0));
-    ok(store.grab(BO, "teal", T0));
-    const r = ok(store.clear(BO, at(1000), "blocks"));
-    expect(r.archivedId).toBeTruthy();
-    const s = store.snapshot(at(1000));
-    expect(s.draft.parts).toEqual({ set: "blocks", gestures: [] });
-    expect(s.archivedDrafts[0]).toMatchObject({ id: r.archivedId, reason: "cleared", set: "orbit" });
-    expect(store.claims(at(1000))).toEqual([]);
-  });
-
-  it("switching from a silent loop needs no gestures, and nothing is archived", () => {
-    const before = store.snapshot(T0).archivedTotal;
-    ok(store.clear(ANA, T0, "blocks"));
-    expect(store.snapshot(T0).draft.parts).toEqual({ set: "blocks", gestures: [] });
-    expect(store.snapshot(T0).archivedTotal).toBe(before);
-    // and back again
-    ok(store.clear(ANA, T0, "orbit"));
-    expect(store.snapshot(T0).draft.parts!.set).toBe("orbit");
-  });
-
-  it("what can be held and thrown comes from the set on the stage", () => {
-    expect(store.grab(ANA, "block", T0)).toMatchObject({ ok: false, error: "bad-request" });
-    ok(store.clear(ANA, T0, "blocks"));
-    expect(store.grab(ANA, "teal", T0)).toMatchObject({ ok: false, error: "bad-request" });
-    expect(store.grab(ANA, "lamp", T0)).toMatchObject({ ok: false, error: "bad-request" });
-    const throwBlock = { kind: "throw", object: "block", at: 1, from: [0.3, 0.4, 0.2], v: [0.5, 1.5, -0.4] };
-    expect(store.gesture(ANA, throwBlock, T0)).toMatchObject({ ok: false, error: "taken" });
-    ok(store.grab(ANA, "block", T0));
-    ok(store.gesture(ANA, throwBlock, T0));
-    ok(store.gesture(BO, { kind: "tap", object: "lamp", at: 2 }, T0));
-    expect(store.gesture(BO, tap(), T0)).toMatchObject({ ok: false, error: "bad-request" });
-  });
-
-  it("ends on the clock, on drop, and when the visitor leaves", () => {
-    ok(store.grab(ANA, "teal", T0));
-    expect(store.claims(at(CLAIM_MS - 1))).toHaveLength(1);
-    expect(store.claims(at(CLAIM_MS))).toEqual([]);
-    expect(store.gesture(ANA, toss("teal"), at(CLAIM_MS))).toMatchObject({ ok: false, error: "taken" });
-    ok(store.grab(ANA, "teal", T0));
-    expect(store.drop(ANA, "teal").dropped).toBe(true);
-    expect(store.claims(T0)).toEqual([]);
-    ok(store.grab(ANA, "teal", T0));
-    ok(store.grab(ANA, "gold", T0));
-    expect(store.releaseAll(ANA).sort()).toEqual(["gold", "teal"]);
-    ok(store.grab(ANA, "dusk", T0));
-    expect(store.expire(at(CLAIM_MS)).map((c) => c.part)).toEqual(["dusk"]);
-  });
-
-  it("plucks and taps need no claim", () => {
-    ok(store.grab(BO, "teal", T0));
-    ok(store.gesture(ANA, pluck(), T0));
-    ok(store.gesture(ANA, tap(), T0));
-  });
-});
-
-describe("the stage's loop", () => {
-  it("start over archives the loop and leaves a silent one", () => {
-    expect(store.clear(ANA, T0)).toMatchObject({ ok: false, error: "stage-empty" });
-    ok(store.gesture(ANA, tap(), T0));
-    const r = ok(store.clear(BO, at(1000)));
-    expect(gestures()).toEqual([]);
-    expect(store.snapshot(at(1000)).archivedDrafts[0]).toMatchObject({ id: r.archivedId, reason: "cleared", contributors: [{ tag: tagOf(ANA) }] });
-  });
-
-  it("join brings a version's performance to the stage; over gestures it needs replace, which archives", () => {
-    const v1 = store.snapshot(T0).slots[0].exhibit!.latest;
-    ok(store.join(ANA, v1.id, false, T0));
-    expect(store.snapshot(T0).draft).toMatchObject({ parts: v1.parts, basedOn: { versionId: v1.id } });
-    // the joined performance already has gestures: joining again asks
-    expect(store.join(BO, v1.id, false, T0)).toMatchObject({ ok: false, error: "stage-busy" });
-    const r = ok(store.join(BO, v1.id, true, at(1000)));
-    expect(r.archivedId).toBeTruthy();
-    expect(store.join(ANA, 999, true, T0)).toMatchObject({ ok: false, error: "not-found" });
-  });
-
-  it("an old sculpture can't be joined: it isn't a performance", () => {
-    const old = store.snapshot(T0).storeroom[0].latest;
-    expect(store.join(ANA, old.id, true, T0)).toMatchObject({ ok: false, error: "bad-request" });
-  });
-
-  it("brings an archived loop back with its gestures and credits", () => {
-    ok(store.gesture(ANA, tap(4), T0));
-    const archivedId = ok(store.clear(ANA, T0)).archivedId!;
-    ok(store.gesture(BO, pluck(), T0));
-    expect(store.restoreArchived(BO, archivedId, false, T0)).toMatchObject({ ok: false, error: "stage-busy" });
-    ok(store.restoreArchived(BO, archivedId, true, at(1000)));
-    expect(gestures()).toEqual([{ ...tap(4), by: tagOf(ANA) }]);
-    expect(store.snapshot(at(1000)).draft.contributors).toMatchObject([{ tag: tagOf(ANA) }]);
-  });
-
-  it("start over takes a set: the same set needs gestures; an unknown one is refused", () => {
-    expect(store.clear(ANA, T0, "orbit")).toMatchObject({ ok: false, error: "stage-empty" });
-    for (const set of ["nope", "constructor", "Orbit", ""]) expect(store.clear(ANA, T0, set), set).toMatchObject({ ok: false, error: "bad-request" });
-    ok(store.gesture(ANA, tap(), T0));
-    const r = ok(store.clear(ANA, at(1000), "orbit"));
-    expect(r.archivedId).toBeTruthy();
-    expect(store.snapshot(at(1000)).draft.parts).toEqual({ set: "orbit", gestures: [] });
-  });
-
-  it("keeps every archived loop reachable past the state's newest few", () => {
-    for (let i = 0; i < ARCHIVE_LIST + 3; i++) {
-      ok(store.gesture(ANA, tap(), at(i * 10)));
-      ok(store.clear(ANA, at(i * 10 + 1)));
-    }
-    const s = store.snapshot(T0);
-    expect(s.archivedDrafts).toHaveLength(ARCHIVE_LIST);
-    const rest = store.archive(s.archivedDrafts.at(-1)!.id);
-    expect(s.archivedTotal).toBe(ARCHIVE_LIST + 3 + 0);
-    expect(rest.drafts).toHaveLength(3);
-    expect(rest.more).toBe(false);
-  });
-});
-
-describe("versions", () => {
-  // plinth 4 holds the Chime Tree starter (migration 4): free it
-  beforeEach(() => ok(store.storeAway(store.snapshot(T0).slots[3].exhibit!.id)));
-
-  it("leaves the loop as a new exhibit, credits everyone in it, and keeps the loop", () => {
-    ok(store.gesture(ANA, tap(), T0));
-    ok(store.gesture(BO, pluck(), T0));
-    ok(store.gesture(BO, pluck(3), T0));
-    const p = ok(store.publish(ANA, { title: "Bell Panic", slot: 4 }, at(1000)));
-    const v = store.snapshot(at(1000)).slots[3].exhibit!.latest;
-    expect(v).toMatchObject({ title: "Bell Panic", n: 1, recipe: "stage", publishedBy: { tag: tagOf(ANA) } });
-    expect(v.contributors.map((c) => [c.tag, c.edits])).toEqual([
-      [tagOf(ANA), 1],
-      [tagOf(BO), 2],
-    ]);
-    expect(v.parts.gestures).toHaveLength(3);
-    expect(gestures()).toHaveLength(3);
-    expect(p.n).toBe(1);
-  });
-
-  it("credits only who's still in the loop, not everyone who ever played", () => {
-    ok(store.gesture(BO, pluck(), T0));
-    ok(store.undo(BO, T0));
-    ok(store.gesture(ANA, tap(), T0));
-    ok(store.publish(ANA, { title: "Solo", slot: 4 }, T0));
-    expect(store.snapshot(T0).slots[3].exhibit!.latest.contributors.map((c) => c.tag)).toEqual([tagOf(ANA)]);
-  });
-
-  it("refuses to leave a silent loop", () => {
-    expect(store.publish(ANA, { title: "x", slot: 4 }, T0)).toMatchObject({ ok: false, error: "stage-empty" });
-  });
-
-  it("keeps names as they were when the version was made", () => {
-    ok(store.gesture(ANA, tap(), T0));
-    const p = ok(store.publish(ANA, { title: "Before", slot: 4 }, T0));
-    store.rename(ANA, "Renamed");
-    const v = store.history(p.exhibitId)!.versions[0];
-    expect(v.contributors[0].name).toBe("Coral Heron");
-    expect(v.publishedBy!.name).toBe("Coral Heron");
-  });
-
-  it("adds a version to an existing exhibit; restore makes N+1", () => {
-    const first = store.snapshot(T0).slots[0].exhibit!;
-    ok(store.gesture(ANA, tap(), T0));
-    expect(ok(store.publish(ANA, { title: "Second", exhibitId: first.id }, at(1000))).n).toBe(2);
-    const r = ok(store.restoreVersion(BO, first.id, first.latest.id, at(2000)));
-    expect(r).toMatchObject({ n: 3, from: 1 });
-    const h = store.history(first.id)!;
-    expect(h.versions[0]).toMatchObject({ restoredFrom: 1, parts: first.latest.parts });
-  });
-
-  it("refuses UPDATE and DELETE on versions in the database itself", () => {
-    const db = new DatabaseSync(":memory:");
-    migrate(db);
-    expect(() => db.exec("UPDATE versions SET title = 'x' WHERE id = 1")).toThrow(/immutable/);
-    expect(() => db.exec("DELETE FROM versions WHERE id = 1")).toThrow(/immutable/);
-  });
-});
-
-describe("slots", () => {
-  beforeEach(() => ok(store.gesture(ANA, tap(), T0)));
-
-  it("never silently replaces a full slot; with replace the old one goes to the storeroom", () => {
-    const there = store.snapshot(T0).slots[0].exhibit!;
-    expect(store.publish(BO, { title: "Usurper", slot: 1 }, T0)).toMatchObject({ ok: false, error: "slot-taken", exhibit: { id: there.id } });
-    const r = ok(store.publish(BO, { title: "Usurper", slot: 1, replace: true }, at(1000)));
-    expect(r.stored).toBe(there.id);
-    expect(store.snapshot(at(1000)).storeroom.map((e) => e.id)).toContain(there.id);
-  });
-
-  it("stores an exhibit and displays it again on a free slot", () => {
-    const id = store.snapshot(T0).slots[1].exhibit!.id;
-    expect(ok(store.storeAway(id)).slot).toBe(2);
-    expect(store.storeAway(id)).toMatchObject({ ok: false, error: "slot-empty" });
-    ok(store.display(id, 2, false));
-    expect(store.snapshot(T0).slots[1].exhibit!.id).toBe(id);
+  test("opening twice keeps everything", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const file = join(mkdtempSync(join(tmpdir(), "museum-")), "x.db");
+    const s1: any = openStore(file);
+    const a = s1.visitor(null, T0).pid;
+    ok(s1.addGesture(a, ring(1), T0));
+    ok(s1.publish(a, { title: "Stays", slot: 1 }, T0));
+    s1.close();
+    const s2: any = openStore(file);
+    expect(s2.state([]).slots[0].exhibit.latest.title).toBe("Stays");
+    expect(s2.visitor(a, T0).pid).toBe(a);
+    s2.close();
   });
 });

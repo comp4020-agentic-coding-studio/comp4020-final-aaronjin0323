@@ -1,945 +1,415 @@
-// The museum page: the stream, the DOM controls and the 3D scene.
-//
-// The DOM holds every control (CLAUDE.md, "Phone and keyboard"); the canvas
-// is decoration over it, loaded on its own so the page still works when
-// WebGL or the CDN isn't there. Names and titles only ever reach the page as
-// textContent. Small decisions (connection, publish flow, input rules) live
-// in ui-logic.js, where a test can hold them; the stage's rules are
-// stage.js.
-import { gestureMoment, LOOP, PALETTE, SETS, VISITOR_COLOURS, isHoldable, loopMoment, shownAt } from "./stage.js";
-import { objectName, viewOf } from "./sets/views.js";
-import { isMuted, play as playSounds, setMuted, unlock } from "./sound.js";
+// The page: the stream, the panel, and the requests. The 3D room is
+// scene.js, loaded after, so the panel works without WebGL; the rules are
+// fountain.js and the page's own decisions ui.js.
+import { BALLS, LOOP, createRun, gestureMoment, shown, simulate } from "./fountain.js";
+import * as sound from "./sound.js";
 import {
+  BALL_COLOURS,
+  BALL_NAMES,
   INITIAL_CONN,
-  canEdit,
+  VISITOR_COLOURS,
+  buttonFlick,
+  canPlay,
+  chainStory,
+  clock,
   clockOffset,
   connection,
   connectionMessage,
-  emptySlots,
-  gestureLine,
-  nameProblem,
-  playfulTitle,
-  plural,
-  publishPlan,
-  refusalText,
-  sharedSeconds,
-  titleProblem,
-} from "./ui-logic.js";
+  loopNow,
+  publishBody,
+  publishTargets,
+  retryDelay,
+  suggestTitle,
+} from "./ui.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const phone = matchMedia("(max-width: 760px)");
 
-/** Builds an element. Strings among the children become text nodes, so a
- * name or a title can never become markup. */
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === false || v === null || v === undefined) continue;
-    if (k === "class") node.className = v;
-    else if (k === "dataset") Object.assign(node.dataset, v);
-    else if (k === "style") for (const [p, val] of Object.entries(v)) node.style.setProperty(p, val);
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else if (v === true) node.setAttribute(k, "");
-    else node.setAttribute(k, String(v));
-  }
-  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c instanceof Node ? c : String(c));
-  return node;
-}
-
-const colourOf = (v) => VISITOR_COLOURS[v.colour] ?? VISITOR_COLOURS[0];
-
-/** A visitor as a coloured chip: a dot and their name. */
-function chip(v, extra = "") {
-  return el("span", { class: "chip", style: { "--who": colourOf(v) }, title: `#${v.tag}` }, el("span", { class: "dot", "aria-hidden": "true" }), el("span", { class: "chip-name" }, v.name), extra ? el("span", { class: "chip-extra" }, extra) : null);
-}
-
-/** A visitor as a coloured dot only: the name is its accessible name and
- * tooltip (ADR 13). `ring` marks you. */
-function dot(v, { you = false, note = "" } = {}) {
-  const label = `${v.name}${you ? " (you)" : ""}${note ? `, ${note}` : ""}`;
-  return el("span", { class: `who${you ? " is-you" : ""}`, style: { "--who": colourOf(v) }, title: label, role: "img", "aria-label": label });
-}
-
-/** A sculpture's own colours (each part's colour), as a small conic swatch. */
-/** A performance's colours as a small conic swatch: the objects its
- * gestures touched, in order; the old sculptures (storeroom only) get
- * their own muted ring. */
-function swatchOf(recipe, parts) {
-  const view = parts && viewOf(parts.set);
-  if (recipe !== "stage" || !view) return el("span", { class: `thumb${recipe ? " is-old" : " is-empty"}`, "aria-hidden": "true" });
-  // the set's view picks the colours (its `swatch`)
-  const cols = view.swatch(parts);
-  if (!cols.length) cols.push(PALETTE[0].hex);
-  const stops = cols.map((c, i) => `${c} ${Math.round((i / cols.length) * 360)}deg ${Math.round(((i + 1) / cols.length) * 360)}deg`).join(", ");
-  return el("span", { class: `thumb${parts.gestures.length ? "" : " is-quiet"}`, style: { "--thumb": `conic-gradient(${stops})` }, "aria-hidden": "true" });
-}
-
-function when(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
-}
-
-// ---------------------------------------------------------------- state
-
-let state = /** @type {any} */ (null);
+let state = null;
+let you = null;
 let conn = INITIAL_CONN;
 let offset = 0;
-/** what's being looked at: the stage, a plinth, or a storeroom exhibit */
-let selected = /** @type {{kind: "bench"} | {kind: "slot", slot: number} | {kind: "exhibit", id: number}} */ ({ kind: "bench" });
-const historyCache = new Map();
+let selected = { kind: "stage" };
 let scene = null;
-let cameraMoved = false; // the visitor walked or turned away from the start
+const now = () => loopNow(Date.now(), offset);
 
-// the loop moment now: the shared clock, or the start when held still
-const moment = () => (reducedMotion.matches ? 0 : loopMoment(sharedSeconds(Date.now(), offset)));
-const editable = () => canEdit(conn);
+/** An element, with attributes, dataset, style vars and children. */
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "dataset") Object.assign(e.dataset, v);
+    else if (k === "style") for (const [p, x] of Object.entries(v)) e.style.setProperty(p, x);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) e.append(k);
+  return e;
+}
+const colourOf = (w) => VISITOR_COLOURS[(w?.colour ?? 0) % VISITOR_COLOURS.length];
+const chip = (w, extra = "") => el("span", { class: "chip" }, el("span", { class: "dot", style: { "--c": colourOf(w) }, "aria-hidden": "true" }), `${w.name}${extra}`);
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-// ---------------------------------------------------------------- network
-
+// ---- requests: every refusal comes back as words on screen
 async function post(path, body = {}) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const json = await r.json().catch(() => null);
-    return { ok: r.ok, status: r.status, body: json };
+    const json = await r.json().catch(() => ({}));
+    return { status: r.status, ok: r.ok, json };
   } catch {
-    return { ok: false, status: 0, body: null };
+    return { status: 0, ok: false, json: { message: "The museum didn't answer. Try again." } };
   }
 }
-
-/** Posts, and on a refusal says why. */
-async function act(path, body, done) {
-  if (!editable()) return null;
+async function act(path, body, done = "") {
   const r = await post(path, body);
-  if (!r.ok) toast(refusalText(r.status, r.body));
-  else if (done) toast(done, "ok");
+  if (!r.ok) toast(r.json.message ?? "That didn't work.");
+  else if (done) toast(done);
   return r;
 }
-
-let es = null;
-let retry = null;
-function connect() {
-  clearTimeout(retry);
-  es = new EventSource("/events");
-  es.addEventListener("open", () => {
-    conn = connection(conn, "open");
-    renderConnection();
-  });
-  es.addEventListener("state", (e) => {
-    const next = JSON.parse(e.data);
-    const was = offset;
-    offset = clockOffset(next.serverTime, Date.now());
-    // the loop strip's head follows the shared clock: re-sync it when the
-    // clock moved by more than a frame
-    if (Math.abs(offset - was) > 20) runHead();
-    state = next;
-    conn = connection(conn, "state");
-    render();
-  });
-  // where everyone else stands and looks (ADR 17): live, never stored
-  es.addEventListener("poses", (e) => {
-    if (!state) return;
-    try {
-      scene?.setPoses(JSON.parse(e.data), state.you.tag);
-    } catch {
-      // a malformed poses event only means no heads this time
-    }
-  });
-  es.addEventListener("error", () => dropped(es.readyState === EventSource.CLOSED));
-}
-
-function dropped(closed) {
-  conn = connection(conn, "error");
-  renderConnection();
-  // EventSource retries by itself unless the server answered with an
-  // error; then it gives up, so start a fresh one.
-  if (closed && navigator.onLine !== false) retry = setTimeout(connect, 2000);
-}
-
-// An open stream can outlive the network going away without an error for a
-// long while; the browser saying it's offline is a drop now.
-window.addEventListener("offline", () => {
-  es?.close();
-  clearTimeout(retry);
-  dropped(false);
-});
-window.addEventListener("online", () => {
-  es?.close();
-  connect();
-});
-
-// ---------------------------------------------------------------- toast and ask
-
 let toastTimer = null;
-function toast(text, tone = "warn") {
+function toast(text) {
   const t = $("[data-toast]");
   t.textContent = text;
-  t.dataset.tone = tone;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), tone === "ok" ? 3000 : 6000);
+  toastTimer = setTimeout(() => (t.hidden = true), 3500);
 }
-
-/** A yes/no question in a modal dialog; resolves true only on yes. */
 function ask(text, yes = "Yes") {
-  const dialog = $("[data-ask]");
+  const d = $("[data-ask]");
   $("[data-ask-text]").textContent = text;
   $("[data-ask-yes]").textContent = yes;
-  if (typeof dialog.showModal !== "function") return Promise.resolve(window.confirm(text));
-  return new Promise((resolve) => {
-    dialog.returnValue = "";
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "yes"), { once: true });
-    dialog.showModal();
-  });
+  d.showModal();
+  return new Promise((done) => d.addEventListener("close", () => done(d.returnValue === "yes"), { once: true }));
 }
 
-// ---------------------------------------------------------------- render
+// ---- gestures: from the room and from the buttons, played at once here
+async function gesture(g) {
+  if (!canPlay(conn) || !state) return;
+  sound.wake();
+  $("[data-hint]").dataset.done = "";
+  scene?.playLocal([...state.stage.gestures, { ...g, by: you.tag, seq: 1e9 }]);
+  const r = await act("/stage/gesture", { gesture: g });
+  if (!r.ok && state) scene?.update(state, you);
+}
 
+// ---- the stream. The browser retries a dropped stream by itself, but
+// gives up for good on an answer that isn't one (a proxy's 502 during a
+// deploy or a cold start); then the page opens a new one, backing off.
+let tries = 0;
+function connect() {
+  const es = new EventSource("/events");
+  es.addEventListener("open", () => setConn(connection(conn, "open")));
+  es.addEventListener("state", (e) => {
+    tries = 0;
+    const s = JSON.parse(e.data);
+    offset = clockOffset(s.serverTime, Date.now());
+    state = s;
+    you = s.you;
+    setConn(connection(conn, "state"));
+    render();
+  });
+  es.addEventListener("pointers", (e) => scene?.setPointers(JSON.parse(e.data)));
+  es.addEventListener("error", () => {
+    setConn(connection(conn, "error"));
+    if (es.readyState !== EventSource.CLOSED) return;
+    es.close();
+    setTimeout(connect, retryDelay(tries++));
+  });
+}
+function setConn(c) {
+  conn = c;
+  const msg = connectionMessage(c);
+  const status = $("[data-status]");
+  status.textContent = msg;
+  status.hidden = !msg || (!c.everLive && !state);
+  document.body.dataset.conn = canPlay(c) ? "live" : c.status;
+  for (const b of document.querySelectorAll("[data-play]")) b.disabled = !canPlay(c) || b.dataset.blocked === "1";
+  scene?.setPlayable(canPlay(c));
+}
+
+// ---- the panel
 function render() {
   if (!state) return;
   $("[data-static]").hidden = true;
   $("[data-people]").hidden = false;
-  $("[data-nav]").hidden = false;
+  $("[data-tabs]").hidden = false;
   $("[data-drawers]").hidden = false;
-  if (selected.kind === "exhibit" && !findExhibit(selected.id)) selected = { kind: "bench" };
-  if (selected.kind === "exhibit") {
-    const e = findExhibit(selected.id);
-    if (e.slot !== null) selected = { kind: "slot", slot: e.slot };
-  }
-  renderPeople();
-  renderNav();
+  $("[data-you-dot]").style.setProperty("--c", colourOf(you));
+  $("[data-you-name]").textContent = you.name;
+  $("[data-here]").replaceChildren(...state.here.filter((w) => w.tag !== you.tag).map((w) => el("li", {}, chip(w))));
+  if (!state.here.some((w) => w.tag !== you.tag)) $("[data-here]").replaceChildren(el("li", { class: "by" }, "just you, for now"));
+  renderTabs();
   renderStage();
-  renderExhibit();
+  renderPlinth();
   renderDrawers();
-  renderConnection();
-  renderHome();
-  document.body.dataset.mode = "explore";
-  scene?.update(state, selected);
+  tellStory();
+  scene?.update(state, you);
+  setConn(conn);
 }
 
-function renderConnection() {
-  const msg = connectionMessage(conn);
-  const status = $("[data-status]");
-  status.textContent = msg;
-  status.hidden = !msg;
-  document.body.dataset.conn = conn.status;
-  applyEnabled();
-}
-
-/** One place decides whether each control is usable: the connection, and
- * whether it's blocked (nothing to undo, nothing to leave). */
-function applyEnabled() {
-  const on = editable();
-  for (const c of $$("[data-edit]")) c.disabled = !on || c.dataset.blocked === "1";
-}
-
-
-function renderPeople() {
-  const you = $("[data-you]");
-  you.replaceChildren(chip(state.you));
-  const here = $("[data-here]");
-  here.replaceChildren(
-    ...state.present.map((p) => {
-      const you = p.tag === state.you.tag;
-      const holding = p.holding.map(objectName);
-      return el("li", { class: holding.length ? "is-editing" : "" }, dot(p, { you, note: holding.length ? `holding ${holding.join(", ")}` : "" }));
-    }),
-  );
-}
-
-function renderNav() {
-  const list = $("[data-plinths]");
-  const n = state.draft.parts?.gestures.length ?? 0;
-  const items = [
-    { key: "bench", label: "★", name: `The stage: ${n ? plural(n, "gesture") : "quiet"}`, recipe: "stage", parts: state.draft.parts, pressed: selected.kind === "bench" },
-    ...state.slots.map((s) => ({ key: `slot:${s.slot}`, label: String(s.slot), name: `Plinth ${s.slot}: ${s.exhibit ? s.exhibit.latest.title : "empty"}`, recipe: s.exhibit?.latest.recipe ?? null, parts: s.exhibit?.latest.parts ?? null, empty: !s.exhibit, pressed: selected.kind === "slot" && selected.slot === s.slot })),
-  ];
-  // Rebuild only when the labels change, so focus stays on the button.
-  const sig = JSON.stringify(items.map((it) => [it.key, it.name, it.pressed, it.recipe, it.parts?.gestures.length]));
-  if (list.dataset.sig === sig) return;
-  list.dataset.sig = sig;
-  const focused = document.activeElement?.closest?.("[data-go]")?.dataset.go;
-  list.replaceChildren(
-    ...items.map((it) =>
-      el(
-        "li",
-        {},
-        el(
-          "button",
-          { type: "button", class: `plinth-btn${it.key === "bench" ? " is-bench" : ""}${it.empty ? " is-empty" : ""}`, "aria-pressed": String(it.pressed), "aria-label": it.name, title: it.name, dataset: { go: it.key } },
-          swatchOf(it.recipe, it.parts),
-          el("span", { class: "plinth-label", "aria-hidden": "true" }, it.label),
-        ),
-      ),
+function renderTabs() {
+  const tabs = [{ key: "stage", label: "The stage", full: state.stage.gestures.length > 0 }, ...state.slots.map((s) => ({ key: `slot:${s.slot}`, label: `${s.slot}`, full: !!s.exhibit, name: s.exhibit ? `Plinth ${s.slot}: ${s.exhibit.latest.title}` : `Plinth ${s.slot}: empty` }))];
+  const cur = selected.kind === "stage" ? "stage" : `slot:${selected.slot}`;
+  $("[data-tabs]").replaceChildren(
+    ...tabs.map((t) =>
+      el("button", { type: "button", class: "tab", "aria-pressed": String(t.key === cur), "aria-label": t.name, title: t.name, dataset: { go: t.key }, onclick: () => choose(t.key === "stage" ? { kind: "stage" } : { kind: "slot", slot: Number(t.key.slice(5)) }) },
+        el("span", { class: `pip${t.full ? " full" : ""}`, "aria-hidden": "true" }),
+        t.key === "stage" ? t.label : `Plinth ${t.label}`),
     ),
   );
-  if (focused) $(`[data-go="${focused}"]`)?.focus();
 }
 
-/** Chooses what the card shows. `walk` also walks you there in the room:
- * in front of a plinth, or back to your spot by the stage; a choice the
- * room made itself (you walked up to a plinth) doesn't. */
-function select(next, { focusHeading = false, walk = true } = {}) {
-  selected = next;
-  if (walk) scene?.walkTo(next);
-  closePublish();
-  render();
-  if (focusHeading) $(selected.kind === "bench" ? "#bench-h" : "#exhibit-h")?.focus({ preventScroll: true });
-  const panel = $(".panel");
-  if (getComputedStyle(panel).overflowY === "auto") panel.scrollTo({ top: 0, behavior: reducedMotion.matches ? "auto" : "smooth" });
-  // on the phone the plinth row scrolls sideways: bring the chosen one into it
-  $("[data-plinths] [aria-pressed='true']")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion.matches ? "auto" : "smooth" });
+function choose(sel, focus = true) {
+  selected = sel;
+  $("[data-back]").hidden = sel.kind === "stage";
+  scene?.select(sel);
+  if (state) {
+    renderTabs();
+    renderStage();
+    renderPlinth();
+  }
+  if (focus) $(sel.kind === "stage" ? "#stage-h" : "#plinth-h").focus({ preventScroll: phone.matches });
 }
-
-// Back to the stage: shown whenever you've walked or turned away from
-// your starting spot, or are at a plinth.
-function renderHome() {
-  $("[data-home]").hidden = !scene || (selected.kind === "bench" && !cameraMoved);
-}
-function goHome() {
-  select({ kind: "bench" }, { walk: false });
-  scene?.home();
-  $("#bench-h").focus({ preventScroll: true });
-}
-$("[data-home]").addEventListener("click", goHome);
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || e.defaultPrevented || $("[data-ask]").open) return;
-  if (e.target.closest?.("input:not([type=radio]), select, textarea, form")) return;
-  e.preventDefault();
-  if (!$("[data-publish]").hidden) return closePublish();
-  // back to the stage from anywhere else, or to the opening view
-  if (selected.kind === "bench" && $("[data-home]").hidden) return;
-  goHome();
-});
-
-$("[data-plinths]").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-go]");
-  if (!b) return;
-  const go = b.dataset.go;
-  select(go === "bench" ? { kind: "bench" } : { kind: "slot", slot: Number(go.split(":")[1]) });
-});
-
-// ---------------------------------------------------------------- the stage
 
 function renderStage() {
-  const view = $('[data-view="bench"]');
-  view.hidden = selected.kind !== "bench";
-  const d = state.draft;
-  const gestures = d.parts?.gestures ?? [];
-  $("[data-bench-thumb]").replaceChildren(swatchOf("stage", d.parts));
-  $("[data-bench-title]").textContent = d.basedOn ? d.basedOn.title : "The stage";
-  $("[data-bench-about]").textContent = gestures.length
-    ? `${plural(gestures.length, "gesture")} in a ${LOOP}-second loop${d.basedOn ? `, joined from "${d.basedOn.title}" version ${d.basedOn.n}` : ""}.`
-    : `Quiet. Play the ${SETS[d.parts?.set ?? ""]?.name ?? "stage"} with the buttons below.`;
-  $("[data-bench-credits]").replaceChildren(...d.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "gesture") }))));
-  // Undo has something to take back only if you're in the loop; Leave it
-  // and Start over only if anyone is
-  const mine = gestures.some((g) => g.by === state.you.tag);
-  $("[data-undo]").dataset.blocked = mine ? "0" : "1";
-  $("[data-publish-open]").dataset.blocked = gestures.length ? "0" : "1";
-  $("[data-clear]").dataset.blocked = gestures.length ? "0" : "1";
-  renderGestures();
-  renderSets();
-  // what someone else holds wears their colour on its button
-  const setView = viewOf(d.parts?.set);
-  for (const b of $$("[data-gesture^='throw:']")) {
-    const id = b.dataset.gesture.split(":")[1];
-    const claim = state.claims.find((c) => c.part === id && !c.mine && Date.parse(c.expiresAt) > Date.now() + offset - 1000);
-    b.style.setProperty("--held", claim ? colourOf(claim.holder) : "transparent");
-    b.setAttribute("aria-label", claim ? setView.heldLabel(id, claim.holder.name) : b.dataset.label);
-    b.title = b.getAttribute("aria-label");
-  }
+  const card = $('[data-card="stage"]');
+  card.hidden = selected.kind !== "stage";
+  const st = state.stage;
+  const based = $("[data-based]");
+  based.hidden = !st.basedOn;
+  if (st.basedOn) based.textContent = `Joined in from "${st.basedOn.title}", version ${st.basedOn.n}.`;
+  $("[data-credits-label]").textContent = st.gestures.length ? `Playing, ${plural(st.gestures.length, "gesture")}:` : "Quiet. Flick a ball to start.";
+  $("[data-credits]").replaceChildren(...st.credits.map((c) => chip(c, ` ×${c.count}`)));
   renderTicks();
+  renderGestureButtons();
+  const empty = st.gestures.length === 0;
+  const mine = st.gestures.some((g) => g.by === you.tag);
+  $("[data-publish-open]").dataset.blocked = empty ? "1" : "0";
+  $("[data-clear]").dataset.blocked = empty ? "1" : "0";
+  $("[data-undo]").dataset.blocked = mine ? "0" : "1";
   if (!$("[data-publish]").hidden) renderTargets();
 }
 
-// The gesture buttons: one per object of the set on the stage, as its view
-// lists them (`buttons`), rebuilt only when the set changes. Icons and
-// swatches are the view's own markup, never a visitor's text.
-function renderGestures() {
-  const box = $("[data-gestures]");
-  const set = state.draft.parts?.set ?? "";
-  if (box.dataset.set === set) return;
-  box.dataset.set = set;
-  const view = viewOf(set);
+function renderTicks() {
+  const who = new Map(state.stage.credits.map((c) => [c.tag, c]));
+  $("[data-ticks]").replaceChildren(
+    ...state.stage.gestures.map((g) => el("span", { class: `tick${g.kind === "ring" ? " ring" : ""}`, style: { left: `${(g.at / LOOP) * 100}%`, "--c": colourOf(who.get(g.by)) } })),
+  );
+}
+
+let buttonsBuilt = false;
+function renderGestureButtons() {
+  if (buttonsBuilt) return;
+  buttonsBuilt = true;
+  $("[data-gestures]").replaceChildren(
+    ...BALLS.map((id) =>
+      el("button", { type: "button", class: "gesture", "data-play": true, dataset: { gesture: `flick:${id}` }, onclick: () => {
+        const pos = shown(simulate(state.stage.gestures, now()), now()).balls[id].pos;
+        gesture({ kind: "flick", ball: id, v: buttonFlick(pos), at: gestureMoment(now()) });
+      } }, el("span", { class: "ball", style: { "--c": BALL_COLOURS[id] }, "aria-hidden": "true" }), `Flick ${BALL_NAMES[id].toLowerCase()}`),
+    ),
+    el("button", { type: "button", class: "gesture", "data-play": true, dataset: { gesture: "ring" }, onclick: () => gesture({ kind: "ring", at: gestureMoment(now()) }) }, el("span", { class: "ball", style: { "--c": "#e0b356" }, "aria-hidden": "true" }), "Ring the bell"),
+  );
+}
+
+// the loop's head runs along the strip on the shared clock
+function tickHead() {
+  const head = $("[data-head]");
+  if (head) head.style.left = `${(now() / LOOP) * 100}%`;
+  requestAnimationFrame(tickHead);
+}
+
+// the latest chain in words, a few times a second (ADR 23)
+let storyRun = null, storyKey = "";
+function tellStory() {
+  if (!state || !you) return;
+  const key = JSON.stringify(state.stage.gestures.map((g) => [g.seq, g.by, g.at]));
+  if (key !== storyKey) {
+    storyKey = key;
+    storyRun = createRun(state.stage.gestures);
+  }
+  const names = new Map([...state.here, ...state.stage.credits].map((w) => [w.tag, w.name]));
+  const text = chainStory(storyRun.at(now()).events, now(), (tag) => names.get(tag) ?? "Someone", you.tag);
+  const p = $("[data-story]");
+  if (p.textContent !== text) p.textContent = text;
+}
+setInterval(tellStory, 250);
+
+// ---- leave it
+let publishFor = null; // a slot chosen from a plinth card
+function openPublish(slot = null) {
+  publishFor = slot;
+  choose({ kind: "stage" }, false);
+  const f = $("[data-publish]");
+  f.hidden = false;
+  $("#publish-title").value = suggestTitle(state.stage.gestures);
+  $("[data-publish-error]").textContent = "";
+  renderTargets();
+  $("#publish-title").focus();
+  $("#publish-title").select();
+}
+function renderTargets() {
+  const box = $("[data-targets]");
+  const was = box.querySelector("input:checked")?.value;
+  const targets = publishTargets(state);
   box.replaceChildren(
-    ...(view?.buttons ?? []).map((b) => {
-      const btn = el("button", { type: "button", class: "gesture", "data-edit": true, "aria-label": b.label, title: b.title ?? b.label, dataset: { gesture: b.gesture, label: b.label } });
-      if (b.ball) btn.append(el("span", { class: "ball", style: { "--ball": b.ball } }));
-      else btn.insertAdjacentHTML("beforeend", `<svg aria-hidden="true" viewBox="0 0 24 24">${b.icon ?? ""}</svg>`);
-      return btn;
+    ...targets.map((t, i) => {
+      const value = `${t.kind}:${t.slot}`;
+      const checked = was ? was === value : publishFor ? t.slot === publishFor && t.kind !== "replace" : i === 0;
+      return el("label", {}, el("input", { type: "radio", name: "target", value, checked, dataset: { i: String(i) } }), t.label);
     }),
   );
-  box.style.setProperty("--n", String(Math.max(1, view?.buttons.length ?? 1)));
-  applyEnabled();
+  box._targets = targets;
 }
-
-// The set row (ADR 18): an icon per set, the one on the stage pressed.
-// Shown once there's more than one set to choose from.
-function renderSets() {
-  const box = $("[data-sets]");
-  const ids = Object.keys(SETS);
-  const picker = $("[data-sets-open]");
-  picker.hidden = ids.length < 2;
-  const set = state.draft.parts?.set ?? "";
-  // the picker wears the icon of the set on the stage
-  if (picker.dataset.set !== set) {
-    picker.dataset.set = set;
-    $("[data-sets-icon]").innerHTML = viewOf(set)?.icon ?? "";
-  }
-  if (!box.children.length) {
-    box.replaceChildren(
-      ...ids.map((id) => {
-        const label = `Play the ${SETS[id].name}`;
-        const btn = el("button", { type: "button", class: "set-btn", "data-edit": true, "aria-label": label, title: label, "aria-pressed": "false", dataset: { set: id } });
-        btn.insertAdjacentHTML("beforeend", `<svg aria-hidden="true" viewBox="0 0 24 24">${viewOf(id)?.icon ?? ""}</svg>`);
-        return btn;
-      }),
-    );
-    applyEnabled();
-  }
-  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.set === set));
-}
-
-// The set row waits behind its picker (ADR 19), and closes once a set is picked.
-function openSets(open) {
-  $("[data-sets]").hidden = !open;
-  $("[data-sets-open]").setAttribute("aria-expanded", String(open));
-}
-$("[data-sets-open]").addEventListener("click", () => openSets($("[data-sets]").hidden));
-
-$("[data-sets]").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-set]");
-  if (!b || b.disabled || !state) return;
-  openSets(false);
-  const set = b.dataset.set;
-  if (set === state.draft.parts?.set) return;
-  const busy = (state.draft.parts?.gestures.length ?? 0) > 0;
-  if (busy && !(await ask(`Play the ${SETS[set].name}? This loop is kept in Archived loops, and anyone can bring it back.`, "Play it"))) return;
-  act("/stage/clear", { set });
-});
-
-// The loop as a strip: a tick for each gesture, in its player's colour, and
-// a head running along it. You can see the conversation, and when it'll
-// come round again.
-function renderTicks() {
-  const box = $("[data-loop-ticks]");
-  const gestures = state.draft.parts?.gestures ?? [];
-  const sig = JSON.stringify(gestures.map((g) => [g.at, g.by]));
-  if (box.dataset.sig === sig) return;
-  box.dataset.sig = sig;
-  const colour = (tag) => {
-    const who = [...state.present, ...state.draft.contributors].find((p) => p.tag === tag);
-    return who ? colourOf(who) : "var(--ink-soft)";
-  };
-  box.replaceChildren(...gestures.map((g) => el("span", { class: "tick", style: { left: `${(g.at / LOOP) * 100}%`, "--who": colour(g.by) } })));
-}
-// The head runs as a CSS animation, which the browser drives on its own
-// (no script per frame, no layout): one sweep per loop, started at the
-// loop's moment now, and set again only when the clock offset or motion
-// preference changes.
-function runHead() {
-  const head = $("[data-loop-head]");
-  const still = reducedMotion.matches;
-  head.style.animationDuration = `${LOOP}s`;
-  head.style.animationDelay = `${-moment()}s`;
-  head.style.animationPlayState = still ? "paused" : "running";
-  // restart the animation so the new delay takes effect
-  head.style.animationName = "none";
-  void head.offsetWidth;
-  head.style.animationName = "";
-}
-reducedMotion.addEventListener("change", runHead);
-
-// ---- gestures: from the scene (touch) and from the buttons (keyboard)
-
-/** Plays a gesture: drawn at once on this screen, then sent. A throw grabs
- * its sphere first if this visitor isn't holding it. */
-async function gesture(g) {
-  if (!editable()) return;
-  unlock();
-  const mine = { ...g, by: state.you.tag, _at: Date.now() };
-  scene?.play(mine);
-  const send = { ...g };
-  const r = await post("/stage/gesture", { gesture: send });
-  if (!r.ok) {
-    scene?.unplay(mine);
-    toast(refusalText(r.status, r.body));
-  }
-}
-
-async function onGesture(ev) {
-  if (!editable() || !state) return;
-  unlock();
-  if (ev.kind === "grab") {
-    const r = await post("/stage/grab", { object: ev.object });
-    if (r.ok && r.body.from) toast(`Took it from ${r.body.from.name}`, "ok");
-    return;
-  }
-  gesture(ev);
-}
-
-// The buttons: each one an ordinary gesture at this moment of the loop,
-// as the set's view makes it from the stage as shown now (`fromButton`).
-// A throw grabs what it throws first.
-$("[data-gestures]").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-gesture]");
-  if (!b || b.disabled || !state?.draft.parts) return;
-  const [kind, object] = b.dataset.gesture.split(":");
-  const parts = state.draft.parts;
-  const view = viewOf(parts.set);
-  if (!view) return;
-  const at = Number(gestureMoment(moment()).toFixed(3));
-  const g = view.fromButton(kind, object, at, shownAt(parts, at));
-  if (kind === "throw" && isHoldable(parts.set, object)) {
-    const r = await post("/stage/grab", { object });
-    if (!r.ok) return toast(refusalText(r.status, r.body));
-  }
-  return gesture(g);
-});
-
-$("[data-undo]").addEventListener("click", async () => {
-  const r = await act("/stage/undo", {});
-  if (r?.ok) toast(gestureLine(r.body.removed, "Undid"), "ok");
-});
-
-$("[data-clear]").addEventListener("click", async () => {
-  if (await ask("Start over? This loop is kept in Archived loops, and anyone can bring it back.", "Start over")) act("/stage/clear", {}, "A quiet stage");
-});
-
-// ---- sound: off until the first touch; one button mutes it
-
-function renderSound() {
-  const b = $("[data-sound]");
-  const off = isMuted();
-  b.setAttribute("aria-pressed", String(!off));
-  b.setAttribute("aria-label", off ? "Sound is off: turn it on" : "Sound is on: turn it off");
-  b.title = b.getAttribute("aria-label");
-  b.querySelector("use").setAttribute("href", off ? "#i-mute" : "#i-sound");
-}
-$("[data-sound]").addEventListener("click", () => {
-  unlock();
-  setMuted(!isMuted());
-  renderSound();
-});
-document.addEventListener("pointerdown", () => unlock(), { once: true });
-renderSound();
-
-// ---- leaving it on a plinth
-
-function closePublish() {
-  $("[data-publish]").hidden = true;
-  $("[data-publish-open]").hidden = false;
-}
-
-function openPublish(preferred) {
-  if (!state.draft.parts?.gestures.length) return toast("Play something first");
-  if (selected.kind !== "bench") select({ kind: "bench" });
-  const form = $("[data-publish]");
-  form.hidden = false;
-  $("[data-publish-open]").hidden = true;
-  const title = $("#publish-title");
-  if (!title.value) title.value = state.draft.basedOn ? state.draft.basedOn.title : playfulTitle(state.draft.parts);
-  renderTargets(preferred);
-  $("[data-publish-error]").textContent = "";
-  title.focus();
-  title.select();
-  form.scrollIntoView({ block: "nearest", behavior: reducedMotion.matches ? "auto" : "smooth" });
-}
-
-function targetValue() {
-  return $('input[name="target"]:checked')?.value ?? null;
-}
-
-const parseTarget = (v) => (v?.startsWith("slot:") ? { slot: Number(v.slice(5)) } : v?.startsWith("ex:") ? { exhibitId: Number(v.slice(3)) } : null);
-
-function renderTargets(preferred) {
-  const box = $("[data-targets]");
-  const keep = preferred ?? targetValue();
-  const opts = [];
-  for (const slot of emptySlots(state.slots)) opts.push({ value: `slot:${slot}`, group: "new", text: `New exhibit on plinth ${slot}`, sub: "empty" });
-  const based = state.draft.basedOn?.exhibitId;
-  const onShow = state.slots.filter((s) => s.exhibit).map((s) => s.exhibit);
-  const all = [...onShow, ...state.storeroom].sort((a, b) => (a.id === based ? -1 : b.id === based ? 1 : 0));
-  for (const e of all) opts.push({ value: `ex:${e.id}`, group: "version", text: `Version ${e.versionCount + 1} of "${e.latest.title}"`, sub: e.slot ? `plinth ${e.slot}` : "storeroom" });
-  for (const s of state.slots.filter((x) => x.exhibit)) opts.push({ value: `slot:${s.slot}`, group: "replace", text: `Replace plinth ${s.slot}`, sub: `"${s.exhibit.latest.title}" goes to the storeroom` });
-  const heads = { new: "A new exhibit", version: "A new version of an exhibit", replace: "A new exhibit, replacing one" };
-  let chosen = opts.find((o) => o.value === keep && (o.group !== "replace" || keep === preferred)) ?? opts.find((o) => o.group === "version" && based && o.value === `ex:${based}`) ?? opts.find((o) => o.group === "new");
-  // a replace target is only chosen when asked for by name
-  const seen = new Set();
-  const nodes = [];
-  for (const o of opts) {
-    if (!seen.has(o.group)) {
-      seen.add(o.group);
-      nodes.push(el("p", { class: "target-head" }, heads[o.group]));
-    }
-    const id = `t-${o.group}-${o.value.replace(":", "-")}`;
-    nodes.push(
-      el(
-        "label",
-        { class: `target is-${o.group}`, for: id },
-        el("input", { type: "radio", name: "target", id, value: o.value, checked: chosen === o, "data-edit": true, dataset: { group: o.group } }),
-        el("span", { class: "target-text" }, o.text),
-        el("span", { class: "target-sub" }, o.sub),
-      ),
-    );
-  }
-  box.replaceChildren(...nodes);
-  applyEnabled();
-  renderPlan();
-}
-
-function renderPlan() {
-  const target = parseTarget(targetValue());
-  const plan = target ? publishPlan(state, target, $("#publish-title").value.trim()) : null;
-  $("[data-plan]").textContent = plan ? (plan.kind === "invalid" ? plan.reason : plan.summary) : "Choose where it goes.";
-  $("[data-plan]").dataset.kind = plan?.kind ?? "";
-}
-
-$("[data-targets]").addEventListener("change", renderPlan);
 $("[data-publish-open]").addEventListener("click", () => openPublish());
-$("[data-publish-cancel]").addEventListener("click", closePublish);
+$("[data-publish-here]").addEventListener("click", () => openPublish(selected.slot));
+$("[data-publish-cancel]").addEventListener("click", () => ($("[data-publish]").hidden = true));
 $("[data-publish]").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const error = $("[data-publish-error]");
-  const title = $("#publish-title").value;
-  const problem = titleProblem(title);
-  if (problem) return (error.textContent = problem);
-  const target = parseTarget(targetValue());
-  if (!target) return (error.textContent = "Choose where it goes.");
-  const plan = publishPlan(state, target, title.trim());
-  if (plan.kind === "invalid") return (error.textContent = plan.reason);
-  if (plan.confirm && !(await ask(plan.confirm, "Publish and move it"))) return;
-  error.textContent = "";
-  const r = await act("/publish", plan.body);
-  if (!r) return;
-  if (!r.ok) {
-    error.textContent = refusalText(r.status, r.body);
-    return;
-  }
-  $("#publish-title").value = "";
-  closePublish();
-  toast(plan.kind === "add-version" ? "New version on show" : "Left on show", "ok");
-  if ("slot" in target) select({ kind: "slot", slot: target.slot });
-  else select({ kind: "exhibit", id: target.exhibitId });
+  const box = $("[data-targets]");
+  const picked = box.querySelector("input:checked");
+  const err = $("[data-publish-error]");
+  if (!picked) return (err.textContent = "Choose where it goes.");
+  const target = box._targets[Number(picked.dataset.i)];
+  const title = $("#publish-title").value.trim();
+  if (!title || title.length > 40) return (err.textContent = "A title is 1 to 40 characters.");
+  if (target.kind === "replace" && !(await ask(`Replace what's on plinth ${target.slot}? It moves to the storeroom with every version kept.`, "Replace it"))) return;
+  const r = await post("/publish", publishBody(target, title));
+  if (!r.ok) return (err.textContent = r.json.message ?? "That didn't work.");
+  $("[data-publish]").hidden = true;
+  toast(`Left on plinth ${target.slot}.`);
+  choose({ kind: "slot", slot: target.slot });
 });
 
-// ---------------------------------------------------------------- exhibits
+$("[data-undo]").addEventListener("click", () => act("/stage/undo"));
+$("[data-clear]").addEventListener("click", async () => {
+  if (await ask("Start over? This loop is kept in Cleared loops, and anyone can bring it back.", "Start over")) act("/stage/clear", {}, "Started over.");
+});
 
-function findExhibit(id) {
-  for (const s of state.slots) if (s.exhibit?.id === id) return s.exhibit;
-  return state.storeroom.find((e) => e.id === id) ?? null;
+// ---- a plinth
+const histories = new Map(); // exhibit id -> { key, versions }
+async function historyOf(ex) {
+  const key = `${ex.id}:${ex.versionCount}`;
+  const h = histories.get(ex.id);
+  if (h?.key === key) return h.versions;
+  const r = await fetch(`/exhibits/${ex.id}`).then((x) => x.json()).catch(() => null);
+  if (!r) return null;
+  histories.set(ex.id, { key, versions: r.versions });
+  return r.versions;
 }
-
-function selectedExhibit() {
-  if (selected.kind === "slot") return state.slots.find((s) => s.slot === selected.slot)?.exhibit ?? null;
-  if (selected.kind === "exhibit") return findExhibit(selected.id);
-  return null;
-}
-
-function renderExhibit() {
-  const view = $('[data-view="exhibit"]');
-  view.hidden = selected.kind === "bench";
-  if (selected.kind === "bench") return;
-  const e = selectedExhibit();
-  const stageQuiet = !state.draft.parts?.gestures.length;
-  $("[data-ex-empty]").hidden = !!e;
-  $("[data-ex-full]").hidden = !e;
-  if (!e) {
-    $("[data-ex-where]").textContent = String(selected.slot);
-    $("[data-ex-title]").textContent = "Empty";
-    $("[data-ex-credits]").replaceChildren();
-    $("[data-ex-empty-text]").textContent = stageQuiet ? "Nothing here yet. Play something on the stage, then leave it here." : "Nothing here yet. Leave what's playing on the stage here.";
-    const btn = $("[data-ex-publish-here]");
-    btn.hidden = stageQuiet;
-    btn.onclick = () => openPublish(`slot:${selected.slot}`);
-    return;
-  }
-  const v = e.latest;
-  $("[data-ex-where]").textContent = e.slot ? String(e.slot) : "";
-  $("[data-ex-title]").textContent = v.title;
-  const meta = $("[data-ex-meta]");
-  const what = v.recipe === "stage" ? `a performance of ${plural(v.parts.gestures.length, "gesture")}` : "one of the old sculptures";
-  meta.replaceChildren(`${what} · version ${v.n} of ${e.versionCount} · `, v.publishedBy ? el("span", {}, "left by ", chip(v.publishedBy)) : "one of the museum's starters", v.publishedAt ? ` · ${when(v.publishedAt)}` : "");
-  $("[data-ex-credits]").replaceChildren(...v.contributors.map((c) => el("li", {}, dot(c, { you: c.tag === state.you.tag, note: plural(c.edits, "gesture") }))));
-  const join = $("[data-ex-join]");
-  join.hidden = v.recipe !== "stage";
-  join.onclick = () => joinVersion(v);
-  const store = $("[data-ex-store]");
-  store.hidden = e.slot === null;
-  store.onclick = async () => {
-    if (await ask(`Move "${v.title}" off plinth ${e.slot} into the storeroom? All ${plural(e.versionCount, "version")} go with it, and it can be put back later.`, "Move to the storeroom")) {
-      const r = await act(`/exhibits/${e.id}/store`, {}, "In the storeroom");
-      if (r?.ok) select({ kind: "exhibit", id: e.id });
-    }
-  };
-  renderDisplay(e);
-  renderHistory(e);
-}
-
-/** Brings a performance to the stage to play along with. Over a loop
- * someone's playing it asks first; that loop is archived, never lost. */
-async function joinVersion(v) {
-  const busy = (state.draft.parts?.gestures.length ?? 0) > 0;
-  if (busy) {
-    const who = state.draft.contributors.length ? `, played by ${state.draft.contributors.map((c) => c.name).join(", ")},` : "";
-    if (!(await ask(`Bring "${v.title}" to the stage? What's playing there now${who} is kept in Archived loops.`, "Bring it"))) return;
-  }
-  const r = await act("/stage/join", { versionId: v.id, replace: busy }, "On the stage");
-  if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
-}
-
-function renderDisplay(e) {
-  const box = $("[data-ex-display]");
-  box.hidden = e.slot !== null;
-  if (e.slot !== null) return;
-  const sel = $("[data-display-slot]");
-  const was = sel.value;
-  sel.replaceChildren(...state.slots.map((s) => el("option", { value: s.slot }, s.exhibit ? `Plinth ${s.slot} (replaces "${s.exhibit.latest.title}")` : `Plinth ${s.slot} (empty)`)));
-  const free = emptySlots(state.slots);
-  sel.value = was && state.slots.some((s) => String(s.slot) === was) ? was : String(free[0] ?? 1);
-  $("[data-display]").onclick = async () => {
-    const slot = Number(sel.value);
-    const there = state.slots.find((s) => s.slot === slot)?.exhibit;
-    if (there && !(await ask(`"${there.latest.title}" (${plural(there.versionCount, "version")}) moves to the storeroom, and "${e.latest.title}" goes on plinth ${slot}. Go ahead?`, "Swap them"))) return;
-    const r = await act(`/exhibits/${e.id}/display`, { slot, replace: !!there }, `On plinth ${slot}`);
-    if (r?.ok) select({ kind: "slot", slot });
-  };
-}
-
-async function renderHistory(e) {
-  const list = $("[data-history]");
-  const cached = historyCache.get(e.id);
-  if (cached && cached.count === e.versionCount) return drawHistory(list, e, cached.data);
-  if (!cached) list.replaceChildren(el("li", { class: "hint", "aria-label": "Loading its history" }, "…"));
-  try {
-    const r = await fetch(`/exhibits/${e.id}`);
-    if (!r.ok) throw new Error(String(r.status));
-    const data = await r.json();
-    historyCache.set(e.id, { count: data.versions.length, data });
-    const still = selectedExhibit();
-    if (still && still.id === e.id) drawHistory(list, still, data);
-  } catch {
-    list.replaceChildren(el("li", { class: "hint" }, "History unavailable"));
-  }
-}
-
-// History is a strip of version chips in each publisher's colour (ADR 13);
-// the open one shows its credits and its actions as icons. Every word that
-// left the screen is still in an accessible name.
-let openVersion = null;
-function drawHistory(list, e, data) {
-  const latestN = Math.max(...data.versions.map((v) => v.n));
-  if (!data.versions.some((v) => v.id === openVersion)) openVersion = data.versions[0]?.id ?? null;
-  list.replaceChildren(
-    ...data.versions.map((v) => {
-      const notes = [];
-      if (v.restoredFrom) {
-        const from = data.versions.find((x) => x.id === v.restoredFrom);
-        notes.push(`restored from version ${from ? from.n : "?"}`);
-      }
-      if (v.basedOn && v.basedOn.exhibitId !== e.id) notes.push(`remixed from "${v.basedOn.title}" v${v.basedOn.n}`);
-      else if (v.basedOn) notes.push(`remixed from v${v.basedOn.n}`);
-      const by = v.publishedBy ? `published by ${v.publishedBy.name}` : "the museum's starter";
-      const about = `Version ${v.n}, "${v.title}", ${by}, ${when(v.publishedAt)}${notes.length ? `, ${notes.join(", ")}` : ""}${v.n === latestN ? ", on show" : ""}`;
-      const open = v.id === openVersion;
-      const restore = `Restore as version ${latestN + 1}`;
-      return el(
-        "li",
-        { class: `version${v.n === latestN ? " is-latest" : ""}${open ? " is-open" : ""}`, style: { "--who": v.publishedBy ? colourOf(v.publishedBy) : "var(--teal-ink)" } },
-        el("button", { type: "button", class: "version-chip", "aria-expanded": String(open), "aria-label": about, title: about, onclick: () => { openVersion = v.id; drawHistory(list, e, data); } }, swatchOf(v.recipe, v.parts), el("span", { class: "version-n" }, `v${v.n}`)),
-        // the latest version's remix is the button above; its box shows only
-        // when it has credits or it's an older version to restore
-        open && (v.n !== latestN || v.contributors.length)
-          ? el(
-              "div",
-              { class: "version-detail" },
-              el("p", { class: "sr-only" }, about),
-              v.contributors.length ? el("ul", { class: "dots" }, ...v.contributors.map((c) => el("li", {}, dot(c, { note: plural(c.edits, "gesture") })))) : null,
-              v.n !== latestN
-                ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": restore, title: restore, onclick: () => act(`/exhibits/${e.id}/restore`, { versionId: v.id }, `Restored as v${latestN + 1}`) }, el("svg", { "aria-hidden": "true" }), )
-                : null,
-              v.n !== latestN && v.recipe === "stage"
-                ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": "Bring this version to the stage", title: "Bring this version to the stage", onclick: () => joinVersion(v) }, el("svg", { "aria-hidden": "true" }))
-                : null,
-            )
-          : null,
-      );
-    }),
+async function renderPlinth() {
+  const card = $('[data-card="plinth"]');
+  card.hidden = selected.kind !== "slot";
+  if (selected.kind !== "slot") return;
+  const s = state.slots[selected.slot - 1];
+  $("[data-plinth-where]").textContent = `Plinth ${s.slot}`;
+  $("[data-plinth-title]").textContent = s.exhibit ? s.exhibit.latest.title : "Empty";
+  $("[data-plinth-full]").hidden = !s.exhibit;
+  $("[data-plinth-empty]").hidden = !!s.exhibit;
+  $("[data-publish-here]").dataset.blocked = state.stage.gestures.length ? "0" : "1";
+  if (!s.exhibit) return setConn(conn);
+  const ex = s.exhibit;
+  $("[data-plinth-credits]").replaceChildren(...(ex.latest.credits.length ? ex.latest.credits.map((c) => chip(c)) : ["nobody"]));
+  const versions = await historyOf(ex);
+  if (!versions || selected.kind !== "slot" || selected.slot !== s.slot) return;
+  $("[data-versions]").replaceChildren(
+    ...versions.map((v) =>
+      el("li", {},
+        el("span", {}, el("strong", {}, `Version ${v.n}`), ` "${v.title}" `, el("span", { class: "meta" }, `left by ${v.leftBy.name}${v.restoredFrom ? `, restored from version ${v.restoredFrom}` : ""}`)),
+        el("span", { class: "row" },
+          el("button", { type: "button", "data-play": true, "aria-label": `Join in on version ${v.n}`, onclick: () => joinIn(v) }, "Join in"),
+          v.n !== ex.latest.n ? el("button", { type: "button", class: "quiet", "data-play": true, "aria-label": `Restore version ${v.n} as the newest`, onclick: () => act(`/exhibits/${ex.id}/restore`, { versionId: v.id }, `Version ${v.n} is the newest again.`) }, "Restore") : null),
+      ),
+    ),
   );
-  // <use> inside an SVG made by createElement needs the SVG namespace
-  for (const b of list.querySelectorAll(".version-detail button.icon")) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("aria-hidden", "true");
-    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-    use.setAttribute("href", /^Restore/.test(b.getAttribute("aria-label")) ? "#i-restore" : "#i-remix");
-    svg.append(use);
-    b.replaceChildren(svg);
-  }
-  applyEnabled();
+  setConn(conn);
 }
+async function joinIn(version) {
+  const busy = state.stage.gestures.length > 0;
+  if (busy && !(await ask(`Bring "${version.title}" to the stage? What's playing now is kept in Cleared loops.`, "Bring it"))) return;
+  const r = await act("/stage/join", { versionId: version.id, replace: busy }, `"${version.title}" is on the stage. Play along.`);
+  if (r.ok) choose({ kind: "stage" });
+}
+$("[data-join]").addEventListener("click", async () => {
+  const ex = state.slots[selected.slot - 1].exhibit;
+  if (ex) joinIn(ex.latest);
+});
+$("[data-store]").addEventListener("click", async () => {
+  const ex = state.slots[selected.slot - 1].exhibit;
+  if (ex && (await ask(`Move "${ex.latest.title}" to the storeroom? Every version is kept, and it can come back.`, "Move it"))) act(`/exhibits/${ex.id}/store`, {}, "Moved to the storeroom.");
+});
 
-// ---------------------------------------------------------------- storeroom and archive
-
+// ---- the drawers
 function renderDrawers() {
-  const store = $("[data-storeroom]");
-  $("[data-storeroom-count]").textContent = String(state.storeroom.length);
-  store.replaceChildren(
-    ...(state.storeroom.length
-      ? state.storeroom.map((e) =>
-          el(
-            "li",
-            { class: "shelf-item" },
-            el(
-              "button",
-              { type: "button", class: "shelf-open", "aria-label": `Open "${e.latest.title}", ${plural(e.versionCount, "version")}`, title: e.latest.title, onclick: () => select({ kind: "exhibit", id: e.id }, { focusHeading: true }) },
-              swatchOf(e.latest.recipe, e.latest.parts),
-              el("span", { class: "shelf-title" }, e.latest.title),
-            ),
-          ),
-        )
-      : [el("li", { class: "hint" }, "Empty")]),
-  );
-  const archive = $("[data-archive]");
+  $("[data-store-count]").textContent = String(state.storeroom.length);
   $("[data-archive-count]").textContent = String(state.archivedTotal);
-  // Older pages fetched with "Show older" stay only while the newest ones
-  // they followed are unchanged; otherwise they'd sit out of order.
-  const newestIds = state.archivedDrafts.map((a) => a.id).join();
-  if (newestIds !== olderFor) {
-    older = [];
-    olderMore = state.archivedTotal > state.archivedDrafts.length;
-    olderFor = newestIds;
-  }
-  const all = [...state.archivedDrafts, ...older];
-  archive.replaceChildren(
-    ...(all.length
-      ? all.map((a) =>
-          el(
-            "li",
-            { class: "shelf-item" },
-            el("span", { class: "sr-only" }, `${a.recipe === "stage" ? "A loop" : "An old sculpture"}, ${a.reason === "replaced" ? "replaced" : "started over"} ${when(a.archivedAt)}${a.archivedBy ? ` by ${a.archivedBy.name}` : ""}`),
-            el("span", { class: "shelf-meta", "aria-hidden": "true", title: `${a.reason} ${when(a.archivedAt)}` }, `${a.reason} ${when(a.archivedAt)}`),
-            a.contributors.length ? el("ul", { class: "dots" }, ...a.contributors.map((c) => el("li", {}, dot(c)))) : null,
-            a.recipe === "stage"
-              ? el("button", { type: "button", class: "icon", "data-edit": true, "aria-label": "Bring this loop back to the stage", title: "Back to the stage", onclick: () => restoreArchived(a) }, swatchOf("stage", { set: a.set, gestures: [] }))
-              : null,
-          ),
-        )
-      : [el("li", { class: "hint" }, "Empty")]),
-    ...(olderMore && all.length
-      ? [el("li", { class: "shelf-more" }, el("button", { type: "button", class: "small", "data-archive-older": true, "aria-label": `Show ${state.archivedTotal - all.length} older loops`, onclick: showOlder }, `+${state.archivedTotal - all.length}`))]
-      : []),
+  const empties = state.slots.filter((s) => !s.exhibit).map((s) => s.slot);
+  $("[data-storeroom]").replaceChildren(
+    ...(state.storeroom.length
+      ? state.storeroom.map((ex) => {
+          const sel = el("select", { "aria-label": `Plinth for "${ex.latest.title}"` }, ...empties.map((n) => el("option", { value: String(n) }, `Plinth ${n}`)));
+          return el("li", {}, el("span", {}, `"${ex.latest.title}" `, el("span", { class: "by" }, plural(ex.versionCount, "version"))),
+            empties.length
+              ? el("span", {}, sel, " ", el("button", { type: "button", "data-play": true, onclick: () => act(`/exhibits/${ex.id}/display`, { slot: Number(sel.value) }, "Back on display.") }, "Put it out"))
+              : el("span", { class: "by" }, "no empty plinth"));
+        })
+      : [el("li", { class: "by" }, "Empty")]),
   );
-  applyEnabled();
+  $("[data-archive]").replaceChildren(
+    ...(state.archived.length
+      ? state.archived.map((a) =>
+          el("li", {}, el("span", {}, plural(a.gestures.length, "gesture"), " by ", a.credits.map((c) => c.name).join(", ") || "nobody"),
+            el("button", { type: "button", "data-play": true, onclick: () => bringBack(a) }, "Bring back")))
+      : [el("li", { class: "by" }, "Empty")]),
+  );
+}
+async function bringBack(a) {
+  const busy = state.stage.gestures.length > 0;
+  if (busy && !(await ask("Bring this loop back to the stage? What's playing now is kept in Cleared loops.", "Bring it"))) return;
+  const r = await act("/stage/bring-back", { archivedId: a.id, replace: busy }, "It's back on the stage.");
+  if (r.ok) choose({ kind: "stage" });
 }
 
-let older = [];
-let olderMore = false;
-let olderFor = "";
-
-// Reading only: it works while disconnected too, like the history.
-async function showOlder() {
-  const last = [...state.archivedDrafts, ...older].at(-1);
-  const res = await fetch(`/archive?before=${last.id}`).catch(() => null);
-  if (!res?.ok) return toast("Couldn't load those");
-  const page = await res.json();
-  older = [...older, ...page.drafts];
-  olderMore = page.more;
-  renderDrawers();
-  $("[data-archive] .shelf-item:nth-last-child(" + (olderMore ? page.drafts.length + 1 : page.drafts.length) + ") button")?.focus();
-}
-
-async function restoreArchived(a) {
-  const busy = (state.draft.parts?.gestures.length ?? 0) > 0;
-  if (busy && !(await ask("Bring this loop back? What's playing on the stage now is kept in Archived loops.", "Bring it back"))) return;
-  const r = await act("/stage/restore-archived", { archivedId: a.id, replace: busy }, "Back on the stage");
-  if (r?.ok) select({ kind: "bench" }, { focusHeading: true });
-}
-
-// ---------------------------------------------------------------- rename
-
+// ---- who you are
 $("[data-rename-open]").addEventListener("click", () => {
-  const form = $("[data-rename]");
-  form.hidden = false;
-  const input = $("#rename-input");
-  input.value = state.you.name;
-  input.select();
-  input.focus();
+  $("[data-rename]").hidden = false;
+  $("#rename-input").value = you.name;
+  $("#rename-input").focus();
 });
 $("[data-rename-cancel]").addEventListener("click", () => ($("[data-rename]").hidden = true));
 $("[data-rename]").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const name = $("#rename-input").value;
-  const problem = nameProblem(name);
-  const error = $("[data-rename-error]");
-  if (problem) return (error.textContent = problem);
-  const r = await act("/me", { name: name.trim() });
-  if (!r) return;
-  if (!r.ok) return (error.textContent = refusalText(r.status, r.body));
-  error.textContent = "";
-  $("[data-rename]").hidden = true;
-  $("[data-rename-open]").focus();
+  const r = await act("/me", { name: $("#rename-input").value });
+  if (r.ok) $("[data-rename]").hidden = true;
 });
 
-// ---------------------------------------------------------------- the scene
+$("[data-back]").addEventListener("click", () => choose({ kind: "stage" }));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !e.target.closest("input, select, dialog") && selected.kind !== "stage") choose({ kind: "stage" });
+});
+document.addEventListener("pointerdown", () => sound.wake(), { once: true });
+document.addEventListener("keydown", () => sound.wake(), { once: true });
 
-async function startScene() {
-  const canvas = $("[data-scene]");
-  const probe = document.createElement("canvas");
-  const gl = probe.getContext("webgl2") || probe.getContext("webgl");
-  if (!gl) return noScene();
-  try {
-    const { createScene } = await import("./scene.js");
-    scene = await createScene(canvas, {
-      reducedMotion,
-      time: () => sharedSeconds(Date.now(), offset),
-      // walking up to a plinth shows its card; turning back, the stage's
-      onPick: (pick) => {
-        const next = pick === "bench" ? { kind: "bench" } : { kind: "slot", slot: Number(pick.split(":")[1]) };
-        if (JSON.stringify(next) === JSON.stringify(selected) || !document.querySelector("[data-publish]").hidden) return;
-        select(next, { walk: false });
-      },
-      // what lies over the scene: the uncovered part is reported to checks
-      covers: () =>
-        [".panel", ".brand", "[data-people]", "[data-nav]", "[data-home]"]
-          .map((q) => $(q))
-          .filter((n) => n && n.checkVisibility())
-          .map((n) => n.getBoundingClientRect())
-          .filter((r) => r.width > 0 && r.height > 0)
-          .map((r) => ({ x: r.left, y: r.top, w: r.width, h: r.height })),
-      onMoved: (m) => {
-        cameraMoved = m;
-        if (m) document.body.dataset.fpUsed = "1";
-        renderHome();
-      },
-      onPose: sendPose,
-      onGesture,
-      onEvents: playSounds,
-    });
-    if (state) scene.update(state, selected);
-  } catch (err) {
-    console.warn("no 3D:", err);
-    noScene();
-  }
-}
-
-// Your pose, for the others: fire and forget. A refusal or a server that
-// doesn't know the route yet only means nobody sees you move; never a toast.
-let poseInFlight = false;
-function sendPose(pose) {
-  if (poseInFlight || !editable()) return;
-  poseInFlight = true;
-  fetch("/pose", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pose) })
-    .catch(() => null)
-    .finally(() => (poseInFlight = false));
-}
-
-function noScene() {
-  document.body.classList.add("no-gl");
-  $("[data-scene]").hidden = true;
-}
-
+// ---- start: the panel at once, the room when it loads
 connect();
-startScene();
-runHead();
+tickHead();
+try {
+  const { createScene } = await import("./scene.js");
+  const canvas = $("[data-scene]");
+  const probe = document.createElement("canvas").getContext("webgl2");
+  if (!probe) throw new Error("no WebGL");
+  scene = await createScene(canvas, {
+    loopNow: now,
+    reducedMotion: () => reducedMotion.matches,
+    coverRight: () => (phone.matches || document.body.classList.contains("no-gl") ? 0 : $("#panel").getBoundingClientRect().width + 16),
+    onGesture: gesture,
+    onSelect: (sel) => choose(sel),
+    onPointer: (p, aim) => canPlay(conn) && post("/pointer", aim ? { p, aim } : { p }),
+  });
+  scene.onEvent((e) => sound.play(e));
+  scene.select(selected);
+  if (state) render();
+} catch {
+  document.body.classList.add("no-gl");
+}

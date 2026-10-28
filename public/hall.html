@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The hall · Impossible Museum</title>
+  <meta name="description" content="A small top-down hall where every visitor has a round robot: drag back from yours and let go to launch it.">
+  <meta name="theme-color" content="#2b2747">
+  <link rel="stylesheet" href="/hall.css">
+  <script type="module" src="/hall-app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <h1>The hall</h1>
+    <p class="you" data-you hidden><span class="dot" data-you-dot aria-hidden="true"></span> You are <strong data-you-name></strong></p>
+    <a class="back" href="/">Back to the stage</a>
+  </header>
+  <main class="wrap">
+    <p class="status" data-status role="status" hidden></p>
+    <div class="frame">
+      <canvas class="hall" data-hall tabindex="0" aria-describedby="how" aria-label="The hall, seen from above. Your robot is the one with the white ring."></canvas>
+    </div>
+    <p class="aim" data-aim aria-live="polite"></p>
+    <p class="news" data-news aria-live="polite"></p>
+    <p class="how" id="how">Drag back from your robot and let go to launch it: the further you pull, the harder it goes. Or focus the hall and use the keys: left and right turn the aim, up and down change the power, Enter or Space launches, Escape cancels. A fast hit knocks one carried artifact loose from whoever it strikes, but never near their own zone, and never what they've already kept. Other players' zones are closed to you.</p>
+    <p class="here">Here now: <span class="here-list" data-here>just you</span></p>
+
+    <div class="cards" data-cards hidden>
+      <section class="card" aria-labelledby="cargo-h">
+        <h2 id="cargo-h">Cargo</h2>
+        <p class="cargo" data-cargo aria-live="polite"></p>
+        <p class="note">Touch an artifact to pick it up. Enter your zone, the pad in your colour, to keep what you carry.</p>
+        <p class="kept" data-kept role="status"></p>
+      </section>
+      <section class="card" aria-labelledby="collection-h">
+        <h2 id="collection-h">Your collection</h2>
+        <ul class="collection" data-collection></ul>
+        <p class="note">Kept on the server for this browser. Come back in the same browser and it's here. If you clear this browser's data, use a private window or another device, you start as a new visitor, and this collection can't be claimed back.</p>
+      </section>
+      <section class="card wide" data-their hidden aria-labelledby="their-h">
+        <h2 id="their-h" tabindex="-1"></h2>
+        <p class="note">What they've chosen to show, with how many of each they've kept. You can look, not change.</p>
+        <ol class="display" data-their-places></ol>
+        <button type="button" class="close" data-their-close>Close</button>
+      </section>
+      <section class="card wide" aria-labelledby="directory-h">
+        <h2 id="directory-h">Everyone's displays</h2>
+        <p class="note">Everyone who has arranged a display, whether they're here or not, most recently changed first.</p>
+        <ul class="directory" data-directory></ul>
+        <p class="row"><button type="button" class="close" data-directory-more hidden>More</button> <button type="button" class="close" data-directory-refresh>Refresh</button></p>
+      </section>
+      <section class="card wide" aria-labelledby="display-h">
+        <h2 id="display-h">Your display</h2>
+        <p class="note">Four places to show what you've collected. Choose a kind for each; its count shows with it.</p>
+        <ol class="display" data-display></ol>
+        <p class="error" data-display-error role="alert"></p>
+      </section>
+    </div>
+    <noscript><p>The hall needs JavaScript.</p></noscript>
+  </main>
+</body>
+</html>

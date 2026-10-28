@@ -1,683 +1,338 @@
-import { randomInt, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+// The museum's server: the page, the README, the routes and the stream.
+// Bare node:http (ADR 22); every rule about what may change lives in the
+// store (src/db.ts), and this file only reads requests and sends answers.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, resolve, sep } from "node:path";
-import { gzipSync } from "node:zlib";
-import { HOLDABLE, VISITOR_COLOURS } from "../public/stage.js";
-import { openStore, SLOTS, type Snapshot } from "./db.ts";
-import { MARK, renderMuseum, SHELL } from "./html.ts";
-import { log, person, raw, type Value, who } from "./log.ts";
-import { renderDoc, renderReadme } from "./readme.ts";
-import type { ErrorCode, ExhibitView, PoseBody, PosesEvent, PoseView, Refusal, StateEvent, VisitorView } from "./types.ts";
+import { readFileSync, statSync, createReadStream } from "node:fs";
+import { extname, join, normalize, resolve } from "node:path";
+import { marked } from "marked";
+import { openStore } from "./db.ts";
+// @ts-ignore -- plain JS module shared with the page
+import { checkGesture } from "../public/fountain.js";
+import { log } from "./log.ts";
+import { renderListing } from "./html.ts";
+import { createHall } from "./hall.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PRODUCTION = process.env.NODE_ENV === "production";
-const ONE_YEAR = 60 * 60 * 24 * 365;
-const PID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DB_PATH = process.env.DB_PATH ?? "./.data/gallery.db";
+const PUBLIC = resolve("public");
+const HEARTBEAT_MS = 15_000;
+const POINTER_TTL_MS = 4_000;
+const POINTER_EVERY_MS = 100;
 
-const DB_PATH = process.env.DB_PATH ?? "./.data/museum.db";
-// CLAIM_MS (like SWEEP_MS and HEARTBEAT_MS below) is shortened by the
-// environment only so the log test can watch a claim run out.
-const store = openStore(DB_PATH, { claimMs: Number(process.env.CLAIM_MS) || undefined });
-
-// --- who is who ---
-
-// A generated display name: two small word lists, so a new visitor is
-// "Coral Heron" until they choose otherwise (CLAUDE.md, Who is who).
-const FIRST = ["Coral", "Teal", "Ivory", "Peach", "Amber", "Dusk", "Silver", "Saffron", "Indigo", "Jade", "Copper", "Misty", "Lunar", "Velvet", "Glass", "Honey"];
-const SECOND = ["Heron", "Finch", "Otter", "Wren", "Lynx", "Moth", "Kestrel", "Fox", "Ibis", "Marten", "Lark", "Swift", "Hare", "Newt", "Owl", "Crane"];
-const newName = (): string => `${FIRST[randomInt(FIRST.length)]} ${SECOND[randomInt(SECOND.length)]}`;
-
-// A new visitor's colour: one nobody here now is wearing, if there is one.
-function newColour(): number {
-  const used = new Set(presentPids().map((pid) => store.visitor(pid)?.colour));
-  const free = VISITOR_COLOURS.map((_, i) => i).filter((i) => !used.has(i));
-  return free.length ? free[randomInt(free.length)] : randomInt(VISITOR_COLOURS.length);
+if (DB_PATH !== ":memory:") {
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(resolve(DB_PATH, ".."), { recursive: true });
 }
+const store = openStore(DB_PATH);
 
-function cookies(req: IncomingMessage): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const part of (req.headers.cookie ?? "").split(";")) {
-    const at = part.indexOf("=");
-    if (at <= 0) continue;
-    try {
-      out[part.slice(0, at).trim()] = decodeURIComponent(part.slice(at + 1).trim());
-    } catch {
-      // a malformed cookie is ignored, not fatal
-    }
+// ---- visitors: a cookie, and nothing else
+const COOKIE = "pid";
+function visitorOf(req: IncomingMessage, res: ServerResponse) {
+  const m = /(?:^|;\s*)pid=([0-9a-f-]{36})/.exec(req.headers.cookie ?? "");
+  const v = store.visitor(m ? m[1] : null, Date.now());
+  if (v.isNew || !m) {
+    res.setHeader("Set-Cookie", `${COOKIE}=${v.pid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${PRODUCTION ? "; Secure" : ""}`);
+    log("visitor", { tag: v.tag, name: v.name });
   }
-  return out;
+  return v;
 }
 
-// The visitor's identity: an existing well-formed pid cookie, or a new one
-// set on this response. The visitors row is made on first sight. Nothing the
-// page sends is identity except this cookie.
-function identify(req: IncomingMessage, res: ServerResponse): string {
-  let pid = cookies(req).pid;
-  if (!pid || !PID.test(pid)) {
-    pid = randomUUID();
-    const flags = ["HttpOnly", "SameSite=Lax", "Path=/", `Max-Age=${ONE_YEAR}`];
-    if (PRODUCTION) flags.push("Secure");
-    res.setHeader("Set-Cookie", `pid=${pid}; ${flags.join("; ")}`);
-  }
-  if (!store.visitor(pid)) {
-    const { visitor, created } = store.ensureVisitor(pid, newName(), newColour(), new Date());
-    if (created) log("visitor.new", { who: who(pid), name: visitor.name, colour: visitor.colour });
-  }
-  return pid;
+// ---- the stream: every open page, who it is, and the state it last got
+type Client = { res: ServerResponse; pid: string; tag: string; welcome?: unknown };
+const clients = new Set<Client>();
+type Aim = { ball: string; v: number[] };
+const pointers = new Map<string, { tag: string; name: string; colour: number; p: number[]; aim?: Aim; at: number }>();
+
+const send = (res: ServerResponse, event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+function stateFor(c: Client, base: ReturnType<typeof store.state>) {
+  return { ...base, you: store.who(c.pid), serverTime: new Date().toISOString() };
 }
-
-// --- responses ---
-
-function reply(res: ServerResponse, status: number, headers: Record<string, string>, body: string | Buffer): void {
-  const accepts = /\bgzip\b/.test(String(res.req.headers["accept-encoding"] ?? ""));
-  const bytes = typeof body === "string" ? Buffer.from(body) : body;
-  if (accepts && bytes.length > 1024 && /^(text\/|application\/json|image\/svg)/.test(headers["Content-Type"] ?? "")) {
-    res.writeHead(status, { ...headers, "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
-    res.end(res.req.method === "HEAD" ? undefined : gzipSync(bytes));
-  } else {
-    res.writeHead(status, { ...headers, Vary: "Accept-Encoding" });
-    res.end(res.req.method === "HEAD" ? undefined : bytes);
-  }
+function broadcast() {
+  const base = store.state([...clients].map((c) => c.pid));
+  for (const c of clients) send(c.res, "state", stateFor(c, base));
 }
-
-const send = (res: ServerResponse, status: number, type: string, body: string | Buffer): void =>
-  reply(res, status, { "Content-Type": type, "Cache-Control": "no-store" }, body);
-
-const sendJson = (res: ServerResponse, status: number, value: unknown): void =>
-  send(res, status, "application/json; charset=utf-8", JSON.stringify(value));
-
-function redirect(res: ServerResponse, location: string): void {
-  res.writeHead(303, { Location: location });
-  res.end();
+let pointerTimer: NodeJS.Timeout | null = null;
+function pointersSoon() {
+  if (pointerTimer) return;
+  pointerTimer = setTimeout(() => {
+    pointerTimer = null;
+    const now = Date.now();
+    for (const [k, p] of pointers) if (now - p.at > POINTER_TTL_MS) pointers.delete(k);
+    const list = [...pointers.values()].map(({ tag, name, colour, p, aim }) => ({ tag, name, colour, p, ...(aim ? { aim } : {}) }));
+    for (const c of clients) send(c.res, "pointers", list);
+  }, POINTER_EVERY_MS);
 }
-
-const notFound = (res: ServerResponse): void => send(res, 404, "text/plain; charset=utf-8", "Not found");
-
-// --- static files ---
-
-// Only these extensions are ever served, each with its own type. ES modules
-// are `no-cache` so a deploy reaches every page on its next load.
-const TYPES: Record<string, string> = {
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".txt": "text/plain; charset=utf-8",
-};
-
-// A file under a fixed root, never outside it, and never a dotfile.
-async function serveFile(res: ServerResponse, root: string, rel: string): Promise<void> {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(rel);
-  } catch {
-    return notFound(res);
-  }
-  if (decoded.includes("\0") || decoded.split(/[/\\]/).some((seg) => seg.startsWith("."))) return notFound(res);
-  const base = resolve(root);
-  const file = resolve(base, decoded);
-  const type = TYPES[extname(file).toLowerCase()];
-  if (!file.startsWith(base + sep) || !type) return notFound(res);
-  try {
-    const data = await readFile(file);
-    reply(res, 200, { "Content-Type": type, "Cache-Control": "no-cache" }, data);
-  } catch {
-    notFound(res);
-  }
-}
-
-// Markdown under docs/, rendered: only a fixed shape of path, never outside.
-function serveDoc(res: ServerResponse, rel: string): void {
-  if (!/^docs\/[a-z0-9/-]+\.md$/.test(rel) || rel.includes("..")) return notFound(res);
-  try {
-    send(res, 200, "text/html; charset=utf-8", renderDoc(rel));
-  } catch {
-    notFound(res);
-  }
-}
-
-// --- the page ---
-
-// public/index.html (the page's own markup) with the six plinths rendered
-// in place of <!--museum-->, so the museum reads without JS. Read on every
-// request: it's small, and a deploy or an edit shows at once.
-async function servePage(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const pid = identify(req, res);
-  log("page", { who: who(pid), new: res.hasHeader("Set-Cookie") || undefined });
-  let html: string;
-  try {
-    html = await readFile("public/index.html", "utf8");
-  } catch {
-    html = SHELL;
-  }
-  const listing = renderMuseum(store.snapshot(new Date()));
-  send(res, 200, "text/html; charset=utf-8", html.replace(MARK, () => listing));
-}
-
-// --- live updates (SSE) ---
-// Every open page holds a stream. After any change each one is sent the
-// whole museum as its own visitor sees it (`you` and `claim.mine` depend on
-// who's asking, and a pid never leaves the server). A whole state, not a
-// diff, so a stream that reconnects is right from its first event. Both
-// intervals can be shortened by the environment so a test can watch them.
-const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS) || 15_000; // Fly's proxy closes idle connections
-const SWEEP_MS = Number(process.env.SWEEP_MS) || 2_000; // claims end on the clock
-
-type Stream = { pid: string; res: ServerResponse; since: number };
-const streams = new Set<Stream>();
-
-// Goes up with every broadcast, so a page that gets the same moment twice
-// (a POST's answer and the stream's event) keeps the newer. Seeded from the
-// clock so it keeps rising across a restart.
-let seq = Date.now();
-
-// Present: everyone with at least one open stream, in the order they came.
-function presentPids(): string[] {
-  return [...new Set([...streams].map((s) => s.pid))];
-}
-
-function stateFor(pid: string, snap: Snapshot, now: Date): StateEvent {
-  const holding = (p: string): string[] => snap.claims.filter((c) => c.pid === p).map((c) => c.part);
-  return {
-    serverTime: now.toISOString(),
-    seq,
-    you: store.view(pid),
-    present: presentPids().map((p) => ({ ...store.view(p), holding: holding(p) })),
-    draft: snap.draft,
-    claims: snap.claims.map((c) => ({ part: c.part, holder: c.holder, expiresAt: c.expiresAt, mine: c.pid === pid })),
-    slots: snap.slots,
-    storeroom: snap.storeroom,
-    archivedDrafts: snap.archivedDrafts,
-    archivedTotal: snap.archivedTotal,
-  };
-}
-
-const sendState = (stream: Stream, snap: Snapshot, now: Date): void => {
-  stream.res.write(`event: state\ndata: ${JSON.stringify(stateFor(stream.pid, snap, now))}\n\n`);
-};
-
-// After every change, and only then: every stream gets its own copy.
-function broadcast(now = new Date()): Snapshot {
-  seq = Math.max(seq + 1, Date.now());
-  const snap = store.snapshot(now);
-  for (const stream of streams) sendState(stream, snap, now);
-  return snap;
-}
-
-// --- poses (ADR 17) ---
-// Where each visitor stands and looks: the newest per visitor, in memory
-// only, never in the database or the `state` event. Every stream gets a
-// small `poses` event at most every POSE_SEND_MS, and only after something
-// changed: a new pose, or one gone (run out, or its visitor left). POSE_TTL_MS
-// is shortened by the environment only so a test can watch a pose run out.
-const POSE_TTL_MS = Number(process.env.POSE_TTL_MS) || 5_000;
-const POSE_GAP_MS = 100; // a visitor's poses closer than this are ignored
-const POSE_SEND_MS = 100;
-
-const poses = new Map<string, { pose: PoseBody; at: number }>();
-let posesDirty = false;
-
-// Everyone here with a pose that hasn't run out, the receiver included: the
-// page skips itself by tag. The same for every stream, so built once.
-function posesEvent(now: number): PosesEvent {
-  const here = new Set(presentPids());
-  const list: PoseView[] = [];
-  for (const [pid, { pose, at }] of poses) {
-    if (!here.has(pid) || now - at > POSE_TTL_MS) continue;
-    list.push({ ...store.view(pid), at: pose.at, look: pose.look, reach: pose.reach ?? null, holding: pose.holding ?? null, age: now - at });
-  }
-  return { t: now, poses: list };
-}
-
-const sendPoses = (stream: Stream, data: string): void => {
-  stream.res.write(`event: poses\ndata: ${data}\n\n`);
-};
-
-// The one place poses go out: run-out poses are dropped first (so their
-// going is sent too), then, if anything changed, every stream gets the list.
-setInterval(() => {
+// ---- the hall's streams: robots' snapshots, the floor, and your own
+// collection, on every change (ADR 24, 25)
+const hall = createHall(store);
+const hallClients = new Set<Client>();
+const HALL_TICK_MS = 50;
+const HALL_STREAMS_PER_VISITOR = 4;
+const BODY_MAX = 4096;
+function hallBroadcast() {
   const now = Date.now();
-  const here = new Set(presentPids());
-  for (const [pid, { at }] of poses) {
-    if (now - at <= POSE_TTL_MS) continue;
-    poses.delete(pid);
-    if (here.has(pid)) posesDirty = true;
+  const robots = hall.view((pid) => store.who(pid) ?? { tag: "", name: "Someone", colour: 0 }, now);
+  const artifacts = hall.floor();
+  const news = hall.news(); // what just happened, sent once, to everyone
+  for (const c of hallClients) {
+    const mine: Record<string, unknown> = { home: hall.homeOf(c.pid), collection: store.collection(c.pid), display: store.displayOf(c.pid) };
+    // how their join went, once, in the first event of their stream
+    if (c.welcome) {
+      mine.welcome = c.welcome;
+      delete c.welcome;
+    }
+    send(c.res, "hall", { robots, artifacts, news, mine, you: store.who(c.pid), serverTime: now });
   }
-  if (!posesDirty) return;
-  posesDirty = false;
-  const data = JSON.stringify(posesEvent(now));
-  for (const stream of streams) sendPoses(stream, data);
-}, POSE_SEND_MS).unref();
-
-function openStream(req: IncomingMessage, res: ServerResponse): void {
-  const pid = identify(req, res);
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-store",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  // how long the browser waits before reconnecting a dropped stream
-  res.write("retry: 2000\n\n");
-  const arriving = !presentPids().includes(pid);
-  const stream: Stream = { pid, res, since: Date.now() };
-  streams.add(stream);
-  log("stream.open", { who: who(pid), open: streams.size });
-  const now = new Date();
-  // Someone new is here: everyone's presence list changes. A second tab of
-  // someone already here changes nothing, so only it is sent the state.
-  if (arriving) broadcast(now);
-  else sendState(stream, store.snapshot(now), now);
-  // A pose sent before this visitor's first stream shows from now on.
-  if (arriving && poses.has(pid)) posesDirty = true;
-  // A new page sees who's standing where at once, not at the next change.
-  const room = posesEvent(now.getTime());
-  if (room.poses.length) sendPoses(stream, JSON.stringify(room));
-  req.on("close", () => {
-    // a shutdown already cleared the set; don't log every stream twice
-    if (!streams.delete(stream)) return;
-    const leaving = !presentPids().includes(pid);
-    const released = leaving ? store.releaseAll(pid) : [];
-    // their pose leaves with them, and everyone's next `poses` says so
-    if (leaving && poses.delete(pid)) posesDirty = true;
-    log("stream.close", {
-      who: who(pid),
-      open: streams.size,
-      secs: Math.round((Date.now() - stream.since) / 1000),
-      released: released.length ? raw(released.join(",")) : undefined,
-    });
-    // Gone, and what they held with them, at once (CLAUDE.md).
-    if (leaving) broadcast();
-  });
 }
-
-// Comments keep idle streams under the proxy's timeout; the browser ignores them.
+// the server sees every touch: each tick walks moving robots along their steps
 setInterval(() => {
-  for (const { res } of streams) res.write(": hb\n\n");
+  if (hall.tick(Date.now())) hallBroadcast();
+}, HALL_TICK_MS).unref();
+
+setInterval(() => {
+  for (const c of [...clients, ...hallClients]) c.res.write(": beat\n\n");
 }, HEARTBEAT_MS).unref();
 
-// A claim that ran out is already free on every read; the sweep makes sure
-// every page hears it, even when nobody acts.
-setInterval(() => {
-  const now = new Date();
-  const ended = store.expire(now);
-  for (const l of ended) log("claim.expire", { who: who(l.pid), part: raw(l.part), at: l.expiresAt });
-  if (ended.length) broadcast(now);
-}, SWEEP_MS).unref();
+// ---- requests
+const json = (res: ServerResponse, status: number, body: unknown) => {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(JSON.stringify(body));
+};
+const refuse = (res: ServerResponse, r: { status: number; error: string; message: string }) => json(res, r.status, { error: r.error, message: r.message });
 
-// --- actions ---
-
-const MAX_BODY = 4096;
-
-// A cross-site page can't act on someone's behalf: a browser sends Origin
-// on every POST, and it has to be this host.
-function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return true;
+const TOO_LARGE = Symbol("too large");
+async function bodyOf(req: IncomingMessage): Promise<Record<string, unknown> | null | typeof TOO_LARGE> {
+  let size = 0;
+  const parts: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > BODY_MAX) return TOO_LARGE;
+    parts.push(chunk as Buffer);
+  }
+  const text = Buffer.concat(parts).toString("utf8");
+  if (!text) return {};
   try {
-    return new URL(origin).host === req.headers.host;
+    const v = JSON.parse(text);
+    return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A POST from another site is refused: a browser always says where it came from. */
+function crossSite(req: IncomingMessage): boolean {
+  if (req.headers["sec-fetch-site"] === "cross-site") return true;
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== req.headers.host;
+  } catch {
+    return true;
+  }
+}
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".txt": "text/plain; charset=utf-8",
+};
+function serveStatic(path: string, res: ServerResponse): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
   } catch {
     return false;
   }
-}
-
-async function readBody(req: IncomingMessage): Promise<string | null> {
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > MAX_BODY) return null;
+  const file = normalize(join(PUBLIC, decoded));
+  if (!file.startsWith(PUBLIC + "/") || decoded.includes("\0")) return false;
+  try {
+    if (!statSync(file).isFile()) return false;
+  } catch {
+    return false;
   }
-  return body;
+  const type = TYPES[extname(file)];
+  if (!type) return false;
+  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+  createReadStream(file).pipe(res);
+  return true;
 }
 
-// A refusal: what the route answers, and what the log says about it.
-class Refused {
-  status: number;
-  error: ErrorCode;
-  message: string;
-  extra: Partial<Refusal>;
-  constructor(status: number, error: ErrorCode, message: string, extra: Partial<Refusal> = {}) {
-    this.status = status;
-    this.error = error;
-    this.message = message;
-    this.extra = extra;
-  }
-}
-const bad = (message: string): Refused => new Refused(400, "bad-request", message);
+const page = () => readFileSync(join(PUBLIC, "index.html"), "utf8").replace("<!--museum-->", renderListing(store.state([])));
+const readme = () =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>About the Impossible Museum</title><link rel="stylesheet" href="/readme.css"></head><body><main class="readme"><p><a href="/">Back to the museum</a></p>${marked.parse(readFileSync("README.md", "utf8"), { async: false })}</main></body></html>`;
 
-const STATUS: Record<ErrorCode, number> = {
-  "bad-request": 400,
-  "cross-origin": 403,
-  "not-found": 404,
-  taken: 409,
-  "nothing-to-undo": 409,
-  "stage-busy": 409,
-  "stage-empty": 409,
-  "slot-taken": 409,
-  "slot-empty": 409,
+const isPointer = (p: unknown): p is number[] =>
+  Array.isArray(p) && p.length === 3 && p.every((x) => typeof x === "number" && Number.isFinite(x)) && Math.abs(p[0]) <= 8 && Math.abs(p[2]) <= 8 && p[1] >= 0 && p[1] <= 4;
+/** An aim is a flick being made: its ball and speed, checked as a flick is (ADR 23). */
+function aimOf(a: unknown): Aim | null {
+  if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).some((k) => k !== "ball" && k !== "v")) return null;
+  const r = checkGesture({ kind: "flick", ...(a as object), at: 0 });
+  return r.ok ? { ball: (r.gesture as any).ball, v: (r.gesture as any).v } : null;
+}
+const idIn = (path: string, re: RegExp) => {
+  const m = re.exec(path);
+  return m ? Number(m[1]) : null;
 };
 
-type StoreRefusal = { error: ErrorCode; message: string; holder?: VisitorView; expiresAt?: string; exhibit?: ExhibitView };
-
-// A store refusal as a route refusal, keeping its extra fields.
-function fromStore(r: StoreRefusal): Refused {
-  const extra: Partial<Refusal> = {};
-  if (r.holder) extra.holder = r.holder;
-  if (r.expiresAt) extra.expiresAt = r.expiresAt;
-  if (r.exhibit) extra.exhibit = r.exhibit;
-  return new Refused(STATUS[r.error], r.error, r.message, extra);
-}
-
-function check<T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> {
-  if (!r.ok) throw fromStore(r as unknown as StoreRefusal);
-  return r as Extract<T, { ok: true }>;
-}
-
-type Body = Record<string, unknown>;
-
-// 1..max characters after trimming, counted as characters, no control or
-// line-separator characters. Anything else is refused, never truncated.
-function text(v: unknown, field: string, max: number): string {
-  if (typeof v !== "string") throw bad(`${field} must be text`);
-  const s = v.trim();
-  const n = Array.from(s).length;
-  if (n < 1 || n > max) throw bad(`${field} must be 1 to ${max} characters`);
-  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(s)) throw bad(`${field} can't hold control characters`);
-  return s;
-}
-function id(v: unknown, field: string): number {
-  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw bad(`${field} must be a positive whole number`);
-  return v;
-}
-function slotOf(v: unknown): number {
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > SLOTS) throw bad(`slot must be 1 to ${SLOTS}`);
-  return v;
-}
-function flag(v: unknown, field: string): boolean {
-  if (v === undefined) return false;
-  if (typeof v !== "boolean") throw bad(`${field} must be true or false`);
-  return v;
-}
-// An object id: checked against stage.js by the store; here only its
-// shape, so the log can print it raw.
-function word(v: unknown, field: string): string {
-  if (typeof v !== "string" || !/^[a-z]{1,24}$/.test(v)) throw bad(`no such ${field}`);
-  return v;
-}
-// Only the keys a route knows: anything else is a mistake worth hearing about.
-function only(body: Body, keys: string[]): void {
-  const extra = Object.keys(body).filter((k) => !keys.includes(k));
-  if (extra.length) throw bad(`unexpected ${extra.join(", ")}`);
-}
-
-// What an action did: fields for the log line, and fields for the answer.
-// `quiet`: nothing changed, so nobody else needs telling.
-type Done = { log?: Record<string, Value>; json?: Record<string, unknown>; quiet?: boolean };
-type Act = (pid: string, body: Body, now: Date, params: string[]) => Done;
-type Route = (req: IncomingMessage, res: ServerResponse, params?: string[]) => Promise<void>;
-type Answer = (pid: string, body: Body, now: Date, params: string[]) => Record<string, unknown>;
-
-// One POST, the same front for every route: same origin, the requester's own
-// pid, a small JSON body. Success is a 200 with what `answer` returns; a
-// refusal is { error, message } with its status, and a log line.
-function route(name: string, answer: Answer): Route {
-  return async (req, res, params = []) => {
-    if (!sameOrigin(req)) {
-      const c = cookies(req).pid;
-      log(`${name}.refused`, { who: c && PID.test(c) ? who(c) : raw("-"), status: 403, error: raw("cross-origin") });
-      return sendJson(res, 403, { error: "cross-origin", message: "Cross-site request refused" });
-    }
-    const pid = identify(req, res);
-    const now = new Date();
-    try {
-      const text = await readBody(req);
-      if (text === null) throw bad(`the body must be at most ${MAX_BODY} bytes`);
-      let body: unknown = {};
-      if (text.trim() !== "") {
-        try {
-          body = JSON.parse(text);
-        } catch {
-          throw bad("the body must be JSON");
-        }
-      }
-      if (typeof body !== "object" || body === null || Array.isArray(body)) throw bad("the body must be a JSON object");
-      sendJson(res, 200, answer(pid, body as Body, now, params));
-    } catch (err) {
-      if (!(err instanceof Refused)) throw err;
-      log(`${name}.refused`, {
-        who: who(pid),
-        status: err.status,
-        error: raw(err.error),
-        holder: err.extra.holder ? person(err.extra.holder) : undefined,
-        message: err.message,
-      });
-      sendJson(res, err.status, { error: err.error, message: err.message, ...err.extra });
-    }
-  };
-}
-
-// A change to the museum: the store's one transaction, then a 200 with the
-// museum as the requester now sees it, and a broadcast. Every outcome is one
-// log line.
-function action(name: string, act: Act): Route {
-  return route(name, (pid, body, now, params) => {
-    const done = act(pid, body, now, params);
-    log(name, { who: who(pid), ...done.log });
-    const snap = done.quiet ? store.snapshot(now) : broadcast(now);
-    return { ok: true, ...done.json, state: stateFor(pid, snap, now) };
-  });
-}
-
-const postMe = action("rename", (pid, body) => {
-  only(body, ["name"]);
-  const name = text(body.name, "name", 24);
-  const { from } = store.rename(pid, name);
-  return { log: { from, to: name } };
-});
-
-const postGrab = action("grab", (pid, body, now) => {
-  only(body, ["object"]);
-  const object = word(body.object, "object");
-  const r = check(store.grab(pid, object, now));
-  return { log: { object: raw(object), from: r.from ? person(r.from) : undefined }, json: { from: r.from, expiresAt: r.expiresAt } };
-});
-
-const postDrop = action("drop", (pid, body) => {
-  only(body, ["object"]);
-  const object = word(body.object, "object");
-  const r = store.drop(pid, object);
-  return { log: { object: raw(object), dropped: r.dropped }, json: { dropped: r.dropped }, quiet: !r.dropped };
-});
-
-const postGesture = action("gesture", (pid, body, now) => {
-  only(body, ["gesture"]);
-  const r = check(store.gesture(pid, body.gesture, now));
-  const g = r.gesture;
-  return { log: { kind: raw(g.kind), object: raw(g.object), at: g.at, rev: r.revision }, json: { gesture: g, revision: r.revision } };
-});
-
-const postUndo = action("undo", (pid, body, now) => {
-  only(body, []);
-  const r = check(store.undo(pid, now));
-  return { log: { kind: raw(r.removed.kind), object: raw(r.removed.object), at: r.removed.at }, json: { removed: r.removed } };
-});
-
-// Start over, or choose a set (ADR 18): `set` is checked against SETS by
-// the store; here only its shape, so the log can print it raw.
-const postClear = action("stage.clear", (pid, body, now) => {
-  only(body, ["set"]);
-  const set = body.set === undefined ? undefined : word(body.set, "set");
-  const r = check(store.clear(pid, now, set));
-  return { log: { set: set === undefined ? undefined : raw(set), archived: r.archivedId ?? undefined }, json: { archivedId: r.archivedId } };
-});
-
-const postJoin = action("stage.join", (pid, body, now) => {
-  only(body, ["versionId", "replace"]);
-  const versionId = id(body.versionId, "versionId");
-  const r = check(store.join(pid, versionId, flag(body.replace, "replace"), now));
-  return {
-    log: { version: versionId, draft: r.draftId, archived: r.archivedId ?? undefined },
-    json: { draftId: r.draftId, archivedId: r.archivedId },
-  };
-});
-
-const postRestoreArchived = action("stage.restore-archived", (pid, body, now) => {
-  only(body, ["archivedId", "replace"]);
-  const archivedId = id(body.archivedId, "archivedId");
-  const r = check(store.restoreArchived(pid, archivedId, flag(body.replace, "replace"), now));
-  return {
-    log: { from: archivedId, draft: r.draftId, archived: r.archivedId ?? undefined },
-    json: { draftId: r.draftId, archivedId: r.archivedId },
-  };
-});
-
-const postPublish = action("publish", (pid, body, now) => {
-  only(body, ["title", "slot", "exhibitId", "replace"]);
-  const title = text(body.title, "title", 40);
-  const hasSlot = body.slot !== undefined;
-  if (hasSlot === (body.exhibitId !== undefined)) throw bad("give a slot for a new exhibit or an exhibitId for a new version, not both");
-  const replace = flag(body.replace, "replace");
-  const input = hasSlot ? { title, slot: slotOf(body.slot), replace } : { title, exhibitId: id(body.exhibitId, "exhibitId") };
-  const r = check(store.publish(pid, input, now));
-  return {
-    log: { title, exhibit: r.exhibitId, n: r.n, slot: input.slot, stored: r.stored ?? undefined },
-    json: { exhibitId: r.exhibitId, versionId: r.versionId, n: r.n, stored: r.stored },
-  };
-});
-
-const postRestoreVersion = action("restore", (pid, body, now, [exhibit]) => {
-  only(body, ["versionId"]);
-  const versionId = id(body.versionId, "versionId");
-  const r = check(store.restoreVersion(pid, Number(exhibit), versionId, now));
-  return { log: { exhibit: Number(exhibit), from: r.from, n: r.n }, json: { versionId: r.versionId, n: r.n } };
-});
-
-const postDisplay = action("display", (_pid, body, _now, [exhibit]) => {
-  only(body, ["slot", "replace"]);
-  const slot = slotOf(body.slot);
-  const r = check(store.display(Number(exhibit), slot, flag(body.replace, "replace")));
-  return { log: { exhibit: Number(exhibit), slot, stored: r.stored ?? undefined }, json: { stored: r.stored } };
-});
-
-const postStore = action("store", (_pid, body, _now, [exhibit]) => {
-  only(body, []);
-  const r = check(store.storeAway(Number(exhibit)));
-  return { log: { exhibit: Number(exhibit), slot: r.slot }, json: { slot: r.slot } };
-});
-
-// n finite numbers, each within -max..max.
-function numbers(v: unknown, field: string, n: number, max: number): number[] {
-  if (!Array.isArray(v) || v.length !== n || !v.every((x) => typeof x === "number" && Number.isFinite(x) && Math.abs(x) <= max)) {
-    throw bad(`${field} must be ${n} numbers within -${max} to ${max}`);
-  }
-  return v;
-}
-
-// A pose (ADR 17): not a change to the museum, so no transaction, no state
-// in the answer and no broadcast; the `poses` timer sends it on. No log line
-// either (eight a second each); refusals are logged as on every route.
-const postPose = route("pose", (pid, body, now) => {
-  only(body, ["at", "look", "reach", "holding"]);
-  const [x, z] = numbers(body.at, "at", 2, 9);
-  const [yaw, pitch] = numbers(body.look, "look", 2, 1000);
-  if (Math.abs(pitch) > 1.5) throw bad("pitch must be within -1.5 to 1.5");
-  const reach = body.reach === undefined || body.reach === null ? null : numbers(body.reach, "reach", 3, 10);
-  const holding = body.holding ?? null;
-  // anything some set lets you hold; display only, the claim is the authority
-  if (holding !== null && !(typeof holding === "string" && HOLDABLE.includes(holding))) throw bad("holding must be something you can hold, or null");
-  const last = poses.get(pid);
-  if (last && now.getTime() - last.at < POSE_GAP_MS) return { ok: true, ignored: true };
-  const pose: PoseBody = { at: [x, z], look: [yaw, pitch], reach: reach && [reach[0], reach[1], reach[2]], holding };
-  poses.set(pid, { pose, at: now.getTime() });
-  if (presentPids().includes(pid)) posesDirty = true;
-  return { ok: true };
-});
-
-const POSTS: Record<string, Route> = {
-  "/me": postMe,
-  "/pose": postPose,
-  "/stage/grab": postGrab,
-  "/stage/drop": postDrop,
-  "/stage/gesture": postGesture,
-  "/stage/undo": postUndo,
-  "/stage/clear": postClear,
-  "/stage/join": postJoin,
-  "/stage/restore-archived": postRestoreArchived,
-  "/publish": postPublish,
-};
-const EXHIBIT_POSTS: Record<string, Route> = {
-  restore: postRestoreVersion,
-  display: postDisplay,
-  store: postStore,
-};
-
-// --- routing ---
-
-async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? "/", "http://localhost");
+async function handle(req: IncomingMessage, res: ServerResponse) {
+  const url = new URL(req.url ?? "/", "http://x");
   const path = url.pathname;
-  const reading = req.method === "GET" || req.method === "HEAD";
+  if (req.method === "GET" || req.method === "HEAD") {
+    if (path === "/") {
+      visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(page());
+    }
+    if (path === "/hall/") {
+      visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(readFileSync(join(PUBLIC, "hall.html"), "utf8"));
+    }
+    if (path === "/hall/displays") {
+      const d = store.directory(url.searchParams.get("before"));
+      return d.ok ? json(res, 200, { entries: d.entries, next: d.next }) : refuse(res, d);
+    }
+    if (path === "/hall/events") {
+      const v = visitorOf(req, res);
+      if ([...hallClients].filter((c) => c.pid === v.pid).length >= HALL_STREAMS_PER_VISITOR)
+        return refuse(res, { status: 429, error: "too-many-streams", message: `At most ${HALL_STREAMS_PER_VISITOR} hall pages open at once` });
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      const c: Client = { res, pid: v.pid, tag: v.tag };
+      hallClients.add(c);
+      c.welcome = hall.join(v.pid, Date.now());
+      log("hall-open", { tag: v.tag, open: hallClients.size });
+      hallBroadcast();
+      req.on("close", () => {
+        hallClients.delete(c);
+        hall.leave(v.pid, Date.now());
+        log("hall-close", { tag: v.tag, open: hallClients.size });
+        hallBroadcast();
+      });
+      return;
+    }
+    if (path === "/readme/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(readme());
+    }
+    if (path === "/me") {
+      const v = visitorOf(req, res);
+      return json(res, 200, { tag: v.tag, name: v.name, colour: v.colour });
+    }
+    if (path === "/events") {
+      const v = visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      const c: Client = { res, pid: v.pid, tag: v.tag };
+      clients.add(c);
+      log("stream-open", { tag: v.tag, open: clients.size });
+      broadcast();
+      req.on("close", () => {
+        clients.delete(c);
+        if (![...clients].some((x) => x.pid === c.pid)) pointers.delete(c.tag);
+        log("stream-close", { tag: v.tag, open: clients.size });
+        broadcast();
+        pointersSoon();
+      });
+      return;
+    }
+    if (path === "/archive") {
+      const before = url.searchParams.get("before");
+      if (!before || !/^\d+$/.test(before)) return refuse(res, { status: 400, error: "bad-before", message: "before is a loop id" });
+      return json(res, 200, store.archivedBefore(Number(before)));
+    }
+    const ex = idIn(path, /^\/exhibits\/(\d+)$/);
+    if (ex !== null) {
+      const h = store.history(ex);
+      return h.ok ? json(res, 200, { exhibit: h.exhibit, versions: h.versions }) : refuse(res, h);
+    }
+    if (serveStatic(path, res)) return;
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("Not found");
+  }
 
-  if (path === "/" && reading) return servePage(req, res);
-  if (path === "/index.html" && reading) return redirect(res, "/");
-  if (path === "/readme" && reading) return redirect(res, "/readme/");
-  if (path === "/readme/" && reading) return send(res, 200, "text/html; charset=utf-8", renderReadme());
-  if (path.startsWith("/readme/docs/") && reading) {
-    const rel = path.slice("/readme/".length);
-    return rel.endsWith(".md") ? serveDoc(res, rel) : serveFile(res, "docs", rel.slice("docs/".length));
+  if (req.method !== "POST") {
+    res.writeHead(405, { Allow: "GET, POST" });
+    return res.end();
   }
-  if (path === "/events" && req.method === "GET") return openStream(req, res);
-  const exhibit = /^\/exhibits\/(\d{1,9})(?:\/(restore|display|store))?$/.exec(path);
-  if (req.method === "POST") {
-    if (Object.hasOwn(POSTS, path)) return POSTS[path](req, res);
-    if (exhibit?.[2]) return EXHIBIT_POSTS[exhibit[2]](req, res, [exhibit[1]]);
-    return sendJson(res, 404, { error: "not-found", message: "No such action" });
+  if (crossSite(req)) return refuse(res, { status: 403, error: "cross-origin", message: "Posts come from the museum's own page" });
+  const body = await bodyOf(req);
+  if (body === TOO_LARGE) return refuse(res, { status: 413, error: "too-large", message: `A request body is at most ${BODY_MAX} bytes` });
+  if (!body) return refuse(res, { status: 400, error: "bad-json", message: "The body is a JSON object" });
+  const v = visitorOf(req, res);
+  const now = Date.now();
+  const done = (r: { ok: boolean } & Record<string, any>, event: string, fields: Record<string, unknown> = {}) => {
+    if (!r.ok) {
+      log("refused", { event, tag: v.tag, error: r.error });
+      return refuse(res, r as any);
+    }
+    log(event, { tag: v.tag, ...fields });
+    json(res, 200, r);
+    broadcast();
+  };
+
+  if (path === "/pointer") {
+    const aim = body.aim === undefined ? undefined : aimOf(body.aim);
+    if (aim === null || (aim && body.p === null)) return refuse(res, { status: 400, error: "bad-aim", message: "aim is { ball, v } for a flick, with a pointer" });
+    if (body.p === null) pointers.delete(v.tag);
+    else if (isPointer(body.p)) pointers.set(v.tag, { tag: v.tag, name: v.name, colour: v.colour, p: body.p.map((x) => Math.round(x * 1000) / 1000), aim, at: now });
+    else return refuse(res, { status: 400, error: "bad-pointer", message: "p is [x, y, z] in the room, or null" });
+    pointersSoon();
+    return json(res, 200, { ok: true });
   }
-  if (path === "/archive" && reading) {
-    const before = url.searchParams.get("before");
-    if (before !== null && !/^[1-9]\d{0,8}$/.test(before)) return sendJson(res, 400, { error: "bad-request", message: "before must be an archived draft's id" });
-    return sendJson(res, 200, store.archive(before === null ? null : Number(before)));
+  if (path === "/hall/launch") {
+    const r = hall.launch(v.pid, body, now);
+    if (!r.ok) {
+      log("refused", { event: "launch", tag: v.tag, error: r.error });
+      // a stale launch is answered with the robot, so the page can resync
+      return json(res, r.status, { error: r.error, message: r.message, ...("robot" in r ? { robot: r.robot } : {}) });
+    }
+    json(res, 200, { robot: { ...store.who(v.pid), ...r.robot } });
+    return hallBroadcast();
   }
-  if (exhibit && !exhibit[2] && reading) {
-    const history = store.history(Number(exhibit[1]));
-    return history ? sendJson(res, 200, history) : sendJson(res, 404, { error: "not-found", message: "No such exhibit" });
+  if (path === "/hall/display") {
+    if (Object.keys(body).some((k) => k !== "slots" && k !== "was") || !("was" in body))
+      return refuse(res, { status: 400, error: "bad-display", message: "A display change is { slots, was }: the new layout and the one it was made from" });
+    const r = store.arrange(v.pid, body.slots, body.was, now);
+    if (!r.ok) {
+      log("refused", { event: "display", tag: v.tag, error: r.error });
+      return json(res, r.status, { error: r.error, message: r.message, ...("display" in r ? { display: r.display } : {}) });
+    }
+    log("display", { tag: v.tag, slots: r.display.join(",") });
+    json(res, 200, r);
+    return hallBroadcast();
   }
-  if (reading && path.length > 1) return serveFile(res, "public", path.slice(1));
-  notFound(res);
+  if (path === "/me") return done(store.rename(v.pid, body.name), "rename", { name: body.name });
+  if (path === "/stage/gesture") return done(store.addGesture(v.pid, body.gesture, now), "gesture", { kind: (body.gesture as any)?.kind });
+  if (path === "/stage/undo") return done(store.undo(v.pid), "undo");
+  if (path === "/stage/clear") return done(store.clear(v.pid, now), "clear");
+  if (path === "/stage/bring-back") return done(store.bringBack(body.archivedId, body.replace === true, now), "bring-back", { archivedId: body.archivedId });
+  if (path === "/stage/join") return done(store.join(body.versionId, body.replace === true, now), "join", { versionId: body.versionId });
+  if (path === "/publish") return done(store.publish(v.pid, body, now), "publish", { title: body.title, slot: body.slot, exhibitId: body.exhibitId });
+  const restore = idIn(path, /^\/exhibits\/(\d+)\/restore$/);
+  if (restore !== null) return done(store.restore(restore, body.versionId, v.pid, now), "restore", { exhibitId: restore });
+  const display = idIn(path, /^\/exhibits\/(\d+)\/display$/);
+  if (display !== null) return done(store.display(display, body.slot, body.replace === true), "display", { exhibitId: display, slot: body.slot });
+  const away = idIn(path, /^\/exhibits\/(\d+)\/store$/);
+  if (away !== null) return done(store.store(away), "store", { exhibitId: away });
+  return refuse(res, { status: 404, error: "not-found", message: "No such route" });
 }
 
 const server = createServer((req, res) => {
-  handle(req, res).catch((err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    log("error", { method: req.method ?? "", path: (req.url ?? "").split("?")[0], message });
-    console.error(err);
-    if (!res.headersSent) sendJson(res, 500, { error: "bad-request", message: "Something went wrong" });
+  handle(req, res).catch((e) => {
+    log("error", { message: String(e?.message ?? e) });
+    if (!res.headersSent) json(res, 500, { error: "server", message: "Something went wrong" });
     else res.end();
   });
-}).listen(PORT, "0.0.0.0", () => {
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : PORT;
-  log("start", { port, db: DB_PATH });
 });
+server.listen(PORT, "0.0.0.0", () => log("listening", { port: PORT, db: DB_PATH }));
 
-// Fly sends SIGTERM before stopping the machine (a redeploy, or no traffic).
-// close() waits for every socket to go quiet, so closeAllConnections() too,
-// or the platform may kill the process before the database closes. Every
-// write is synchronous and already committed, so nothing is cut short.
-function shutdown(signal: string): void {
-  log("shutdown", { signal: raw(signal), open: streams.size });
-  for (const { res } of streams) res.end();
-  streams.clear();
-  server.close(() => {
-    store.close();
-    process.exit(0);
-  });
+process.on("SIGTERM", () => {
+  for (const c of [...clients, ...hallClients]) c.res.end();
+  server.close();
   server.closeAllConnections();
-  setTimeout(() => process.exit(0), 5000).unref();
-}
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+  store.close();
+  process.exit(0);
+});
