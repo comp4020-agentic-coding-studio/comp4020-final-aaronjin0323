@@ -74,7 +74,16 @@ async function viewports(browser: Browser) {
     check(small.length === 0, `${name}: every button is at least 32px tall`, small.join(", "));
     const iconOnly = await page.$$eval("button", (els) => els.filter((e) => (e as HTMLElement).offsetParent && !(e.textContent ?? "").trim()).length);
     check(iconOnly === 0, `${name}: no button without words`, String(iconOnly));
+    const link = page.getByRole("link", { name: /Go to the hall/ });
+    const lb = await link.boundingBox({ timeout: 2000 }).catch(() => null);
+    check(!!lb && lb.x >= 0 && lb.x + lb.width <= vw && lb.y >= 0 && lb.y + lb.height <= vh && lb.height >= 32, `${name}: the link to the hall is in view, at least 32px tall`, lb ? `${Math.round(lb.height)}px at ${Math.round(lb.y)}` : "none");
     await page.screenshot({ path: `.shots/${name}.png` });
+    if (lb) {
+      await link.click();
+      const there = await page.waitForURL(/\/hall\/$/, { timeout: 5000 }).then(() => true, () => false);
+      const back = there && (await page.getByRole("link", { name: "Back to the stage" }).isVisible());
+      check(there && back, `${name}: it opens the hall, which links back to the stage`, page.url());
+    }
     await page.context().close();
   }
 }
@@ -565,6 +574,7 @@ async function noScript(browser: Browser) {
   const page = await ctx.newPage();
   await page.goto(`${APP}/?v=${Date.now()}`);
   check(await page.locator("[data-listing] li").count() === 6, "the six plinths are listed in the HTML");
+  check(await page.getByRole("link", { name: /Go to the hall/ }).isVisible(), "the link to the hall is there without script");
   await ctx.close();
 }
 
