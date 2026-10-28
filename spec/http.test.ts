@@ -231,6 +231,12 @@ describe("the hall", { concurrent: false }, () => {
     expect(r.status).toBe(200);
     expect(await r.text()).toMatch(/<canvas[^>]*data-hall/);
   });
+  test("the stage links to the hall in words, in its HTML, and the hall links back", async () => {
+    const stage = await (await fetch(BASE + "/")).text();
+    expect(stage).toMatch(/<a [^>]*href="\/hall\/"[^>]*>Go to the hall/);
+    const hall = await (await fetch(BASE + "/hall/")).text();
+    expect(hall).toMatch(/<a [^>]*href="\/"[^>]*>Back to the stage/);
+  });
   test("a visitor has a robot while their hall is open, at rest, the server's clock on every snapshot", async () => {
     const a = visitor();
     const ta = (await a.me()).tag;

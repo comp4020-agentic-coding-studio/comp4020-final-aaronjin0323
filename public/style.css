@@ -43,6 +43,11 @@ button, input, select { font: inherit; color: inherit; }
 .brand { background: rgba(38, 34, 61, 0.82); color: #fff; padding: 12px 16px; border-radius: var(--radius); }
 .brand h1 { margin: 0; font-size: 1.35rem; letter-spacing: 0.01em; }
 .lede { margin: 2px 0 0; font-size: 0.95rem; opacity: 0.92; }
+.to-hall {
+  display: inline-flex; align-items: center; min-height: 32px; margin-top: 8px; padding: 4px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.14); color: #fff; font-size: 0.9rem; font-weight: 600; text-decoration: none;
+}
+.to-hall:hover, .to-hall:focus-visible { background: rgba(255,255,255,.26); }
 .people { background: var(--paper); padding: 10px 14px; border-radius: var(--radius); display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
 .you { display: flex; align-items: center; gap: 8px; }
 .dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--c, #999); box-shadow: 0 0 0 2px #fff; flex: none; }
@@ -162,6 +167,7 @@ body.no-gl .panel { left: var(--gap); right: auto; top: 130px; width: min(560px,
   .brand { padding: 8px 12px; }
   .brand h1 { font-size: 1.1rem; }
   .lede { font-size: 0.85rem; }
+  .to-hall { margin-top: 6px; font-size: 0.85rem; }
   .people { padding: 6px 10px; font-size: 0.9rem; }
   .scene-wrap { position: relative; inset: auto; }
   .hint { transform: translateX(-50%); bottom: 10px; font-size: 0.8rem; white-space: nowrap; }
