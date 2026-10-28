@@ -249,6 +249,9 @@ back [ADR 27](docs/adr/0027-leaving-and-coming-back.md).
 
 - **Words for actions.** Buttons say what they do ("Leave it", "Join in",
   "Undo"); no icon-only control.
+- **The stage links to the hall** in its header, in words ("Go to the
+  hall"), a plain link in the HTML that works without script, at both
+  sizes; the hall links back ("Back to the stage").
 - **Every gesture also has a button** in the panel ("Flick teal", "Ring
   the bell"), so the toy works from the keyboard and without WebGL.
 - **At 390x844** the scene is pinned on top and the panel scrolls under
