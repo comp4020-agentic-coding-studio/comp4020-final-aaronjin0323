@@ -160,6 +160,9 @@ ADR 28 says which still stand.
 - **SSE with every robot's snapshot** on every change, plus a heartbeat. A
   refused stream is opened again, 1 s doubling to 15 s. Disconnected means
   watch-only, and the page says so.
+- **Silence counts as lost.** A network can vanish without a stream ever
+  closing, so a `beat` event goes out every `BEAT_MS`, and a page that hears
+  nothing for `BEAT_MISS_MS` drops the stream, says so and reconnects.
 - **Nothing is explained by a wall of text.** At 390x844 the arena fills the
   width, a pull pad sits under it, and nothing scrolls sideways; at 844x390
   the panel sits beside the arena.
@@ -205,6 +208,11 @@ store with a test clock), `spec/room.test.ts`, `spec/store.test.ts` and `spec/ht
   line for a robot, a refused stream, no script, a room edited, saved and
   visited) and screenshots into `.shots/`. Read the shots; it isn't in CI,
   which has no Chrome.
+- Before calling multiplayer behaviour done, run
+  `node scripts/session-check.ts`: 2 to 5 independent sessions on throwaway
+  databases, checking every event each one receives and auditing the
+  database (sync, scatter, settling, contested pickups, a 40 s four-way soak,
+  spawning, ownership, refreshes, restarts). Not in CI; about 4 minutes.
 - Before a change to the store, the arena or the server is done, run
   `node scripts/restart-check.ts`: it starts and kills its own servers on
   a throwaway database and plays a visitor through a graceful restart, a
