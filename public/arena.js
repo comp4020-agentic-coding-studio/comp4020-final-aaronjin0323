@@ -1,81 +1,91 @@
-// The hall's movement rule (ADR 24): a round robot launched across a
-// top-down hall, slowing to a stop and rebounding off the walls. This is
-// the one copy of the rule: the server imports it to move robots, the page
+// The arena's rule (ADR 28): round robots launched across a top-down arena,
+// slowing to a stop and rebounding off the walls. This is the one copy of
+// the rule: the server imports it to move robots, the page
 // to predict yours and to show everyone's between snapshots.
 //
 // A robot is a snapshot { pos, vel, t, seq }: where it is and how fast it's
 // going at server time t (ms). `advance` steps it on in whole 20 ms steps,
 // so the server and every screen, starting from the same snapshot, get the
 // same numbers. The arithmetic is + - * / and Math.sqrt only, which every
-// JavaScript engine rounds the same; spec/hall.test.ts reads this file to
+// JavaScript engine rounds the same; spec/arena-rule.test.ts reads this file to
 // hold that.
 
-// ---- every movement number, in one place
-/** The hall, in metres: x across, y down the screen. */
-export const HALL = { w: 16, h: 10 };
+// ---- every number, in one place
+/** The arena, in metres: x across, y down the screen. */
+export const ARENA = { w: 16, h: 10 };
 export const ROBOT_R = 0.45;
-/** The fastest a launch sends a robot, in m/s (at power 1). */
-export const LAUNCH_MAX = 8;
+/** The fastest an empty robot's launch goes, in m/s (at power 1). */
+export const LAUNCH_MAX = 10;
+/** The fastest anything ever goes, collisions included, in m/s. */
+export const SPEED_MAX = 12;
 /** How far back you pull for full power, and the least that counts, in m. */
 export const PULL_MAX = 2.5;
 export const MIN_PULL = 0.25;
 /** Slowing down: a steady FRICTION (m/s²) plus DRAG per second of speed. */
-export const FRICTION = 2.5;
+export const FRICTION = 2;
 export const DRAG = 0.6;
 /** What share of its speed into a wall a robot keeps coming off it. */
 export const WALL_BOUNCE = 0.75;
 /** Slower than this, in m/s, a robot stops. */
 export const STOP = 0.05;
-// ---- collecting (ADR 25): the numbers and places, in the same one place
+/** How many robots at once. */
+export const MAX_PLAYERS = 4;
+/** Where each slot's robot starts. */
+export const SPAWNS = [[1.5, 1.5], [14.5, 8.5], [14.5, 1.5], [1.5, 8.5]];
+
+// ---- load: each artifact makes a launch weaker and a turn wider
+export const CARRY_MAX = 5;
+const LOAD_SLOW = 0.2;
+const LOAD_TURN = 0.1;
+/** The launch cap with `n` artifacts aboard, in m/s. */
+export const loadCap = (n) => LAUNCH_MAX / (1 + LOAD_SLOW * n);
+/** The share of its old velocity a launch keeps with `n` aboard. */
+export const loadKeep = (n) => LOAD_TURN * n;
+
+// ---- artifacts and the vault
 /** Three kinds, one set of rules. */
 export const KINDS = ["fish", "cloud", "door"];
 export const ARTIFACT_R = 0.3;
-/** How many are on the floor at once, how many a robot carries, display slots. */
-export const MAX_AVAILABLE = 6;
-export const CARRY_MAX = 3;
-export const DISPLAY_SLOTS = 4;
-/** Delivery zones: eight pads round the walls, each PAD_R round. */
-export const PAD_R = 0.9;
-const IN = 1.1; // a pad's centre from its walls
-export const HOMES = [
-  [IN, IN], [HALL.w / 2, IN], [HALL.w - IN, IN], [HALL.w - IN, HALL.h / 2],
-  [HALL.w - IN, HALL.h - IN], [HALL.w / 2, HALL.h - IN], [IN, HALL.h - IN], [IN, HALL.h / 2],
-];
+/** How many are on the floor at once. */
+export const MAX_AVAILABLE = 7;
+export const VAULT = [ARENA.w / 2, ARENA.h / 2];
+export const VAULT_R = 1.3;
 const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
-/** Where artifacts may appear: a grid inside the walls, keeping only the
- * spots where a robot touching one can't also be standing in a zone. */
+/** A robot at `pos` is in the vault. */
+export const inVault = (pos) => dist(pos, VAULT) < VAULT_R;
+/** Where artifacts may appear: a grid inside the walls, clear of the vault. */
 export const SPOTS = [];
-for (let x = 2.6; x < HALL.w - 2; x += 1.8) {
-  for (let y = 2.8; y < HALL.h - 2; y += 1.5) {
+for (let x = 1.4; x < ARENA.w - 1; x += 1.8) {
+  for (let y = 1.4; y < ARENA.h - 1; y += 1.8) {
     const p = [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
-    if (HOMES.every((h) => dist(p, h) > PAD_R + ROBOT_R + ARTIFACT_R)) SPOTS.push(p);
+    if (dist(p, VAULT) > VAULT_R + ROBOT_R + ARTIFACT_R) SPOTS.push(p);
   }
 }
 /** A robot at `pos` touches an artifact at `at`. */
 export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
-/** A robot at `pos` is in the zone centred at `home`. */
-export const atHome = (pos, home) => dist(pos, home) < PAD_R;
 
-// ---- together (ADR 26): robots meeting, knocks, and fair zones
+// ---- hitting
 /** Robots bounce off each other keeping this share of their closing speed. */
 export const ROBOT_BOUNCE = 0.8;
-/** A knock needs at least this closing speed, in m/s (full power is LAUNCH_MAX). */
+/** A knock needs at least this closing speed, in m/s. */
 export const KNOCK_SPEED = 4.5;
 /** The struck robot is moving less towards the other by at least this; less is a tie. */
 export const KNOCK_CLEAR = 0.5;
 /** A dropped artifact waits this long before anyone can pick it up, in ms. */
-export const PICKUP_DELAY_MS = 1000;
+export const PICKUP_DELAY_MS = 350;
 /** A robot that dropped one can't be knocked again for this long, in ms. */
-export const DROP_PROTECT_MS = 3000;
-/** Within this of its own zone's centre, nothing is knocked loose from a robot. */
-export const SAFE_R = PAD_R + 1.2;
-export const inSafe = (pos, home) => dist(pos, home) < SAFE_R;
+export const DROP_PROTECT_MS = 1200;
 
 const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
+/** `v` no faster than `max`. */
+function bounded(v, max) {
+  const s = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
+  return s > max ? [(v[0] * max) / s, (v[1] * max) / s] : v;
+}
 /** Keeps a robot's centre inside the walls. Changes `p`. */
 function inside(p) {
-  p[0] = clamp(p[0], ROBOT_R, HALL.w - ROBOT_R);
-  p[1] = clamp(p[1], ROBOT_R, HALL.h - ROBOT_R);
+  p[0] = clamp(p[0], ROBOT_R, ARENA.w - ROBOT_R);
+  p[1] = clamp(p[1], ROBOT_R, ARENA.h - ROBOT_R);
 }
 
 /**
@@ -95,8 +105,8 @@ export function collide(a, b) {
   if (closing <= 0) return null;
   const j = ((1 + ROBOT_BOUNCE) / 2) * closing;
   const half = (2 * ROBOT_R - len) / 2;
-  const na = { ...a, pos: [a.pos[0] - n[0] * half, a.pos[1] - n[1] * half], vel: [a.vel[0] - j * n[0], a.vel[1] - j * n[1]] };
-  const nb = { ...b, pos: [b.pos[0] + n[0] * half, b.pos[1] + n[1] * half], vel: [b.vel[0] + j * n[0], b.vel[1] + j * n[1]] };
+  const na = { ...a, pos: [a.pos[0] - n[0] * half, a.pos[1] - n[1] * half], vel: bounded([a.vel[0] - j * n[0], a.vel[1] - j * n[1]], SPEED_MAX) };
+  const nb = { ...b, pos: [b.pos[0] + n[0] * half, b.pos[1] + n[1] * half], vel: bounded([b.vel[0] + j * n[0], b.vel[1] + j * n[1]], SPEED_MAX) };
   inside(na.pos);
   inside(nb.pos);
   const struck = aInto > bInto + KNOCK_CLEAR ? "b" : bInto > aInto + KNOCK_CLEAR ? "a" : null;
@@ -105,30 +115,25 @@ export function collide(a, b) {
 
 /**
  * Whether a collision (from `collide`) knocks an artifact loose from the
- * struck robot: fast enough, a clear struck robot, that robot not
- * protected at `now`, and not within SAFE_R of its own zone. The same for
- * everyone; whether it carries anything is the store's to say.
+ * struck robot: fast enough, a clear struck robot, not shielded at `now`.
+ * Whether it carries anything is the store's to say.
  */
 export function knocks(c, protectedUntil, now) {
-  if (!c || c.closing < KNOCK_SPEED || !c.struck) return false;
-  if (now < protectedUntil) return false;
-  const r = c.struck === "a" ? c.a : c.b;
-  return !(Number.isInteger(r.home) && inSafe(r.pos, HOMES[r.home]));
+  return !!c && c.closing >= KNOCK_SPEED && !!c.struck && now >= protectedUntil;
 }
 
 /** Where an artifact knocked loose from a robot at `pos` lands: just
  * beyond it along `away` (a unit vector from the striker), inside the
- * walls, and out of every zone (moved towards the middle if it fell in). */
+ * walls and out of the vault, pushed to its edge if it fell in. */
 export function dropSpot(pos, away) {
   const reach = ROBOT_R + ARTIFACT_R + 0.2;
-  const q = [clamp(pos[0] + away[0] * reach, ARTIFACT_R, HALL.w - ARTIFACT_R), clamp(pos[1] + away[1] * reach, ARTIFACT_R, HALL.h - ARTIFACT_R)];
-  for (const h of HOMES) {
-    if (dist(q, h) > PAD_R + ARTIFACT_R) continue;
-    const c = [HALL.w / 2 - h[0], HALL.h / 2 - h[1]];
-    const cl = Math.sqrt(c[0] * c[0] + c[1] * c[1]);
-    return [h[0] + (c[0] / cl) * (PAD_R + ARTIFACT_R + 0.1), h[1] + (c[1] / cl) * (PAD_R + ARTIFACT_R + 0.1)];
-  }
-  return q;
+  const q = [clamp(pos[0] + away[0] * reach, ARTIFACT_R, ARENA.w - ARTIFACT_R), clamp(pos[1] + away[1] * reach, ARTIFACT_R, ARENA.h - ARTIFACT_R)];
+  const d = [q[0] - VAULT[0], q[1] - VAULT[1]];
+  const len = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
+  const edge = VAULT_R + ARTIFACT_R + 0.1;
+  if (len >= edge) return q;
+  const u = len < 1e-9 ? [1, 0] : [d[0] / len, d[1] / len];
+  return [VAULT[0] + u[0] * edge, VAULT[1] + u[1] * edge];
 }
 
 export const HZ = 50;
@@ -158,8 +163,8 @@ export function checkLaunch(x) {
 }
 
 /** A robot standing still at `pos` from server time `t`. */
-export const standing = (pos, t, home) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0, home });
-// ---- leaving (ADR 27)
+export const standing = (pos, t) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0 });
+// ---- leaving
 /** How long a disconnected player's robot waits for them, in ms. */
 export const GRACE_MS = 10_000;
 /** The `n` free safe spots nearest `at`, none where an artifact already
@@ -187,31 +192,11 @@ function step(r) {
   v[1] *= slower / s;
   p[0] += v[0] * DT;
   p[1] += v[1] * DT;
-  const lo = ROBOT_R, hiX = HALL.w - ROBOT_R, hiY = HALL.h - ROBOT_R;
+  const lo = ROBOT_R, hiX = ARENA.w - ROBOT_R, hiY = ARENA.h - ROBOT_R;
   if (p[0] < lo) [p[0], v[0]] = [lo, -v[0] * WALL_BOUNCE];
   else if (p[0] > hiX) [p[0], v[0]] = [hiX, -v[0] * WALL_BOUNCE];
   if (p[1] < lo) [p[1], v[1]] = [lo, -v[1] * WALL_BOUNCE];
   else if (p[1] > hiY) [p[1], v[1]] = [hiY, -v[1] * WALL_BOUNCE];
-  // a zone that isn't this robot's is solid to it, like a wall (ADR 26)
-  if (!Number.isInteger(r.home)) return;
-  for (let i = 0; i < HOMES.length; i++) {
-    if (i === r.home) continue;
-    const h = HOMES[i];
-    const d = [p[0] - h[0], p[1] - h[1]];
-    const len = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
-    const min = PAD_R + ROBOT_R;
-    if (len >= min || len < 1e-9) continue;
-    const n = [d[0] / len, d[1] / len];
-    p[0] = h[0] + n[0] * min;
-    p[1] = h[1] + n[1] * min;
-    const vn = v[0] * n[0] + v[1] * n[1];
-    if (vn < 0) {
-      v[0] -= (1 + WALL_BOUNCE) * vn * n[0];
-      v[1] -= (1 + WALL_BOUNCE) * vn * n[1];
-    }
-  }
-  // the walls win: a zone in a corner mustn't push a robot through one
-  inside(p);
 }
 
 /**
@@ -219,7 +204,7 @@ function step(r) {
  * snapshot (the remainder waits for the next step). A fresh object.
  */
 export function advance(r, to) {
-  const out = { pos: [r.pos[0], r.pos[1]], vel: [r.vel[0], r.vel[1]], t: r.t, seq: r.seq, home: r.home };
+  const out = { pos: [r.pos[0], r.pos[1]], vel: [r.vel[0], r.vel[1]], t: r.t, seq: r.seq };
   const steps = Math.floor((to - r.t) / STEP_MS);
   if (!(steps > 0)) return out;
   out.t = r.t + steps * STEP_MS;
@@ -228,24 +213,27 @@ export function advance(r, to) {
 }
 
 /**
- * A checked launch at server time `now`: the robot is brought up to now,
- * then its velocity is replaced, never added to, so it is never faster
- * than LAUNCH_MAX however often it's launched.
+ * A checked launch at server time `now` with `load` artifacts aboard. The
+ * robot is brought up to now, then its velocity becomes the launch, keeping
+ * loadKeep(load) of the old one, and no faster than loadCap(load).
+ * It works at any moment, and however often it's launched it's never faster.
  */
-export function launch(r, l, now) {
+export function launch(r, l, now, load = 0) {
   const out = advance(r, now);
   out.t = now;
   // unit length here, whatever rounding did to dir, so the cap is exact
   const len = Math.sqrt(l.dir[0] * l.dir[0] + l.dir[1] * l.dir[1]);
-  const s = (Math.min(l.power, 1) * LAUNCH_MAX) / len;
-  out.vel = [l.dir[0] * s, l.dir[1] * s];
+  const cap = loadCap(load);
+  const s = (Math.min(l.power, 1) * cap) / len;
+  const keep = loadKeep(load);
+  out.vel = bounded([out.vel[0] * keep + l.dir[0] * s * (1 - keep), out.vel[1] * keep + l.dir[1] * s * (1 - keep)], cap);
   out.seq = l.seq;
   return out;
 }
 
 /** Where a launch from `r` will go, until it stops: the preview. */
-export function path(r, l) {
-  const run = launch(r, l, r.t);
+export function path(r, l, load = 0) {
+  const run = launch(r, l, r.t, load);
   const pts = [[run.pos[0], run.pos[1]]];
   for (let i = 1; i < HZ * 10 && (run.vel[0] !== 0 || run.vel[1] !== 0); i++) {
     step(run);

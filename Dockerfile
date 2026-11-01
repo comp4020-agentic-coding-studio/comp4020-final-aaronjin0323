@@ -6,7 +6,7 @@
 
 FROM docker.io/library/node:24.21.0-slim
 WORKDIR /app
-ENV NODE_ENV=production DB_PATH=/data/gallery.db
+ENV NODE_ENV=production DB_PATH=/data/arena.db
 RUN npm install -g pnpm@11.9.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile
