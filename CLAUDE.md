@@ -142,14 +142,27 @@ ADR 28 says which still stand.
 - **The store migrates safely:** numbered migrations, a copy beside the
   file first, each in a transaction.
 
+### The journey
+
+- **Grab, deliver, exhibit** ([ADR 32](docs/adr/0032-one-player-journey.md)):
+  three steps always shown, the current one marked, from what the server says
+  you hold.
+- **At risk is amber and dashed; kept for good is solid gold,** everywhere,
+  with words too. Never mix them.
+- **Weight shows as top speed,** a percentage and a meter.
+- **One line of guidance at a time, on the arena,** gone once done. Words about
+  you only, never about anyone else.
+- **Every delivery is an event:** a burst at the vault for everyone, the
+  message for the deliverer, a link on to the room.
+
 ### The page
 
 - **SSE with every robot's snapshot** on every change, plus a heartbeat. A
   refused stream is opened again, 1 s doubling to 15 s. Disconnected means
   watch-only, and the page says so.
-- **Nothing is explained by a wall of text:** one short line of how to
-  play, your cargo, your collection under the arena. At 390x844 the arena fills the width and
-  nothing scrolls sideways.
+- **Nothing is explained by a wall of text.** At 390x844 the arena fills the
+  width, a pull pad sits under it, and nothing scrolls sideways; at 844x390
+  the panel sits beside the arena.
 - **Every animation has a `prefers-reduced-motion` path.**
 
 ## The contract
@@ -162,7 +175,7 @@ is `{ error, message }`.
 |---|---|---|---|
 | `GET /` | | the arena | |
 | `GET /readme/` | | README.md rendered | |
-| `GET /events` | | SSE: `arena`, every robot, the floor, `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
+| `GET /events` | | SSE: `arena`, every robot, the floor, `hits`, `deliveries`, `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
 | `GET /collection` | | your newest 60 banked artifacts and your catalog counts | |
 | `GET /room/`, `GET /room/:tag` | | the room page, yours or theirs | |
 | `GET /rooms/me` | | your room, your `shelf` for editing, `mine: true` | |
