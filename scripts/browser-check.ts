@@ -345,6 +345,8 @@ async function trip(browser: Browser, opts: Opts, name: string, touch: boolean) 
   check(true, `${name}: the room says what's waiting`);
   await a.waitForTimeout(150);
   check((await a.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `${name}: the room doesn't scroll sideways`);
+  const seen = await a.locator("[data-room]").boundingBox();
+  check(seen!.y >= 0 && seen!.y + seen!.height <= vh + 1, `${name}: the whole room fits on screen`, `${Math.round(seen!.width)}x${Math.round(seen!.height)}`);
   await a.screenshot({ path: `.shots/j-${name}-5-room.png` });
   await a.context().close();
 }
