@@ -108,6 +108,25 @@ ADR 28 says which still stand.
   total. There are no rounds, countdowns or expiry. Robots
   are presence, in memory only.
 
+### Your room
+
+- **Everyone has an exhibition room** at `/room/<tag>`
+  ([ADR 31](docs/adr/0031-exhibition-rooms.md)), `/room/` being your own: one
+  fixed view of a wall and a floor, a layout of wall, floor, light and at
+  most `ROOM_MAX_ITEMS` items. Everything placeable is in `public/room.js`.
+- **Artifacts stand on stands,** one each, once in a room, and only ones the
+  room's owner banked. The store checks ownership; nothing else can.
+- **Only the owner can edit, and it's enforced by shape:** `POST /room` names
+  no room, so it can only change the sender's own. The page shows editing
+  only to the owner, but that's manners; the route is the rule.
+- **Saves are explicit and revisioned:** a save from an old revision is
+  `409 stale-room`. Layouts persist across restarts.
+- **No free text in a room.** Names are generated from the tag; no titles or
+  captions. Rooms are public, and read-only to everyone but their owner.
+- **Close observation:** any exhibited artifact opens large, with a light you
+  move, closer and further, and a short wake. The room also lists them as
+  buttons, so nothing depends on the canvas.
+
 ### Staying and leaving
 
 - **Four robots at most** (`MAX_PLAYERS`). Anyone else watches, sees their
@@ -135,7 +154,7 @@ ADR 28 says which still stand.
 
 ## The contract
 
-`POST /launch` takes and answers JSON, refuses a body over 4 KB with `413
+Every `POST` takes and answers JSON, refuses a body over 4 KB with `413
 too-large` and a cross-site `Origin` with `403 cross-origin`; every refusal
 is `{ error, message }`.
 
@@ -145,10 +164,15 @@ is `{ error, message }`.
 | `GET /readme/` | | README.md rendered | |
 | `GET /events` | | SSE: `arena`, every robot, the floor, `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
 | `GET /collection` | | your newest 60 banked artifacts and your catalog counts | |
+| `GET /room/`, `GET /room/:tag` | | the room page, yours or theirs | |
+| `GET /rooms/me` | | your room, your `shelf` for editing, `mine: true` | |
+| `GET /rooms/:tag` | | a room: `layout`, `rev`, `name`, its `artifacts`, and `mine` | `404` |
+| `GET /rooms?before=<cursor>` | | 12 rooms with something on show, newest change first, and the next cursor | `400` |
+| `POST /room` | `{ layout, was }` | save your own room, from revision `was` | `400`, `409 stale-room`, `409 not-owned` |
 | `POST /launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot`, `409 stale-launch`, `400` |
 
 Held by `spec/arena-rule.test.ts`, `spec/arena.test.ts` (the real arena and
-store with a test clock), `spec/store.test.ts` and `spec/http.test.ts`
+store with a test clock), `spec/room.test.ts`, `spec/store.test.ts` and `spec/http.test.ts`
 (against the running app, including a launch reaching another stream within
 1000 ms). Logs are one line per event, `event key=value`, a person as a tag.
 
@@ -165,7 +189,8 @@ store with a test clock), `spec/store.test.ts` and `spec/http.test.ts`
 - Look at the page at 1440x900 and 390x844 before calling a page change
   done: `node scripts/browser-check.ts` against the local app plays it as
   several visitors (launching, a launch while moving, keys, a scatter, the
-  line for a robot, a refused stream, no script) and screenshots into `.shots/`. Read the shots; it isn't in CI,
+  line for a robot, a refused stream, no script, a room edited, saved and
+  visited) and screenshots into `.shots/`. Read the shots; it isn't in CI,
   which has no Chrome.
 - Before a change to the store, the arena or the server is done, run
   `node scripts/restart-check.ts`: it starts and kills its own servers on
@@ -176,7 +201,8 @@ store with a test clock), `spec/store.test.ts` and `spec/http.test.ts`
 ## Out of scope
 
 Accounts, names, chat, emotes, avatars, uploaded assets, runtime AI models,
-a physics library, more arenas, bots, leaderboards of people, rounds,
+a physics library, more arenas, bots, leaderboards of people, free text
+in rooms, 3D, rounds,
 countdowns, upgrades, elimination, rate limiting.
 
 ## The live arena is not a test fixture
