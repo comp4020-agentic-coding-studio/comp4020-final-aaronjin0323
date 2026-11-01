@@ -1,13 +1,5 @@
 # Impossible Museum
 
-<!--
-DRAFT by Claude, to be rewritten in your own words (the course asks you
-to write README.md yourself). The factual sections are checked against
-the code and spec/ as of commit 68b1be6. "What good means here" is notes
-and sources only: write that argument yourself. Target: 400-600 words.
-Delete this comment when it's yours.
--->
-
 A small shared 3D gallery floating above the clouds. Everyone who opens it
 stands in the same room, in first person, and sees the others there. In
 the middle is a stage of impossible toys that anyone can play, and round it

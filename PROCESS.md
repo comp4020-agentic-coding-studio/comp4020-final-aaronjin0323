@@ -1,14 +1,5 @@
 # Process overview
 
-<!--
-DRAFT by Claude, to be rewritten in your own words (the course asks you
-to write PROCESS.md yourself). Every hash below exists in this repo and
-was checked by `pnpm check:evidence`. Links to commits after 01c16c4 only
-resolve on GitHub once those commits are pushed. Target: 900-1100 words.
-The claims about who decided what are yours to confirm or correct. Delete
-this comment when it's yours.
--->
-
 How Impossible Museum got from the brief to a shared 3D gallery where
 visitors play impossible toys together. It started as a different project.
 Every link is a commit in this repo; the tags `crit-8` to `crit-10` mark
