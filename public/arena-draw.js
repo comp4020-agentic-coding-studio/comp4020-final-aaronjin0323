@@ -1,6 +1,6 @@
-// The three kinds of artifact, drawn on a 2D canvas (ADR 25): simple, but
+// The three kinds of artifact, drawn on a 2D canvas : simple, but
 // told apart by shape and colour as well as by name. One function draws
-// them on the hall's floor, behind robots and in the panel's icons.
+// them on the arena's floor, behind robots and in the panel's icons.
 
 /**
  * Draws `kind` centred at x, y, about r pixels round. `t` (seconds) lets
