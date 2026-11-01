@@ -64,17 +64,11 @@ for (let x = 1.4; x < ARENA.w - 1; x += 1.8) {
 /** A robot at `pos` touches an artifact at `at`. */
 export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
 
-// ---- hitting
+// ---- contact
 /** Robots bounce off each other keeping this share of their closing speed. */
 export const ROBOT_BOUNCE = 0.8;
-/** A knock needs at least this closing speed, in m/s. */
-export const KNOCK_SPEED = 4.5;
-/** The struck robot is moving less towards the other by at least this; less is a tie. */
-export const KNOCK_CLEAR = 0.5;
-/** A dropped artifact waits this long before anyone can pick it up, in ms. */
-export const PICKUP_DELAY_MS = 350;
-/** A robot that dropped one can't be knocked again for this long, in ms. */
-export const DROP_PROTECT_MS = 1200;
+/** How long a scattered artifact settles before anyone can take it, in ms. */
+export const SETTLE_MS = 600;
 
 const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
 /** `v` no faster than `max`. */
@@ -91,8 +85,7 @@ function inside(p) {
 /**
  * Two robots at the same moment: null unless they overlap and are closing.
  * Otherwise they bounce as equal masses, and it says how fast they closed,
- * along which line (from a to b), and which was struck: the one moving
- * less towards the other by at least KNOCK_CLEAR, or null for a tie.
+ * and along which line (from a to b).
  */
 export function collide(a, b) {
   const d = [b.pos[0] - a.pos[0], b.pos[1] - a.pos[1]];
@@ -109,31 +102,31 @@ export function collide(a, b) {
   const nb = { ...b, pos: [b.pos[0] + n[0] * half, b.pos[1] + n[1] * half], vel: bounded([b.vel[0] + j * n[0], b.vel[1] + j * n[1]], SPEED_MAX) };
   inside(na.pos);
   inside(nb.pos);
-  const struck = aInto > bInto + KNOCK_CLEAR ? "b" : bInto > aInto + KNOCK_CLEAR ? "a" : null;
-  return { a: na, b: nb, closing, struck, n };
+  return { a: na, b: nb, closing, n };
 }
 
-/**
- * Whether a collision (from `collide`) knocks an artifact loose from the
- * struck robot: fast enough, a clear struck robot, not shielded at `now`.
- * Whether it carries anything is the store's to say.
- */
-export function knocks(c, protectedUntil, now) {
-  return !!c && c.closing >= KNOCK_SPEED && !!c.struck && now >= protectedUntil;
-}
-
-/** Where an artifact knocked loose from a robot at `pos` lands: just
- * beyond it along `away` (a unit vector from the striker), inside the
- * walls and out of the vault, pushed to its edge if it fell in. */
-export function dropSpot(pos, away) {
-  const reach = ROBOT_R + ARTIFACT_R + 0.2;
-  const q = [clamp(pos[0] + away[0] * reach, ARTIFACT_R, ARENA.w - ARTIFACT_R), clamp(pos[1] + away[1] * reach, ARTIFACT_R, ARENA.h - ARTIFACT_R)];
-  const d = [q[0] - VAULT[0], q[1] - VAULT[1]];
-  const len = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
-  const edge = VAULT_R + ARTIFACT_R + 0.1;
-  if (len >= edge) return q;
-  const u = len < 1e-9 ? [1, 0] : [d[0] / len, d[1] / len];
-  return [VAULT[0] + u[0] * edge, VAULT[1] + u[1] * edge];
+/** The unit fan a robot's cargo spreads in: straight on, then out to ±80°. */
+const FAN = [[1, 0], [0.766, 0.643], [0.766, -0.643], [0.174, 0.985], [0.174, -0.985]];
+/** Where `n` artifacts from a robot at `pos` land: spread outward around
+ * `away` (a unit vector from the other robot), inside the walls and out of
+ * the vault, pushed to its edge if one fell in. */
+export function scatterSpots(pos, away, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const f = FAN[i % FAN.length];
+    const d = [away[0] * f[0] - away[1] * f[1], away[0] * f[1] + away[1] * f[0]];
+    const reach = ROBOT_R + ARTIFACT_R + 0.9 + 0.3 * (i % 2);
+    const q = [clamp(pos[0] + d[0] * reach, ARTIFACT_R, ARENA.w - ARTIFACT_R), clamp(pos[1] + d[1] * reach, ARTIFACT_R, ARENA.h - ARTIFACT_R)];
+    const v = [q[0] - VAULT[0], q[1] - VAULT[1]];
+    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
+    const edge = VAULT_R + ARTIFACT_R + 0.1;
+    if (len >= edge) out.push(q);
+    else {
+      const u = len < 1e-9 ? [1, 0] : [v[0] / len, v[1] / len];
+      out.push([VAULT[0] + u[0] * edge, VAULT[1] + u[1] * edge]);
+    }
+  }
+  return out;
 }
 
 export const HZ = 50;

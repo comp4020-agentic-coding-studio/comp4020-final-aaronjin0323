@@ -213,8 +213,8 @@ test("a contact in the vault scatters before banking; what's banked stays banked
   expect(w.store.collection(a).fish).toBe(1);
   w.give(a, 2);
   w.give(b, 1);
-  w.place(a, [A.VAULT[0] - 0.4, A.VAULT[1]], [0.5, 0]);
-  w.place(b, [A.VAULT[0] + 0.51, A.VAULT[1]]);
+  w.place(a, [A.VAULT[0] - 0.4, A.VAULT[1]], [0.5, 0]); // already touching
+  w.place(b, [A.VAULT[0] + 0.45, A.VAULT[1]]);
   w.run(40);
   expect(w.store.collection(a).fish).toBe(1);
   expect(w.store.collection(b).fish).toBe(0);

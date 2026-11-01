@@ -124,13 +124,19 @@ export function openStore(path: string) {
         .run(pid, now, id, now, pid, CARRY_MAX);
       return { ok: true as const, picked: r.changes === 1 };
     },
-    /** A knock: the newest carried artifact back on the floor at `pos`, free
-     * from `readyAt`. Null if they carry nothing. */
-    knockLoose(pid: string, pos: number[], readyAt: number) {
+    /** A contact: everything each robot carries back on the floor at its
+     * spots, free from `readyAt`, all at once. What moved, and from whom. */
+    scatter(robots: { pid: string; spots: number[][] }[], readyAt: number) {
       return tx(() => {
-        const r = db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at DESC, id DESC LIMIT 1").get(pid) as Row | undefined;
-        if (!r) return null;
-        return backOnFloor.run(pos[0], pos[1], readyAt, r.id, pid).changes === 1 ? { id: r.id as string, kind: r.kind as string } : null;
+        const out: { pid: string; id: string; kind: string; to: number[] }[] = [];
+        for (const { pid, spots } of robots) {
+          const carried = db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[];
+          carried.forEach((r, i) => {
+            const to = spots[i];
+            if (to && backOnFloor.run(to[0], to[1], readyAt, r.id, pid).changes === 1) out.push({ pid, id: r.id, kind: r.kind, to });
+          });
+        }
+        return out;
       });
     },
     /** A departed robot's cargo back on the floor, ready at once. Each goes

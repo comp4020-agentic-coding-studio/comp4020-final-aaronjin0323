@@ -4,22 +4,20 @@
 // a page sends launches, and the tick steps every robot together on the
 // shared 20 ms grid by the rule in public/arena.js.
 import {
-  DROP_PROTECT_MS,
   GRACE_MS,
   MAX_PLAYERS,
-  PICKUP_DELAY_MS,
+  SETTLE_MS,
   SPAWNS,
   STEP_MS,
   VAULT,
   advance,
   checkLaunch,
   collide,
-  dropSpot,
   inVault,
-  knocks,
   launch,
   nearestFree,
   onGrid,
+  scatterSpots,
   standing,
   touches,
   // @ts-ignore -- plain JS module shared with the page
@@ -33,11 +31,10 @@ type Entry = {
   robot: Robot; // the snapshot every screen advances
   walked: Robot; // where the tick has stepped it to, on the grid
   streams: number;
-  protectedUntil: number; // after dropping one, it can't be knocked again until then
   awayUntil: number | null; // with no stream open: a ghost until then, then gone
 };
-/** What happened somewhere, for the pages to show as a mark on the floor. */
-export type Hit = { pos: number[]; at: number };
+/** A contact: where, and every artifact it sent out, the same for every page. */
+export type Hit = { pos: number[]; at: number; scattered: { id: string; kind: string; from: number[]; to: number[] }[] };
 export type Welcome = { kind: "restored" } | { kind: "recovered"; carrying: number } | { kind: "new" } | { kind: "waiting" };
 const SWEEP_STEPS = 50; // a second
 const moving = (r: Robot) => r.vel[0] !== 0 || r.vel[1] !== 0;
@@ -69,7 +66,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   function seat(pid: string, streams: number) {
     const slot = freeSlot();
     const robot = standing(SPAWNS[slot], clock) as Robot;
-    robots.set(pid, { slot, robot, walked: robot, streams, protectedUntil: 0, awayUntil: null });
+    robots.set(pid, { slot, robot, walked: robot, streams, awayUntil: null });
   }
 
   /** Everything `pid` carries back on the floor, nearest `at`. Safe twice. */
@@ -107,24 +104,28 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     return changed;
   }
 
-  /** Two robots met on step `t`: both bounce, and the struck one may drop
-   * its newest artifact. Both get new snapshots. */
+  /** Two robots touched on step `t`: both bounce, and both lose everything
+   * they carry, fanned out away from each other. Speed and who moved don't
+   * matter. Both get new snapshots. */
   function meet(pa: string, a: Entry, pb: string, b: Entry, t: number): boolean {
     if (away(a) || away(b)) return false; // ghosts meet nobody
     const c = collide(a.walked, b.walked);
     if (!c) return false;
     a.walked = a.robot = { ...c.a, t };
     b.walked = b.robot = { ...c.b, t };
-    if (!c.struck) return true;
-    const [sp, s, strikerPid, outward]: [string, Entry, string, number[]] = c.struck === "b" ? [pb, b, pa, c.n] : [pa, a, pb, [-c.n[0], -c.n[1]]];
-    if (!knocks(c, s.protectedUntil, t)) return true;
-    const pos = dropSpot(s.walked.pos, outward);
-    const lost = store.knockLoose(sp, pos, t + PICKUP_DELAY_MS);
-    if (!lost) return true;
-    s.protectedUntil = t + DROP_PROTECT_MS;
-    refresh();
-    hits.push({ pos, at: t });
-    log("knock", { by: tagOf(strikerPid), from: tagOf(sp), id: lost.id, kind: lost.kind, closing: Math.round(c.closing * 100) / 100 });
+    const from = { [pa]: c.a.pos, [pb]: c.b.pos };
+    const lost = store.scatter(
+      [
+        { pid: pa, spots: scatterSpots(c.a.pos, [-c.n[0], -c.n[1]], store.cargo(pa).length) },
+        { pid: pb, spots: scatterSpots(c.b.pos, c.n, store.cargo(pb).length) },
+      ],
+      t + SETTLE_MS,
+    );
+    if (lost.length) {
+      refresh();
+      log("scatter", { a: tagOf(pa), b: tagOf(pb), count: lost.length, closing: Math.round(c.closing * 100) / 100 });
+    }
+    hits.push({ pos: [(c.a.pos[0] + c.b.pos[0]) / 2, (c.a.pos[1] + c.b.pos[1]) / 2], at: t, scattered: lost.map((l) => ({ id: l.id, kind: l.kind, from: from[l.pid], to: l.to })) });
     return true;
   }
 
@@ -245,7 +246,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
       return [...robots].map(([pid, e]) => {
         if (!moving(e.robot)) e.robot = { ...e.robot, t: Math.max(e.robot.t, onGrid(now)) };
         const banked = Object.values(store.collection(pid)).reduce((a, b) => a + b, 0);
-        return { tag: tagOf(pid), slot: e.slot, ...e.robot, carrying: store.cargo(pid), protectedUntil: e.protectedUntil, away: away(e), banked };
+        return { tag: tagOf(pid), slot: e.slot, ...e.robot, carrying: store.cargo(pid), away: away(e), banked };
       });
     },
   };

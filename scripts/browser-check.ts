@@ -97,25 +97,34 @@ async function launching(browser: Browser) {
 /** A real brawl: one robot grabs, the other hunts it. */
 async function brawl(browser: Browser) {
   const a = await visitor(browser), b = await visitor(browser);
-  let top = 0, grabbed = 0, knocked = 0, banked = 0, prev = 0;
+  let top = 0, grabbed = 0, knocked = 0, banked = 0, prev = 0, same = true;
   const end = Date.now() + 40_000;
   while (Date.now() < end && !(knocked && banked)) {
     const [sa, sb] = [await probe(a), await probe(b)];
     top = Math.max(top, ...sa.robots.map((r: any) => r.speed));
     const n = sa.carrying.length;
     if (n > prev) grabbed = Math.max(grabbed, n);
-    if (n < prev) knocked += (await a.locator("[data-banked]").textContent()) === `Banked ${banked}` ? 1 : 0;
-    const bank = Number((await a.locator("[data-banked]").textContent())!.split(" ")[1]);
+    const bank = (await a.locator("[data-banked]").textContent())!.match(/\d+/g)!.reduce((x, y) => x + Number(y), 0);
+    if (n < prev && bank === banked) {
+      knocked++;
+      // the same scatter on both screens, artifact for artifact
+      await a.waitForTimeout(150);
+      const spots = (x: any) => x.artifacts.map((f: any) => `${f.id}:${f.pos}`).sort().join();
+      const [fa, fb] = [await probe(a), await probe(b)];
+      same = same && spots(fa) === spots(fb);
+      if (knocked === 1) await a.screenshot({ path: ".shots/scatter-1440.png" });
+    }
     banked = Math.max(banked, bank);
     prev = n;
-    const goal = n >= 2 && knocked ? A.VAULT : [...sa.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(sa).pos[0], x.pos[1] - me(sa).pos[1]) - Math.hypot(y.pos[0] - me(sa).pos[0], y.pos[1] - me(sa).pos[1]))[0]?.pos ?? A.VAULT;
+    const goal = n >= 1 && knocked ? A.VAULT : [...sa.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(sa).pos[0], x.pos[1] - me(sa).pos[1]) - Math.hypot(y.pos[0] - me(sa).pos[0], y.pos[1] - me(sa).pos[1]))[0]?.pos ?? A.VAULT;
     await launch(a, toward(sa, goal), 0.8);
-    if (n > 0) await launch(b, toward(sb, me(sa).pos)); // hunting
+    if (n > 0 && !knocked) await launch(b, toward(sb, me(sa).pos)); // hunting
     await a.waitForTimeout(120);
   }
   check(grabbed >= 1, "a robot grabs artifacts", `up to ${grabbed}`);
-  check(knocked >= 1, "another robot knocks one loose by hitting it", `${knocked} time(s)`);
-  check(banked >= 1, "banking by flying through the vault", `${banked}`);
+  check(knocked >= 1, "touching another robot scatters the cargo", `${knocked} time(s)`);
+  check(same, "both screens show the same artifacts in the same places");
+  check(banked >= 1, "delivering by flying through the vault", `${banked}`);
   check(top <= A.SPEED_MAX + 1e-6, "speed stays bounded through a real brawl", `top ${top.toFixed(1)} m/s`);
   await a.screenshot({ path: ".shots/brawl-1440.png" });
   await a.context().close();
