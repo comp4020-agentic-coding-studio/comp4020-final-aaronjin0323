@@ -4,7 +4,7 @@
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
 import { ARENA, ARTIFACT_R, CATALOG, MATERIALS, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
-import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, coach, collectionWords, deliveryWords, dropWords, itemName, journeyStep, speedShare, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
+import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, coach, collectionWords, deliveryWords, dropWords, itemName, journeyStep, speedShare, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, silent, trust } from "./arena-ui.js";
 import { drawAura, drawItem, itemIcon } from "./arena-draw.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -35,9 +35,16 @@ const myLoad = () => myRobot()?.carrying?.length ?? 0;
 
 // ---- the stream; a refused one is opened again, backing off
 let tries = 0;
+let stream = null;
+let lastHeard = Date.now();
 function connect() {
-  const es = new EventSource("/events");
+  const es = (stream = new EventSource("/events"));
+  lastHeard = Date.now();
+  es.addEventListener("beat", () => {
+    lastHeard = Date.now();
+  });
   es.addEventListener("open", () => {
+    lastHeard = Date.now();
     setConn(connection(conn, "open"));
     // a new stream: its first event is the whole arena; drop what we guessed
     mine = null;
@@ -47,6 +54,7 @@ function connect() {
   });
   es.addEventListener("arena", (e) => {
     tries = 0;
+    lastHeard = Date.now();
     const d = JSON.parse(e.data);
     offset = d.serverTime - Date.now();
     you = d.you;
@@ -180,6 +188,13 @@ async function loadShelf(total) {
     }),
   );
 }
+// a network can vanish without the stream ever closing: silence counts as lost
+setInterval(() => {
+  if (!stream || stream.readyState === EventSource.CLOSED || !silent(lastHeard, Date.now())) return;
+  stream.close();
+  setConn(connection(conn, "error"));
+  setTimeout(connect, retryDelay(tries++));
+}, 1000);
 let place = 0;
 function showStatus() {
   const msg = connectionMessage(conn) || placeWords(place);
