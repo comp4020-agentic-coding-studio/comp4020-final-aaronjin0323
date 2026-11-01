@@ -1,7 +1,7 @@
 // The arena page's decisions, as small pure functions. No DOM and no fetch,
 // so spec/arena-ui.test.ts holds them without a browser. The movement
 // numbers themselves are all in arena.js.
-import { ARENA, CARRY_MAX, GRACE_MS, MIN_PULL, PULL_MAX, SETTLE_MS } from "./arena.js";
+import { ARENA, CARRY_MAX, CATALOG, GRACE_MS, KIND_NAMES, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS } from "./arena.js";
 
 /** The slots' colours; each differs by a mark too (arena-app.js). */
 export const SLOT_COLOURS = ["#ff6b4a", "#2ec4b6", "#ffc83d", "#b48cff"];
@@ -64,7 +64,7 @@ export function launchOfKeyAim(aim) {
 export const trust = (mine, server) => (mine && server.seq < mine.seq ? mine : server);
 
 /** CARRY_MAX places: what's carried, in order, then null for room left. */
-export const cargoSlots = (carrying) => Array.from({ length: CARRY_MAX }, (_, i) => carrying[i]?.kind ?? null);
+export const cargoSlots = (carrying) => Array.from({ length: CARRY_MAX }, (_, i) => carrying[i] ?? null);
 /** The unit way behind a robot at `pos`: where it came from; when it's
  * still, towards the middle, so its cargo never meets a wall. */
 export function behind(vel, pos) {
@@ -82,8 +82,14 @@ export function flying(from, to, ready) {
   return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
 }
 /** Your permanent collection, in words. */
-export function collectionWords(c) {
-  return `Collected: ${c.fish} fish, ${c.cloud} cloud${c.cloud === 1 ? "" : "s"}, ${c.door} door${c.door === 1 ? "" : "s"}`;
+export const collectionWords = (total, catalog) => `Collected ${total} · Catalog ${Object.keys(catalog).length}/${CATALOG.length}`;
+/** An artifact's name on its card. */
+export const itemName = (kind, material) => `${MATERIALS[material].name} ${KIND_NAMES[kind]}`;
+/** What a catalog cell says: the name once found, a question until then. */
+export function catalogCell(entry, catalog) {
+  const [kind, material] = entry.split(":");
+  const n = catalog[entry] ?? 0;
+  return { kind, material, found: n > 0, words: n ? `${itemName(kind, material)} ×${n}` : `Unknown ${MATERIALS[material].rarity}` };
 }
 /** The one line about you: playing, or your place in line. Never about anyone else. */
 export function placeWords(place) {

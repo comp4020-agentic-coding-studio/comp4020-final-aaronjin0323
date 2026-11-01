@@ -18,3 +18,19 @@ body { background: #14131f; min-height: 100svh; }
   .wrap { width: 100%; }
   .under { flex-direction: column-reverse; }
 }
+
+.collection { margin-top: 14px; }
+.collection h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.empty { margin: 0; color: #b9b5cc; font-size: .9rem; }
+.shelf, .catalog ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.shelf { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+.card { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 6px; border-radius: 8px; background: #211f33; border: 1px solid #3a3754; text-align: center; }
+.card.rare { border-color: #ffd766; }
+.card.mythic { border-color: #b48cff; background: linear-gradient(160deg, #2c2150, #211f33); }
+.name { font-size: .82rem; font-weight: 600; }
+.tier { font-size: .7rem; color: #b9b5cc; text-transform: capitalize; }
+.catalog { margin-top: 10px; font-size: .84rem; color: #b9b5cc; }
+.catalog summary { cursor: pointer; min-height: 32px; }
+.catalog ul { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.catalog li { display: flex; align-items: center; gap: 6px; }
+.catalog li[data-found="no"] { color: #77738f; }

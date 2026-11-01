@@ -3,9 +3,9 @@
 // server's snapshot advanced on the shared clock by arena.js; the page only
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
-import { ARENA, ARTIFACT_R, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
-import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, collectionWords, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
-import { drawKind } from "./arena-draw.js";
+import { ARENA, ARTIFACT_R, CATALOG, MATERIALS, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
+import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, collectionWords, itemName, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
+import { drawAura, drawItem, itemIcon } from "./arena-draw.js";
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $("[data-arena]");
@@ -72,7 +72,8 @@ function connect() {
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
     $("[data-cargo]").textContent = `Carrying ${server?.carrying.length ?? 0}`;
-    $("[data-banked]").textContent = collectionWords(d.mine.collection);
+    $("[data-banked]").textContent = collectionWords(d.mine.total, d.mine.catalog);
+    if (d.mine.total !== shelfTotal) loadShelf(d.mine.total);
     $("[data-vault]").textContent = `Vault ${d.vault}`;
     place = d.mine.place;
     showStatus();
@@ -83,6 +84,41 @@ function connect() {
     es.close();
     setTimeout(connect, retryDelay(tries++));
   });
+}
+// ---- your shelf first, the catalog under it; fetched when your count changes
+let shelfTotal = -1;
+async function loadShelf(total) {
+  shelfTotal = total;
+  const j = await fetch("/collection").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!j) {
+    shelfTotal = -1; // the next event tries again
+    return;
+  }
+  const shelf = $("[data-shelf]");
+  shelf.replaceChildren(
+    ...j.items.map((it) => {
+      const li = document.createElement("li");
+      li.className = `card ${MATERIALS[it.material].rarity}`;
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = itemName(it.kind, it.material);
+      const tier = document.createElement("span");
+      tier.className = "tier";
+      tier.textContent = MATERIALS[it.material].rarity;
+      li.append(itemIcon(it), name, tier);
+      return li;
+    }),
+  );
+  $("[data-shelf-empty]").hidden = j.items.length > 0;
+  $("[data-catalog]").replaceChildren(
+    ...CATALOG.map((entry) => {
+      const c = catalogCell(entry, j.catalog);
+      const li = document.createElement("li");
+      li.dataset.found = c.found ? "yes" : "no";
+      li.append(itemIcon({ kind: c.kind, material: c.material, seed: 1 }, 48, { dark: !c.found }), c.words);
+      return li;
+    }),
+  );
 }
 let place = 0;
 function showStatus() {
@@ -236,8 +272,10 @@ function drawArtifact(a, now) {
   if (ready >= 1) thrown.delete(a.id);
   const at = from && ready < 1 && !reducedMotion.matches ? flying(from, a.pos, ready) : a.pos;
   const x = px(at[0]), y = px(at[1]);
+  const spin = reducedMotion.matches ? 0 : now / 1000;
   g.globalAlpha = ready < 1 ? 0.4 + 0.4 * ready : 1;
-  drawKind(g, a.kind, x, y, px(ARTIFACT_R) * 1.15, reducedMotion.matches ? 0 : now / 1000);
+  drawAura(g, a.material, x, y, px(ARTIFACT_R) * 1.15, spin);
+  drawItem(g, a, x, y, px(ARTIFACT_R) * 1.15, spin);
   g.globalAlpha = 1;
   if (ready >= 1) return;
   g.beginPath();
@@ -262,14 +300,10 @@ function drawFlashes(now) {
 function drawCargo(p, vel, carrying, now) {
   const b = behind(vel, p);
   const step = ROBOT_R * 1.25;
-  cargoSlots(carrying).forEach((kind, i) => {
+  cargoSlots(carrying).forEach((item, i) => {
+    if (!item) return;
     const d = ROBOT_R + step * (i + 0.8);
-    const x = px(p[0] + b[0] * d), y = px(p[1] + b[1] * d);
-    g.beginPath();
-    g.arc(x, y, px(ARTIFACT_R) * 1.05, 0, Math.PI * 2);
-    g.fillStyle = kind ? "rgba(255,255,255,.2)" : "rgba(0,0,0,0)";
-    g.fill();
-        if (kind) drawKind(g, kind, x, y, px(ARTIFACT_R) * 0.85, reducedMotion.matches ? 0 : now / 1000);
+    drawItem(g, item, px(p[0] + b[0] * d), px(p[1] + b[1] * d), px(ARTIFACT_R) * 0.85, reducedMotion.matches ? 0 : now / 1000);
   });
 }
 // a robot: its slot's colour and mark, so no one depends on colour alone
