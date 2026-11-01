@@ -94,6 +94,10 @@ try {
   check(await chase(nearest, () => me().carrying.length >= 1), "picks up another");
   const bank = banked();
   const before = last.vault;
+  const items = (await (await fetch(BASE + "/collection", { headers: { cookie } })).json()).items;
+  const save = await fetch(BASE + "/room", { method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE }, body: JSON.stringify({ layout: { wall: "sage", floor: "slate", light: "cool", items: [{ uid: 1, type: "plinth", x: 0.4, y: 0.4, artifact: items[0].id }] }, was: 0 }) });
+  check(save.status === 200, "saves a room showing what was banked");
+  const room = async () => (await fetch(BASE + "/rooms/me", { headers: { cookie } })).json() as Promise<any>;
 
   await stop("SIGTERM");
   await start();
@@ -111,6 +115,8 @@ try {
   await sleep(200);
   check(me().carrying.length === 0, "crash, away past the grace: the cargo left the robot");
   check(banked() === bank, "the bank survives a crash, same cookie, same visitor");
+  const kept = await room();
+  check(kept.layout.wall === "sage" && kept.layout.items[0].artifact === items[0].id && kept.rev === 1, "the room survives a crash, unchanged");
   const n = last.artifacts.length;
   await sleep(1500);
   check(last.artifacts.length === n, "the cargo came back once");

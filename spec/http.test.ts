@@ -108,3 +108,46 @@ test("your collection is yours, and carries no pid", async () => {
   const j = await r.json();
   expect(j).toEqual({ items: [], catalog: {} });
 });
+
+const emptyRoom = { wall: "walnut", floor: "slate", light: "dusk", items: [] };
+const saveRoom = (v: ReturnType<typeof visitor>, body: unknown, headers: Record<string, string> = {}) =>
+  v.req("/room", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+
+test("the room pages are there, and a room is public but only its owner's to change", async () => {
+  const a = visitor(), b = visitor();
+  expect(await (await a.req("/room/")).text()).toContain("data-room");
+  const me = await (await a.req("/rooms/me")).json();
+  expect(me.mine).toBe(true);
+  expect((await saveRoom(a, { layout: emptyRoom, was: me.rev })).status).toBe(200);
+
+  const seen = await (await b.req(`/rooms/${me.tag}`)).json();
+  expect(seen.mine).toBe(false);
+  expect(seen.layout.wall).toBe("walnut");
+  expect(await (await b.req(`/room/${me.tag}`)).text()).toContain("data-room");
+  expect(JSON.stringify(seen)).not.toContain("shelf");
+
+  // b has no way to name a's room: whatever it sends, it changes only b's
+  expect((await saveRoom(b, { layout: { ...emptyRoom, wall: "plaster" }, was: seen.rev, tag: me.tag })).status).toBe(400);
+  expect((await saveRoom(b, { layout: { ...emptyRoom, wall: "plaster" }, was: 0 })).status).toBe(200);
+  expect((await v2(b, `/room/${me.tag}`)).status).toBe(404);
+  expect((await v2(b, `/rooms/${me.tag}`)).status).toBe(404);
+  expect((await (await a.req("/rooms/me")).json()).layout.wall).toBe("walnut");
+});
+const v2 = (v: ReturnType<typeof visitor>, path: string) => v.req(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ layout: emptyRoom, was: 0 }) });
+
+test("rooms: no such room is 404, a bad cursor 400, cross-site saves 403, stale 409", async () => {
+  const a = visitor();
+  expect((await a.req("/rooms/00000000")).status).toBe(404);
+  expect((await a.req("/room/nonsense")).status).toBe(404);
+  expect((await a.req("/rooms?before=nonsense")).status).toBe(400);
+  expect((await a.req("/rooms")).status).toBe(200);
+  expect((await saveRoom(a, { layout: emptyRoom, was: 0 }, { origin: "https://evil.example" })).status).toBe(403);
+  expect((await saveRoom(a, { layout: emptyRoom, was: 0 })).status).toBe(200);
+  const stale = await saveRoom(a, { layout: emptyRoom, was: 0 });
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error).toBe("stale-room");
+});
+
+test("the arena links to your room, in plain HTML", async () => {
+  expect(await (await visitor().req("/")).text()).toMatch(/href="\/room\/"/);
+});

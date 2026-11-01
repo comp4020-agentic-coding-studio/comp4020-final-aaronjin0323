@@ -181,7 +181,91 @@ async function phone(browser: Browser) {
   await ctx.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone };
+/** Collects and delivers one artifact, alone, by real drags. */
+async function earn(p: Page) {
+  const total = () => p.locator("[data-banked]").textContent().then((t) => Number(t!.match(/\d+/)![0]));
+  for (const end = Date.now() + 45_000; Date.now() < end && (await total()) < 1; await p.waitForTimeout(220)) {
+    const s = await probe(p);
+    const near = [...s.artifacts].sort((x: any, y: any) => Math.hypot(x.pos[0] - me(s).pos[0], x.pos[1] - me(s).pos[1]) - Math.hypot(y.pos[0] - me(s).pos[0], y.pos[1] - me(s).pos[1]))[0];
+    await launch(p, toward(s, s.carrying.length ? A.VAULT : near.pos), 0.8);
+  }
+  return (await total()) >= 1;
+}
+const roomProbe = (p: Page) => p.evaluate(() => (document.querySelector("[data-room]") as any).probe());
+
+async function room(browser: Browser) {
+  const a = await visitor(browser);
+  check(await earn(a), "a visitor earns an artifact to show");
+  await a.goto(`${APP}/room/`);
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+  check((await roomProbe(a)).mine, "/room/ is your own room");
+  await a.screenshot({ path: ".shots/room-default-1440.png" });
+  await a.click("[data-edit]");
+  let s = await roomProbe(a);
+  const stand = s.items.find((i: any) => i.type === "plinth");
+  await a.mouse.click(stand.cx, stand.cy);
+  await a.selectOption("[data-artifact]", { index: 1 });
+  await a.mouse.move(stand.cx, stand.cy);
+  await a.mouse.down();
+  await a.mouse.move(stand.cx + 90, stand.cy + 10, { steps: 4 });
+  await a.mouse.up();
+  await a.click('[data-walls] button:has-text("Walnut")');
+  await a.click('[data-floors] button:has-text("Terrazzo")');
+  await a.click('[data-lights] button:has-text("After hours")');
+  await a.click('[data-add-stand] button:has-text("Glass case")');
+  await a.click('[data-add-decor] button:has-text("Potted olive")');
+  await a.click('[data-add-decor] button:has-text("Framed study")');
+  await a.click("[data-save]");
+  await a.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
+  s = await roomProbe(a);
+  await a.click("[data-done]");
+  await a.reload();
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev > 0);
+  const back = await roomProbe(a);
+  check(back.wall === "walnut" && back.shown === 1 && back.items.length === s.items.length, "the arrangement survives a reload", `${back.items.length} items`);
+  check(back.items.find((i: any) => i.uid === stand.uid).x > stand.x, "the drag moved the stand, and it stayed");
+  await a.waitForTimeout(300);
+  await a.screenshot({ path: ".shots/room-1440.png" });
+
+  const b = await visitor(browser);
+  await b.goto(`${APP}/room/`);
+  await b.waitForFunction(() => (document.querySelector("[data-rooms] a") ?? null) !== null);
+  await b.click(`[data-rooms] a[href="/room/${back.tag}"]`);
+  await b.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().shown > 0);
+  const seen = await roomProbe(b);
+  check(!seen.mine && seen.wall === "walnut", "another visitor finds the room in the directory");
+  check(await b.locator("[data-edit]").isHidden(), "and gets no way to edit it");
+  check(await b.locator("[data-panel]").isHidden(), "and no panel");
+  const refused = await b.evaluate(async (layout) => {
+    const r = await fetch("/room", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layout, was: 1 }) });
+    return r.status;
+  }, { wall: "plaster", floor: "oak", light: "warm", items: [{ uid: 1, type: "plinth", x: 0.5, y: 0.5, artifact: back.items.find((i: any) => i.artifact).artifact }] });
+  check(refused === 409, "and can't show the owner's artifact in their own room", `${refused}`);
+  const held = back.items.find((i: any) => i.artifact);
+  await b.mouse.click(held.cx, held.cy - 40);
+  await b.waitForFunction(() => document.querySelector("dialog")?.open, null, { timeout: 2000 });
+  check(true, "pressing an artifact opens it large");
+  await b.click("[data-nearer]");
+  await b.click("[data-wake]");
+  await b.waitForTimeout(400);
+  const look = (await roomProbe(b)).looking;
+  check(look.zoom > 1 && look.t > 0, "closer and wake both answer", `zoom ${look.zoom.toFixed(2)}`);
+  await b.mouse.move(600, 300);
+  await b.screenshot({ path: ".shots/closer-1440.png" });
+  await b.click("[data-close]");
+  await b.context().close();
+
+  const c = await visitor(browser, PHONE);
+  await c.goto(`${APP}/room/${back.tag}`);
+  await c.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().shown > 0);
+  check((await c.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, "the room doesn't scroll sideways at 390x844");
+  await c.waitForTimeout(200);
+  await c.screenshot({ path: ".shots/room-390.png" });
+  await c.context().close();
+  await a.context().close();
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

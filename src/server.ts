@@ -156,6 +156,25 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       });
       return;
     }
+    if (path === "/room/" || /^\/room\/[0-9a-f]{8}$/.test(path)) {
+      visitorOf(req, res);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+      return res.end(readFileSync(join(PUBLIC, "room.html"), "utf8"));
+    }
+    if (path === "/rooms") {
+      const r = store.rooms(new URL(req.url ?? "/", "http://x").searchParams.get("before"));
+      return r.ok ? json(res, 200, { entries: r.entries, next: r.next }) : refuse(res, r);
+    }
+    if (path === "/rooms/me") {
+      const v = visitorOf(req, res);
+      return json(res, 200, { ...store.roomOf(v.tag), mine: true, shelf: store.shelf(v.pid) });
+    }
+    const roomPath = /^\/rooms\/([0-9a-f]{8})$/.exec(path);
+    if (roomPath) {
+      const v = visitorOf(req, res);
+      const r = store.roomOf(roomPath[1]);
+      return r ? json(res, 200, { ...r, mine: roomPath[1] === v.tag }) : refuse(res, { status: 404, error: "no-room", message: "No such room" });
+    }
     if (path === "/collection") {
       const v = visitorOf(req, res);
       return json(res, 200, { items: store.shelf(v.pid), catalog: store.catalog(v.pid) });
@@ -173,6 +192,16 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const body = await bodyOf(req);
   if (body === TOO_LARGE) return refuse(res, { status: 413, error: "too-large", message: `A request body is at most ${BODY_MAX} bytes` });
   if (!body) return refuse(res, { status: 400, error: "bad-json", message: "The body is a JSON object" });
+  if (path === "/room") {
+    const who = visitorOf(req, res);
+    const saved = store.saveRoom(who.pid, body, Date.now());
+    if (!saved.ok) {
+      log("refused", { event: "room", tag: who.tag, error: saved.error });
+      return refuse(res, saved);
+    }
+    log("room", { tag: who.tag, rev: saved.rev });
+    return json(res, 200, { rev: saved.rev });
+  }
   if (path !== "/launch") return refuse(res, { status: 404, error: "not-found", message: "No such route" });
   const v = visitorOf(req, res);
   const r = arena.launch(v.pid, body, Date.now());
