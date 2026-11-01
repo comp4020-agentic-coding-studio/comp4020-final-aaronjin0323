@@ -9,10 +9,10 @@ import * as A from "../public/arena.js";
 
 const T0 = 1_800_000_000_000; // on the 20 ms grid
 
-function world(store: any = openStore(":memory:"), start = T0) {
+function world(store: any = openStore(":memory:"), start = T0, spawn?: any) {
   let seed = 7;
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
-  const arena = createArena(store, { now: start, random });
+  const arena = createArena(store, { now: start, random, ...(spawn ? { spawn } : {}) });
   let now = start;
   let seq = 0;
   const w = {
@@ -265,4 +265,83 @@ test("the view holds nothing but tags: no pid, no name", () => {
   const s = JSON.stringify(w.robots());
   expect(s).not.toContain(p);
   expect(s).not.toContain("name");
+});
+
+test("the first arrival finds a floor, and it stops at the target for one player", () => {
+  const w = world();
+  w.join();
+  expect(w.arena.floor()).toHaveLength(A.SPAWN.target[1]);
+  w.run(A.SPAWN.everyMs[1] * 5);
+  expect(w.arena.floor()).toHaveLength(A.SPAWN.target[1]);
+});
+
+test("more players raise the floor, by the table's target and gap", () => {
+  const w = world();
+  for (let i = 0; i < 4; i++) w.join();
+  const start = w.arena.floor().length;
+  w.run(A.SPAWN.everyMs[4] - 40);
+  expect(w.arena.floor().length).toBeLessThanOrEqual(start + 1);
+  w.run(A.SPAWN.everyMs[4] * 2);
+  expect(w.arena.floor().length).toBeGreaterThan(start);
+  w.run(A.SPAWN.everyMs[4] * (A.SPAWN.target[4] + 2));
+  expect(w.arena.floor()).toHaveLength(A.SPAWN.target[4]);
+});
+
+test("a gap of its own: one player's floor refills only at one player's pace", () => {
+  const w = world();
+  w.join();
+  w.clearFloor();
+  w.run(A.SPAWN.everyMs[1] + 40);
+  expect(w.arena.floor().length).toBeLessThanOrEqual(1);
+  w.run(A.SPAWN.everyMs[1] * 2);
+  expect(w.arena.floor().length).toBeGreaterThanOrEqual(2);
+});
+
+test("nothing spawns with nobody playing, and ghosts and the line don't count", () => {
+  const w = world();
+  w.clearFloor();
+  w.run(10_000);
+  expect(w.arena.floor()).toHaveLength(0);
+  const p = w.join();
+  w.leave(p);
+  w.run(A.GRACE_MS - 100);
+  expect(w.arena.floor()).toHaveLength(0);
+});
+
+test("the table can be swapped whole", () => {
+  const custom = { target: [0, 2, 2, 2, 2], everyMs: [0, 100, 100, 100, 100], rarity: A.SPAWN.rarity.map(() => ({ common: 0, rare: 0, mythic: 1 })) };
+  const w = world(openStore(":memory:"), T0, custom);
+  w.join();
+  w.clearFloor();
+  w.run(500);
+  const f: any[] = w.arena.floor();
+  expect(f).toHaveLength(2);
+  for (const a of f) expect(a.material).toBe("starlight");
+});
+
+test("more players, more rare and mythic artifacts actually spawned", () => {
+  const rareShare = (players: number) => {
+    const s = openStore(":memory:");
+    const w = world(s, T0, { ...A.SPAWN, target: [0, 400, 400, 400, 400], everyMs: [0, 20, 20, 20, 20] });
+    for (let i = 0; i < players; i++) w.join();
+    w.run(20 * 300);
+    const f: any[] = s.db.prepare("SELECT material FROM artifacts").all() as any[];
+    return f.filter((x) => x.material !== "tin").length / f.length;
+  };
+  expect(rareShare(4)).toBeGreaterThan(rareShare(1));
+});
+
+test("an artifact keeps its material and seed from floor to collection", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  w.store.db.prepare("INSERT INTO artifacts (id, kind, material, seed, x, y, state, spawned_at) VALUES ('m', 'door', 'starlight', 77, 3, 3, 'available', 0)").run();
+  w.arena.refresh();
+  w.place(p, [3, 3]);
+  w.run(20);
+  expect(w.store.cargo(p)[0]).toMatchObject({ kind: "door", material: "starlight", seed: 77 });
+  w.place(p, A.VAULT, [1, 0]);
+  w.run(40);
+  expect(w.store.shelf(p)[0]).toMatchObject({ kind: "door", material: "starlight", seed: 77 });
+  expect(w.store.catalog(p)["door:starlight"]).toBe(1);
 });

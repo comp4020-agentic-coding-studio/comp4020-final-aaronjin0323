@@ -82,18 +82,29 @@ ADR 28 says which still stand.
 
 ### Artifacts and the vault
 
-- **Three kinds, one set of rules:** a luminous flying fish, a rain-filled
-  cloud, a small door onto stars.
-- **New ones keep `MAX_AVAILABLE` on the floor**, at safe spots clear of
-  the vault. Scattered ones come back on top of that.
+- **An artifact is a kind, a material and a seed** ([ADR 30](docs/adr/0030-supply-and-collecting.md)):
+  a flying fish, a rain cloud or a door onto stars, in tin (common), glass
+  or gold (rare), or starlight (mythic). The seed varies its details. All
+  weigh the same; rarity shows as a halo.
+- **`SPAWN` in `public/arena.js` holds every spawn and rarity parameter,**
+  by active players (robots not ghosts, 0 to 4), and `createArena` accepts
+  another table.
+- **One artifact appears each `everyMs` while the floor is under `target`,**
+  at safe spots clear of the vault, and only with someone playing. Per
+  player, both the target and the spawn rate fall as players join, and the
+  chance of a rare or mythic rises. Nothing expires; scattered artifacts can
+  take the floor over its target.
 - **Touching one collects it** once it's ready, seen by the server only.
 - **One vault in the middle, the only delivery point.** Moving in it banks
   everything you carry into your permanent collection; standing in it
   doesn't. A contact on the same step comes first. Banked is final.
 - **An artifact is available, carried or banked, never two:** one row, one
   `state`, a CHECK and a trigger, and single conditional UPDATEs.
-- **What persists:** your banked count per kind, the floor, and the
-  all-time vault total. There are no rounds, countdowns or expiry. Robots
+- **Your collection comes first:** every artifact you've banked as its own
+  card, newest first. The catalog is a closed section under it: twelve
+  entries, silhouettes until found.
+- **What persists:** your collection, the floor, and the all-time vault
+  total. There are no rounds, countdowns or expiry. Robots
   are presence, in memory only.
 
 ### Staying and leaving
@@ -117,7 +128,7 @@ ADR 28 says which still stand.
   refused stream is opened again, 1 s doubling to 15 s. Disconnected means
   watch-only, and the page says so.
 - **Nothing is explained by a wall of text:** one short line of how to
-  play, your cargo and your bank. At 390x844 the arena fills the width and
+  play, your cargo, your collection under the arena. At 390x844 the arena fills the width and
   nothing scrolls sideways.
 - **Every animation has a `prefers-reduced-motion` path.**
 
@@ -132,6 +143,7 @@ is `{ error, message }`.
 | `GET /` | | the arena | |
 | `GET /readme/` | | README.md rendered | |
 | `GET /events` | | SSE: `arena`, every robot, the floor, `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
+| `GET /collection` | | your newest 60 banked artifacts and your catalog counts | |
 | `POST /launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot`, `409 stale-launch`, `400` |
 
 Held by `spec/arena-rule.test.ts`, `spec/arena.test.ts` (the real arena and

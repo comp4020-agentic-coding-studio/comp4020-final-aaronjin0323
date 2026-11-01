@@ -70,7 +70,7 @@ describe("speed is bounded", () => {
 
 describe("the vault and the floor", () => {
   test("no spot is in reach of the vault, and there are plenty", () => {
-    expect(A.SPOTS.length).toBeGreaterThanOrEqual(A.MAX_AVAILABLE * 2);
+    expect(A.SPOTS.length).toBeGreaterThanOrEqual(A.SPAWN.target[A.MAX_PLAYERS] * 2);
     for (const p of A.SPOTS) expect(A.inVault([p[0], p[1]])).toBe(false);
     for (const p of A.SPOTS) expect(Math.hypot(p[0] - A.VAULT[0], p[1] - A.VAULT[1])).toBeGreaterThan(A.VAULT_R + A.ROBOT_R + A.ARTIFACT_R);
   });
@@ -95,6 +95,48 @@ describe("the page's pull", () => {
     const a = aimFromPull([10, 5], [10 - A.PULL_MAX, 5])!;
     expect(a.dir).toEqual([1, 0]);
     expect(a.power).toBe(1);
+  });
+});
+
+describe("supply and rarity", () => {
+  const P = [1, 2, 3, 4];
+  test("both the floor and the spawn rate grow more slowly than players", () => {
+    for (const p of P.slice(1)) {
+      expect(A.SPAWN.target[p]).toBeGreaterThan(A.SPAWN.target[p - 1]);
+      expect(A.SPAWN.target[p] / p).toBeLessThan(A.SPAWN.target[p - 1] / (p - 1));
+      expect(A.SPAWN.everyMs[p]).toBeLessThan(A.SPAWN.everyMs[p - 1]);
+      expect(1000 / A.SPAWN.everyMs[p] / p).toBeLessThan(1000 / A.SPAWN.everyMs[p - 1] / (p - 1));
+    }
+  });
+  test("every extra player makes rare and mythic likelier", () => {
+    const share = (p: number, tier: string) => {
+      const w = A.SPAWN.rarity[p];
+      return w[tier] / (w.common + w.rare + w.mythic);
+    };
+    for (const p of P.slice(1)) {
+      expect(share(p, "rare")).toBeGreaterThan(share(p - 1, "rare"));
+      expect(share(p, "mythic")).toBeGreaterThan(share(p - 1, "mythic"));
+    }
+  });
+  test("a roll lands on the tiers by weight, and reaches every material", () => {
+    const seen = (p: number) => {
+      const out: Record<string, number> = {};
+      for (let i = 0; i < 1000; i++) for (const r of [0.25, 0.75]) {
+        const m = A.rollMaterial(p, (i + 0.5) / 1000, r);
+        out[m] = (out[m] ?? 0) + 1;
+      }
+      return out;
+    };
+    expect(Object.keys(seen(4)).sort()).toEqual(Object.keys(A.MATERIALS).sort());
+    expect((seen(4).starlight ?? 0)).toBeGreaterThan((seen(1).starlight ?? 0));
+  });
+  test("a roll obeys a table it's given", () => {
+    const only = { ...A.SPAWN, rarity: A.SPAWN.rarity.map(() => ({ common: 0, rare: 0, mythic: 1 })) };
+    expect(A.rollMaterial(1, 0.5, 0.5, only)).toBe("starlight");
+  });
+  test("the catalog is every kind in every material", () => {
+    expect(A.CATALOG).toHaveLength(A.KINDS.length * Object.keys(A.MATERIALS).length);
+    expect(new Set(A.CATALOG).size).toBe(A.CATALOG.length);
   });
 });
 

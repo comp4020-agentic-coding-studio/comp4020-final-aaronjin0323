@@ -100,3 +100,11 @@ test("a fifth stream is refused for one visitor", async () => {
   expect((await a.req("/events")).status).toBe(429);
   open.forEach((s) => s.close());
 });
+
+test("your collection is yours, and carries no pid", async () => {
+  const a = visitor();
+  const r = await a.req("/collection");
+  expect(r.status).toBe(200);
+  const j = await r.json();
+  expect(j).toEqual({ items: [], catalog: {} });
+});
