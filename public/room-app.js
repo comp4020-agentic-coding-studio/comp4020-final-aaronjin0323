@@ -5,7 +5,7 @@
 import { DEFAULT_ROOM, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALLS, bounds, freeSpot, hitItem, nextUid, project, unproject } from "./room.js";
 import { MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
-import { itemName } from "./arena-ui.js";
+import { itemName, waitingWords } from "./arena-ui.js";
 
 const $ = (s) => document.querySelector(s);
 const canvas = $("[data-room]");
@@ -58,7 +58,9 @@ function show(j) {
   $("[data-name]").textContent = j.name;
   $("[data-kicker]").textContent = mine ? "Your exhibition room" : "Exhibition room";
   document.title = `${j.name} · Exhibition room`;
-  $("[data-owner-tools]").hidden = !mine || editing;
+  $("[data-owner-tools]").hidden = !mine || editing || !shelf.length;
+  $("[data-go-win]").hidden = !mine || shelf.length > 0;
+  $("[data-waiting]").textContent = mine ? waitingWords(shelf, j.layout.items) : "";
   $("[data-my-room]").hidden = mine;
   renderOnShow();
   renderPanel();
@@ -208,7 +210,7 @@ function setEditing(on) {
   editing = on;
   document.body.toggleAttribute("data-editing", on);
   $("[data-panel]").hidden = !on;
-  $("[data-owner-tools]").hidden = !mine || on;
+  $("[data-owner-tools]").hidden = !mine || on || !shelf.length;
   if (!on) selected = null;
 }
 $("[data-edit]").addEventListener("click", () => setEditing(true));
@@ -238,6 +240,7 @@ $("[data-save]").addEventListener("click", async () => {
   }
   room = { ...room, rev: j.rev, layout: structuredClone(draft) };
   dirty = false;
+  $("[data-waiting]").textContent = waitingWords(shelf, draft.items);
   renderPanel();
   say("Saved.");
   loadRooms();

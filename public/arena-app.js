@@ -4,7 +4,7 @@
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
 import { ARENA, ARTIFACT_R, CATALOG, MATERIALS, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
-import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, collectionWords, itemName, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
+import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, coach, collectionWords, deliveryWords, dropWords, itemName, journeyStep, speedShare, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
 import { drawAura, drawItem, itemIcon } from "./arena-draw.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -27,6 +27,7 @@ let pull = null; // { from, to } in metres, while dragging
 // away, so a robot never jumps when the server's word changes its path
 const corrections = new Map();
 let flashes = []; // contacts: where, and when (server ms)
+let bursts = []; // deliveries: a burst at the vault
 const thrown = new Map(); // artifact id to where it left a robot, while it settles
 const serverNow = () => Date.now() + offset;
 const myRobot = () => (you ? robots.find((r) => r.tag === you.tag) : null);
@@ -68,13 +69,17 @@ function connect() {
     for (const h of d.hits ?? []) {
       flashes.push(h);
       for (const s of h.scattered) thrown.set(s.id, s.from);
+      const lost = h.scattered.filter((s) => s.by === you.tag).length;
+      if (lost) toast("risk", dropWords(lost));
+    }
+    for (const b of d.deliveries ?? []) {
+      bursts.push(b);
+      if (b.tag === you.tag) toast("kept", deliveryWords(b.items), true);
     }
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
-    $("[data-cargo]").textContent = `Carrying ${server?.carrying.length ?? 0}`;
-    $("[data-banked]").textContent = collectionWords(d.mine.total, d.mine.catalog);
+    renderHud(server?.carrying ?? [], d.mine, d.vault);
     if (d.mine.total !== shelfTotal) loadShelf(d.mine.total);
-    $("[data-vault]").textContent = `Vault ${d.vault}`;
     place = d.mine.place;
     showStatus();
   });
@@ -85,6 +90,61 @@ function connect() {
     setTimeout(connect, retryDelay(tries++));
   });
 }
+// ---- the journey: what's at risk, what's kept, and the one thing to do next
+let trayKey = null;
+let launched = localStorage.getItem("arena-launched") === "yes";
+let held = { carrying: 0, total: 0, onShow: 0 };
+function renderHud(carrying, m, vault) {
+  held = { carrying: carrying.length, total: m.total, onShow: m.onShow };
+  const key = carrying.map((c) => c.id).join();
+  if (key !== trayKey) {
+    trayKey = key;
+    $("[data-tray]").replaceChildren(
+      ...cargoSlots(carrying).map((item) => {
+        const li = document.createElement("li");
+        if (item) {
+          li.dataset.full = "";
+          li.append(itemIcon(item, 40));
+          li.title = itemName(item.kind, item.material);
+        }
+        return li;
+      }),
+    );
+  }
+  const speed = speedShare(carrying.length);
+  $("[data-speed]").textContent = `Top speed ${speed}%`;
+  $("[data-meter]").style.width = `${speed}%`;
+  $("[data-banked]").textContent = collectionWords(m.total, m.catalog);
+  $("[data-vault]").textContent = `Vault ${vault}`;
+  const step = journeyStep(held);
+  for (const li of document.querySelectorAll(".journey li")) li.toggleAttribute("data-now", Number(li.dataset.step) === step);
+  showCoach();
+}
+function showCoach() {
+  const line = myRobot() ? coach({ launched, ...held }) : "";
+  const c = $("[data-coach]");
+  c.textContent = line;
+  c.hidden = !line;
+  const padWords = $("[data-pad-words]");
+  padWords.textContent = line || "Drag back here to aim, let go to launch";
+  $("[data-pad]").toggleAttribute("data-coaching", !!line);
+}
+let toastTimer = 0;
+function toast(kind, words, toRoom = false) {
+  const t = $("[data-toast]");
+  t.dataset.kind = kind;
+  t.textContent = words;
+  if (toRoom) {
+    const a = document.createElement("a");
+    a.href = "/room/";
+    a.textContent = "Exhibit it";
+    t.append(a);
+  }
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), toRoom ? 5000 : 3000);
+}
+
 // ---- your shelf first, the catalog under it; fetched when your count changes
 let shelfTotal = -1;
 async function loadShelf(total) {
@@ -166,6 +226,11 @@ async function fire(l) {
   const sent = { dir: l.dir, power: l.power, seq };
   const load = myLoad();
   mine = { ...launch(from, sent, serverNow(), load), tag: you.tag };
+  if (!launched) {
+    launched = true;
+    localStorage.setItem("arena-launched", "yes");
+    showCoach();
+  }
   try {
     let { r, j } = await post(sent);
     if (r.status === 409 && j.error === "stale-launch") {
@@ -208,6 +273,7 @@ function draw() {
   g.lineWidth = 4;
   g.strokeRect(2, 2, px(ARENA.w) - 4, px(ARENA.h) - 4);
   drawVault(now);
+  drawBursts(now);
   for (const a of artifacts) drawArtifact(a, now);
   drawFlashes(now);
 
@@ -253,6 +319,21 @@ function drawVault(now) {
   g.textBaseline = "middle";
   g.fillText("VAULT", x, y);
 }
+// a delivery: solid gold rings out of the vault, the opposite of a scatter
+function drawBursts(now) {
+  bursts = bursts.filter((b) => now - b.at < 900);
+  for (const b of bursts) {
+    const k = (now - b.at) / 900;
+    for (const lag of [0, 0.22]) {
+      const f = reducedMotion.matches ? 1 : Math.max(0, k - lag);
+      g.beginPath();
+      g.arc(px(VAULT[0]), px(VAULT[1]), px(VAULT_R) * (1 + f * 0.9), 0, Math.PI * 2);
+      g.strokeStyle = `rgba(255,215,102,${1 - k})`;
+      g.lineWidth = 5;
+      g.stroke();
+    }
+  }
+}
 function drawTrail(p, vel, colour) {
   const s = Math.hypot(vel[0], vel[1]);
   if (s < 2) return;
@@ -274,8 +355,9 @@ function drawArtifact(a, now) {
   const x = px(at[0]), y = px(at[1]);
   const spin = reducedMotion.matches ? 0 : now / 1000;
   g.globalAlpha = ready < 1 ? 0.4 + 0.4 * ready : 1;
-  drawAura(g, a.material, x, y, px(ARTIFACT_R) * 1.15, spin);
-  drawItem(g, a, x, y, px(ARTIFACT_R) * 1.15, spin);
+  const size = Math.max(15, px(ARTIFACT_R) * 1.15); // never too small to read on a phone
+  drawAura(g, a.material, x, y, size, spin);
+  drawItem(g, a, x, y, size, spin);
   g.globalAlpha = 1;
   if (ready >= 1) return;
   g.beginPath();
@@ -294,16 +376,45 @@ function drawFlashes(now) {
     g.strokeStyle = `rgba(255,107,74,${1 - k})`;
     g.lineWidth = 3;
     g.stroke();
+    // each thing thrown, a line from the contact to where it's landing
+    g.setLineDash([5, 5]);
+    g.strokeStyle = `rgba(255,182,72,${0.8 * (1 - k)})`;
+    g.lineWidth = 2;
+    for (const s of f.scattered ?? []) {
+      g.beginPath();
+      g.moveTo(px(s.from[0]), px(s.from[1]));
+      g.lineTo(px(s.to[0]), px(s.to[1]));
+      g.stroke();
+    }
+    g.setLineDash([]);
   }
 }
 // cargo trails behind a robot: what it carries, then rings for the room left
 function drawCargo(p, vel, carrying, now) {
   const b = behind(vel, p);
   const step = ROBOT_R * 1.25;
-  cargoSlots(carrying).forEach((item, i) => {
-    if (!item) return;
+  const held = carrying.filter(Boolean);
+  if (!held.length) return;
+  // a tether: this is on the robot, not yet anyone's for good
+  g.beginPath();
+  g.moveTo(px(p[0]), px(p[1]));
+  g.lineTo(px(p[0] + b[0] * (ROBOT_R + step * (held.length - 0.2))), px(p[1] + b[1] * (ROBOT_R + step * (held.length - 0.2))));
+  g.strokeStyle = "rgba(255,182,72,.6)";
+  g.lineWidth = 2;
+  g.stroke();
+  held.forEach((item, i) => {
     const d = ROBOT_R + step * (i + 0.8);
-    drawItem(g, item, px(p[0] + b[0] * d), px(p[1] + b[1] * d), px(ARTIFACT_R) * 0.85, reducedMotion.matches ? 0 : now / 1000);
+    const x = px(p[0] + b[0] * d), y = px(p[1] + b[1] * d);
+    g.beginPath();
+    g.arc(x, y, px(ARTIFACT_R) * 1.05, 0, Math.PI * 2);
+    g.fillStyle = "#211f33";
+    g.fill();
+    g.setLineDash([4, 3]);
+    g.strokeStyle = "#ffb648";
+    g.lineWidth = 2;
+    g.stroke();
+    g.setLineDash([]);
+    drawItem(g, item, x, y, px(ARTIFACT_R) * 0.8, reducedMotion.matches ? 0 : now / 1000);
   });
 }
 // a robot: its slot's colour and mark, so no one depends on colour alone
@@ -344,6 +455,19 @@ function drawAim(p, snap) {
     g.fillStyle = `rgba(255,255,255,${0.9 - (0.75 * i) / pts.length})`;
     g.fill();
   });
+  // where it ends up, and how hard, in figures
+  const end = pts[pts.length - 1];
+  g.beginPath();
+  g.arc(px(end[0]), px(end[1]), 7, 0, Math.PI * 2);
+  g.strokeStyle = "#ffffff";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "#ffffff";
+  g.font = "700 13px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "alphabetic";
+  const above = px(p[1]) > px(ROBOT_R) + 34; // near the top wall, it goes below instead
+  g.fillText(`${Math.round(aim.power * 100)}%`, px(p[0]), px(p[1]) + (above ? -px(ROBOT_R) - 16 : px(ROBOT_R) + 26));
   // the strength: an arc round the robot, full circle at full power
   g.beginPath();
   g.arc(px(p[0]), px(p[1]), px(ROBOT_R) + 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * aim.power);
@@ -365,24 +489,26 @@ function cancelAim() {
 // ---- mouse and touch: press anywhere, pull back, let go. The pull is
 // measured from the press, because a moving robot can't be pressed reliably.
 let dragging = null; // pointerId
-canvas.addEventListener("pointerdown", (e) => {
+const pad = $("[data-pad]");
+function press(e) {
   if (!canPlay(conn) || dragging !== null || !myRobot()) return;
   e.preventDefault();
+  canvas.dataset.pressed = ""; // no focus ring for a press, only for the keyboard
   canvas.focus({ preventScroll: true });
-  canvas.setPointerCapture(e.pointerId);
+  e.currentTarget.setPointerCapture(e.pointerId);
   dragging = e.pointerId;
   keyAiming = null;
   const q = toArena(e);
   pull = { from: q, to: q };
   aim = null;
   showAim();
-});
-canvas.addEventListener("pointermove", (e) => {
+}
+function pulling(e) {
   if (e.pointerId !== dragging) return;
   pull.to = toArena(e);
   aim = aimFromPull(pull.from, pull.to);
   showAim();
-});
+}
 const letGo = (e) => {
   if (e.pointerId !== dragging) return;
   dragging = null;
@@ -390,11 +516,16 @@ const letGo = (e) => {
   cancelAim();
   if (l) fire(l);
 };
-canvas.addEventListener("pointerup", letGo);
-canvas.addEventListener("pointercancel", letGo);
+for (const el of [canvas, pad]) {
+  el.addEventListener("pointerdown", press);
+  el.addEventListener("pointermove", pulling);
+  el.addEventListener("pointerup", letGo);
+  el.addEventListener("pointercancel", letGo);
+}
 
 // ---- keys: the same aim, turned and strengthened step by step
 canvas.addEventListener("keydown", (e) => {
+  delete canvas.dataset.pressed;
   if (!canPlay(conn)) return;
   const k = keyAim(keyAiming ?? lastKeyAim, e.key);
   if (!k) return;
@@ -438,6 +569,8 @@ canvas.probe = () => {
     artifacts: artifacts.map((a) => ({ ...a, ...at(a.pos) })),
     carrying: myRobot()?.carrying ?? [],
     cap: loadCap(myLoad()),
+    coach: $("[data-coach]").hidden ? "" : $("[data-coach]").textContent,
+    held,
     players: MAX_PLAYERS,
   };
 };

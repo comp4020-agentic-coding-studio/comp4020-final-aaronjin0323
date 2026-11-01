@@ -15,7 +15,7 @@
       <p class="kicker" data-kicker>Exhibition room</p>
       <h1 data-name>&nbsp;</h1>
     </div>
-    <nav><a href="/">The arena</a><a href="/room/" data-my-room>Your room</a><a href="#rooms">Other rooms</a></nav>
+    <nav><a href="/">Back to the arena</a><a href="/room/" data-my-room>Your room</a><a href="#rooms">Other rooms</a></nav>
   </header>
   <main class="stage">
     <div class="gallery">
@@ -49,7 +49,8 @@
     </aside>
   </main>
   <section class="below">
-    <p data-owner-tools hidden><button type="button" class="primary" data-edit>Arrange this room</button></p>
+    <p class="waiting" data-owner-tools hidden><button type="button" class="primary" data-edit>Arrange this room</button> <span data-waiting></span></p>
+    <p class="muted" data-go-win hidden>Your room is empty. <a href="/">Carry something to the vault</a> and it can stand here.</p>
     <h2 id="onshow-h">On show</h2>
     <ul class="onshow" data-onshow></ul>
     <p class="muted" data-nothing hidden>Nothing is on show yet.</p>

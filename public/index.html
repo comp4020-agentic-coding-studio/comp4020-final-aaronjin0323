@@ -12,13 +12,38 @@
 <body>
   <main class="wrap">
     <p class="status" data-status role="status" hidden></p>
-    <canvas class="arena" data-arena tabindex="0" aria-describedby="how" aria-label="The arena, from above. Your robot has the white ring."></canvas>
-    <div class="under">
-      <p class="how" id="how">Drag back anywhere and let go to launch, even in mid-flight. Grab what's on the floor and carry it through the vault in the middle to keep it for good. The more you carry, the slower you get. Touch anyone and you both drop everything. Or use the keys: arrows aim, Enter launches, Escape cancels.</p>
-      <p class="bank"><span data-cargo>Carrying 0</span> · <span data-banked>Collected 0</span> · <span data-vault>Vault 0</span></p>
+    <ol class="journey" aria-label="Your journey">
+      <li data-step="1">Grab</li>
+      <li data-step="2">Deliver</li>
+      <li data-step="3"><a href="/room/">Exhibit</a></li>
+    </ol>
+    <div class="play">
+      <div class="field">
+        <canvas class="arena" data-arena tabindex="0" aria-describedby="how" aria-label="The arena, from above. Your robot has the white ring."></canvas>
+        <p class="toast" data-toast role="status" hidden></p>
+      </div>
+      <div class="pad" data-pad aria-hidden="true"><span data-pad-words>Drag back here to aim, let go to launch</span></div>
+      <div class="hud">
+        <p class="coach" data-coach hidden></p>
+        <section class="risk" aria-labelledby="risk-h">
+          <h2 id="risk-h">At risk</h2>
+          <ul class="tray" data-tray></ul>
+          <p class="speed"><span class="meter"><span data-meter></span></span> <span data-speed>Top speed 100%</span></p>
+        </section>
+        <section class="kept" aria-labelledby="kept-h">
+          <h2 id="kept-h">Kept for good</h2>
+          <p data-banked>Collected 0</p>
+          <p class="vaulted"><span data-vault>Vault 0</span> · <a href="/room/">Your room</a></p>
+        </section>
+      </div>
     </div>
+    <details class="how">
+      <summary>How it works</summary>
+      <p id="how">Drag back anywhere and let go to launch, even in mid-flight. Touching anyone scatters everything you both carry. Only what reaches the vault is yours for good. Keys: arrows aim, Enter launches, Escape cancels.</p>
+    </details>
     <section class="collection" aria-labelledby="yours">
-      <h2 id="yours">Your collection <a class="to-room" href="/room/">Arrange it in your room</a></h2>
+      <h2 id="yours">Your collection <span class="keptmark">Kept for good</span></h2>
+      <p class="to-room-line"><a class="to-room" href="/room/">Arrange it in your room</a></p>
       <p class="empty" data-shelf-empty>Nothing yet. Carry something into the vault and it's yours for good.</p>
       <ul class="shelf" data-shelf></ul>
       <details class="catalog">
