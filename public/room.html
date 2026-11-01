@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>An exhibition room</title>
+  <meta name="description" content="A personal exhibition room of artifacts won in the arena.">
+  <meta name="theme-color" content="#16130f">
+  <link rel="stylesheet" href="/room.css">
+  <script type="module" src="/room-app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="kicker" data-kicker>Exhibition room</p>
+      <h1 data-name>&nbsp;</h1>
+    </div>
+    <nav><a href="/">The arena</a><a href="/room/" data-my-room>Your room</a><a href="#rooms">Other rooms</a></nav>
+  </header>
+  <main class="stage">
+    <div class="gallery">
+      <canvas data-room tabindex="0" aria-label="The room. What's on show is listed below." aria-describedby="onshow-h"></canvas>
+      <p class="status" data-status role="status" hidden></p>
+    </div>
+    <aside class="panel" data-panel hidden aria-label="Arrange your room">
+      <div class="actions">
+        <button type="button" class="primary" data-save disabled>Save room</button>
+        <button type="button" data-discard disabled>Discard changes</button>
+        <button type="button" data-done>Done</button>
+      </div>
+      <p class="hint">Drag anything to move it. Select a stand to choose what it shows.</p>
+      <div data-selection hidden class="selection">
+        <h2 data-selected-name></h2>
+        <label data-artifact-label>On show <select data-artifact></select></label>
+        <p class="keys">
+          <button type="button" data-nudge="-1,0" aria-label="Move left">←</button>
+          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
+          <button type="button" data-nudge="0,-1" aria-label="Move back or up">↑</button>
+          <button type="button" data-nudge="0,1" aria-label="Move forward or down">↓</button>
+          <button type="button" data-remove>Remove</button>
+        </p>
+      </div>
+      <fieldset><legend>Walls</legend><div class="swatches" data-walls></div></fieldset>
+      <fieldset><legend>Flooring</legend><div class="swatches" data-floors></div></fieldset>
+      <fieldset><legend>Light</legend><div class="swatches" data-lights></div></fieldset>
+      <fieldset><legend>Display stands</legend><div class="adds" data-add-stand></div></fieldset>
+      <fieldset><legend>Furniture</legend><div class="adds" data-add-furniture></div></fieldset>
+      <fieldset><legend>Decoration</legend><div class="adds" data-add-decor></div></fieldset>
+    </aside>
+  </main>
+  <section class="below">
+    <p data-owner-tools hidden><button type="button" class="primary" data-edit>Arrange this room</button></p>
+    <h2 id="onshow-h">On show</h2>
+    <ul class="onshow" data-onshow></ul>
+    <p class="muted" data-nothing hidden>Nothing is on show yet.</p>
+    <h2 id="rooms">Other rooms</h2>
+    <ul class="rooms" data-rooms></ul>
+    <p><button type="button" data-rooms-more hidden>More rooms</button></p>
+    <p class="muted">Rooms are public. Yours belongs to this browser's cookie, and only you can change it.</p>
+  </section>
+  <dialog class="closer" data-closer aria-labelledby="closer-name">
+    <canvas data-closeup width="900" height="900" aria-hidden="true"></canvas>
+    <div class="plate">
+      <h2 id="closer-name" data-closer-name></h2>
+      <p class="tier" data-closer-tier></p>
+      <p data-closer-detail></p>
+      <p class="hint">Move across it to carry the light.</p>
+      <div class="actions">
+        <button type="button" data-further>Further</button>
+        <button type="button" data-nearer>Closer</button>
+        <button type="button" data-wake>Wake it</button>
+        <button type="button" data-close>Close</button>
+      </div>
+    </div>
+  </dialog>
+  <noscript><p>The room needs JavaScript.</p></noscript>
+</body>
+</html>

@@ -132,13 +132,14 @@ function fish(g, r, t, look, material, seed) {
   g.fillStyle = fill(g, look, r, material, t);
   g.beginPath();
   g.ellipse(r * 0.12, 0, r * 0.7, r * 0.42, 0, 0, Math.PI * 2);
+  // all wound the same way, or their overlaps would cancel out to holes
   g.moveTo(-r * 0.5, 0);
-  g.lineTo(-r * 0.98, -r * 0.42);
   g.lineTo(-r * 0.98, r * 0.42);
+  g.lineTo(-r * 0.98, -r * 0.42);
   g.closePath();
-  g.moveTo(r * 0.15, -r * 0.38);
-  g.lineTo(-r * 0.2, -r * (0.42 + fin));
+  g.moveTo(r * 0.15, -r * 0.34);
   g.lineTo(-r * 0.25, -r * 0.3);
+  g.lineTo(-r * 0.2, -r * (0.42 + fin));
   g.closePath();
   g.fill();
   finish(g, look);

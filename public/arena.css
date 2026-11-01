@@ -34,3 +34,4 @@ body { background: #14131f; min-height: 100svh; }
 .catalog ul { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .catalog li { display: flex; align-items: center; gap: 6px; }
 .catalog li[data-found="no"] { color: #77738f; }
+.to-room { margin-left: 8px; font-size: .84rem; font-weight: 500; color: #ffd766; }
