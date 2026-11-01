@@ -1,7 +1,7 @@
 // The arena page's decisions, as small pure functions. No DOM and no fetch,
 // so spec/arena-ui.test.ts holds them without a browser. The movement
 // numbers themselves are all in arena.js.
-import { ARENA, CARRY_MAX, CATALOG, GRACE_MS, KIND_NAMES, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS } from "./arena.js";
+import { ARENA, CARRY_MAX, CATALOG, GRACE_MS, KIND_NAMES, LAUNCH_MAX, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS, loadCap } from "./arena.js";
 
 /** The slots' colours; each differs by a mark too (arena-app.js). */
 export const SLOT_COLOURS = ["#ff6b4a", "#2ec4b6", "#ffc83d", "#b48cff"];
@@ -99,4 +99,31 @@ export function placeWords(place) {
 export function connectionMessage(c) {
   if (canPlay(c)) return "";
   return c.everLive ? `Connection lost, reconnecting. Your robot waits ${GRACE_MS / 1000} seconds for you.` : "Connecting…";
+}
+
+// ---- the journey (ADR 32)
+/** The step you're on: 1 grab, 2 deliver, 3 exhibit, from what you hold. */
+export function journeyStep({ carrying, total, onShow }) {
+  if (carrying > 0) return 2;
+  return total > 0 && onShow === 0 ? 3 : 1;
+}
+/** The one line a newcomer needs now; nothing once they've delivered. */
+export function coach({ launched, carrying, total }) {
+  if (total > 0) return "";
+  if (carrying > 0) return "Fly through the vault to keep it. Touch anyone and you drop it all.";
+  return launched ? "Touch an artifact to pick it up." : "Drag back anywhere, then let go.";
+}
+/** Your top speed with `n` aboard, as a percentage of empty. */
+export const speedShare = (n) => Math.round((loadCap(n) / LAUNCH_MAX) * 100);
+export function deliveryWords(items) {
+  if (items.length === 1) return `${itemName(items[0].kind, items[0].material)} kept for good`;
+  return `${items.length} artifacts kept for good`;
+}
+export const dropWords = (n) => (n === 1 ? "You dropped 1. Grab it once it settles." : `You dropped ${n}. Grab them once they settle.`);
+/** How many of your artifacts aren't in your room yet. */
+export function waitingWords(shelf, items) {
+  const shown = new Set(items.map((i) => i.artifact));
+  const n = shelf.filter((a) => !shown.has(a.id)).length;
+  if (!n) return "";
+  return n === 1 ? "1 of yours isn't on show." : `${n} of yours aren't on show.`;
 }

@@ -112,7 +112,10 @@ async function brawl(browser: Browser) {
       const spots = (x: any) => x.artifacts.map((f: any) => `${f.id}:${f.pos}`).sort().join();
       const [fa, fb] = [await probe(a), await probe(b)];
       same = same && spots(fa) === spots(fb);
-      if (knocked === 1) await a.screenshot({ path: ".shots/scatter-1440.png" });
+      if (knocked === 1) {
+        check(/You dropped/.test((await a.locator("[data-toast]").textContent()) ?? ""), "the loser is told what they dropped");
+        await a.screenshot({ path: ".shots/scatter-1440.png" });
+      }
     }
     banked = Math.max(banked, bank);
     prev = n;
@@ -265,7 +268,95 @@ async function room(browser: Browser) {
   await a.context().close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room };
+/** The whole journey, photographed at one size, as a newcomer. */
+async function trip(browser: Browser, opts: Opts, name: string, touch: boolean) {
+  const a = await visitor(browser, opts);
+  const shot = (s: string) => a.screenshot({ path: `.shots/j-${name}-${s}.png` });
+  const box = async (sel: string) => (await a.locator(sel).boundingBox())!;
+  const cdp = touch ? await a.context().newCDPSession(a) : null;
+  /** A pull: on the phone's pad if it's showing, by touch; else the mouse. */
+  const pull = async (dir: number[], power: number, hold?: () => Promise<unknown>) => {
+    const padShows = touch && (await a.locator("[data-pad]").isVisible());
+    const area = await box(padShows ? "[data-pad]" : "[data-arena]");
+    const s = await probe(a);
+    const len = Math.hypot(dir[0], dir[1]) || 1;
+    const [cx, cy] = [area.x + area.width / 2, area.y + area.height / 2];
+    const reach = Math.min(power * A.PULL_MAX * s.metre, 44 / 1);
+    const to = [cx - (dir[0] / len) * reach, cy - (dir[1] / len) * reach];
+    if (cdp) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: cx, y: cy }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: to[0], y: to[1] }] });
+      await hold?.();
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } else {
+      await a.mouse.move(cx, cy);
+      await a.mouse.down();
+      await a.mouse.move(to[0], to[1]);
+      await hold?.();
+      await a.mouse.up();
+    }
+  };
+  const inView = () => a.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  check((await inView()) <= 0, `${name}: nothing scrolls sideways`);
+  const arena = await box("[data-arena]");
+  const vh = opts!.viewport!.height;
+  check(arena.y >= 0 && arena.y + arena.height <= vh + 1, `${name}: the whole arena fits on screen`, `${Math.round(arena.width)}x${Math.round(arena.height)}`);
+  check((await probe(a)).coach.length > 0, `${name}: a newcomer gets one line`, (await probe(a)).coach);
+  const lineSeen = (await a.locator("[data-coach]").isVisible()) || (await a.locator("[data-pad-words]").isVisible());
+  check(lineSeen, `${name}: and the line is really on screen`);
+  const covers = await a.evaluate(() => {
+    const f = document.querySelector("[data-arena]")!.getBoundingClientRect(), c = document.querySelector("[data-coach]")!.getBoundingClientRect();
+    return c.width > 0 && c.left < f.right && c.right > f.left && c.top < f.bottom && c.bottom > f.top;
+  });
+  check(!covers, `${name}: the line doesn't cover the arena`);
+  await shot("1-first");
+  const s0 = await probe(a);
+  await pull(toward(s0, [8, 5]), 0.7, async () => {
+    await a.waitForTimeout(120);
+    await shot("2-aim");
+  });
+  await a.waitForTimeout(80);
+  check(me(await probe(a)).speed > 0.5, `${name}: a pull launches`);
+  check(/touch an artifact/i.test((await probe(a)).coach), `${name}: the line moves on after a launch`);
+  const total = async () => (await probe(a)).held.total as number;
+  let saw = false;
+  for (const end = Date.now() + 45_000; Date.now() < end && (await total()) < 1; await a.waitForTimeout(240)) {
+    const s = await probe(a);
+    if (s.carrying.length && !saw) {
+      saw = true;
+      check(/vault/i.test(s.coach), `${name}: carrying, the line points to the vault`);
+      check((await a.locator("[data-tray] [data-full]").count()) >= 1, `${name}: cargo shows in the at-risk tray`);
+      const sp = (await a.locator("[data-speed]").textContent())!;
+      check(sp !== "Top speed 100%", `${name}: weight shows as top speed`, sp);
+      await shot("3-cargo");
+    }
+    const near = [...s.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(s).pos[0], x.pos[1] - me(s).pos[1]) - Math.hypot(y.pos[0] - me(s).pos[0], y.pos[1] - me(s).pos[1]))[0];
+    await pull(toward(s, s.carrying.length ? A.VAULT : near?.pos ?? A.VAULT), 0.8);
+  }
+  check((await total()) >= 1, `${name}: delivered`);
+  await a.waitForFunction(() => /kept for good/.test(document.querySelector("[data-toast]")?.textContent ?? ""), null, { timeout: 2000 }).then(() => check(true, `${name}: the delivery is announced, and offers the room`), () => check(false, `${name}: the delivery is announced`));
+  await shot("4-delivered");
+  check((await probe(a)).coach === "", `${name}: guidance stops once delivered`);
+  check((await a.locator(".journey li[data-now]").textContent().catch(() => "")) === "Exhibit" || name === "land", `${name}: the journey points on to Exhibit`);
+  await a.locator("[data-toast] a").click();
+  await a.waitForURL("**/room/");
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+  await a.waitForFunction(() => /on show/.test(document.querySelector("[data-waiting]")?.textContent ?? ""));
+  check(true, `${name}: the room says what's waiting`);
+  await a.waitForTimeout(150);
+  check((await a.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `${name}: the room doesn't scroll sideways`);
+  await a.screenshot({ path: `.shots/j-${name}-5-room.png` });
+  await a.context().close();
+}
+async function journey(browser: Browser) {
+  await trip(browser, DESKTOP, "desk", false);
+  await new Promise((r) => setTimeout(r, A.GRACE_MS + 500));
+  await trip(browser, PHONE, "phone", true);
+  await new Promise((r) => setTimeout(r, A.GRACE_MS + 500));
+  await trip(browser, { viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, "land", true);
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

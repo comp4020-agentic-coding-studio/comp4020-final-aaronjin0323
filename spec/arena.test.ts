@@ -363,3 +363,31 @@ test("a picked-up artifact leaves the floor on that step", () => {
   expect(w.store.cargo(p)).toHaveLength(1);
   expect(w.arena.floor().map((a: any) => a.id)).not.toContain("here");
 });
+
+test("a delivery is an event, once, saying who and what", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  w.give(p, 2);
+  w.place(p, A.VAULT, [1, 0]);
+  w.run(40);
+  const [d, ...rest] = w.arena.deliveries();
+  expect(rest).toHaveLength(0);
+  expect(d.tag).toBe(w.store.who(p).tag);
+  expect(d.items).toHaveLength(2);
+  expect(d.items[0].kind).toBe("fish");
+  expect(w.arena.deliveries()).toHaveLength(0);
+});
+
+test("a hit says whose each scattered artifact was, by tag", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join();
+  w.give(a, 2);
+  w.arena.hits();
+  w.place(a, [5, 2], [0.5, 0]);
+  w.place(b, [5.91, 2]);
+  w.run(40);
+  const [hit] = w.arena.hits();
+  expect(hit.scattered.map((s: any) => s.by)).toEqual([w.store.who(a).tag, w.store.who(a).tag]);
+});

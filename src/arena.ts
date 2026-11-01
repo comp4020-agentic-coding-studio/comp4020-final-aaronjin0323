@@ -36,7 +36,9 @@ type Entry = {
   awayUntil: number | null; // with no stream open: a ghost until then, then gone
 };
 /** A contact: where, and every artifact it sent out, the same for every page. */
-export type Hit = { pos: number[]; at: number; scattered: { id: string; kind: string; from: number[]; to: number[] }[] };
+export type Hit = { pos: number[]; at: number; scattered: { id: string; kind: string; by: string; from: number[]; to: number[] }[] };
+/** A delivery: who, and what they kept. */
+export type Delivery = { tag: string; at: number; items: { id: string; kind: string; material: string; seed: number }[] };
 export type Welcome = { kind: "restored" } | { kind: "recovered"; carrying: number } | { kind: "new" } | { kind: "waiting" };
 const SWEEP_STEPS = 50; // a second
 const moving = (r: Robot) => r.vel[0] !== 0 || r.vel[1] !== 0;
@@ -47,6 +49,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   let clock = onGrid(now); // every robot has been stepped up to here
   let floor = store.floor(); // the artifacts available, as the store last said
   let hits: Hit[] = [];
+  let deliveries: Delivery[] = [];
   let steps = 0;
   let nextSpawnAt = clock + spawn.everyMs[1];
   const tagOf = (pid: string) => store.who(pid)?.tag ?? "";
@@ -109,9 +112,11 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     if (changed) refresh();
     // banking needs a robot moving in the vault: standing in it banks nothing
     if (moving(e.walked) && inVault(pos)) {
+      const items = store.cargo(pid);
       const n = store.bank(pid, t).banked;
       if (n) {
         changed = true;
+        deliveries.push({ tag: tagOf(pid), at: t, items });
         log("bank", { tag: tagOf(pid), count: n });
       }
     }
@@ -139,7 +144,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
       refresh();
       log("scatter", { a: tagOf(pa), b: tagOf(pb), count: lost.length, closing: Math.round(c.closing * 100) / 100 });
     }
-    hits.push({ pos: [(c.a.pos[0] + c.b.pos[0]) / 2, (c.a.pos[1] + c.b.pos[1]) / 2], at: t, scattered: lost.map((l) => ({ id: l.id, kind: l.kind, from: from[l.pid], to: l.to })) });
+    hits.push({ pos: [(c.a.pos[0] + c.b.pos[0]) / 2, (c.a.pos[1] + c.b.pos[1]) / 2], at: t, scattered: lost.map((l) => ({ id: l.id, kind: l.kind, by: tagOf(l.pid), from: from[l.pid], to: l.to })) });
     return true;
   }
 
@@ -245,6 +250,12 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     hits() {
       const out = hits;
       hits = [];
+      return out;
+    },
+    /** Deliveries since the last call, for the next broadcast. */
+    deliveries() {
+      const out = deliveries;
+      deliveries = [];
       return out;
     },
     /** Re-reads the floor, after the store was changed from outside. */

@@ -41,11 +41,12 @@ function broadcast() {
   const robots = arena.view(now);
   const artifacts = arena.floor();
   const hits = arena.hits();
+  const deliveries = arena.deliveries();
   const vault = store.vaultTotal();
   for (const c of clients) {
     const catalog = store.catalog(c.pid);
-    const mine = { catalog, total: Object.values(catalog).reduce((a, b) => a + b, 0), place: arena.placeOf(c.pid) };
-    c.res.write(`event: arena\ndata: ${JSON.stringify({ robots, artifacts, hits, vault, mine, you: { tag: c.tag }, serverTime: now })}\n\n`);
+    const mine = { catalog, total: Object.values(catalog).reduce((a, b) => a + b, 0), onShow: store.onShow(c.pid), place: arena.placeOf(c.pid) };
+    c.res.write(`event: arena\ndata: ${JSON.stringify({ robots, artifacts, hits, deliveries, vault, mine, you: { tag: c.tag }, serverTime: now })}\n\n`);
   }
 }
 // the server sees every touch: each tick walks moving robots along their steps

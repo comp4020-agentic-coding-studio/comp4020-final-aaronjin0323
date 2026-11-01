@@ -242,6 +242,8 @@ export function openStore(path: string) {
         next: rows.length > ROOMS_PAGE && last ? `${last.at}.${last.tag}` : null,
       };
     },
+    /** How many artifacts a visitor has on show in their room. */
+    onShow: (pid: string) => ((db.prepare("SELECT on_show FROM rooms WHERE pid = ?").get(pid) as Row | undefined)?.on_show ?? 0) as number,
     /** Everything anyone has ever banked. */
     vaultTotal: () => (db.prepare("SELECT COUNT(*) AS c FROM artifacts WHERE state = 'banked' AND owner IS NOT NULL").get() as Row).c as number,
   };
