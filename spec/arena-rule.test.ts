@@ -74,12 +74,13 @@ describe("the vault and the floor", () => {
     for (const p of A.SPOTS) expect(A.inVault([p[0], p[1]])).toBe(false);
     for (const p of A.SPOTS) expect(Math.hypot(p[0] - A.VAULT[0], p[1] - A.VAULT[1])).toBeGreaterThan(A.VAULT_R + A.ROBOT_R + A.ARTIFACT_R);
   });
-  test("a drop never lands in the vault or through a wall", () => {
-    const p = A.dropSpot([A.VAULT[0] - A.VAULT_R, A.VAULT[1]], [1, 0]);
-    expect(Math.hypot(p[0] - A.VAULT[0], p[1] - A.VAULT[1])).toBeGreaterThan(A.VAULT_R);
-    const q = A.dropSpot([0.5, 0.5], [-0.7, -0.7]);
-    expect(q[0]).toBeGreaterThanOrEqual(A.ARTIFACT_R);
-    expect(q[1]).toBeGreaterThanOrEqual(A.ARTIFACT_R);
+  test("scattered artifacts land outward, inside the walls, out of the vault", () => {
+    const spots = A.scatterSpots([5, 5], [-1, 0], A.CARRY_MAX);
+    expect(spots).toHaveLength(A.CARRY_MAX);
+    for (const p of spots) expect(p[0]).toBeLessThan(5.01);
+    expect(new Set(spots.map((p: number[]) => p.join())).size).toBe(A.CARRY_MAX);
+    for (const p of A.scatterSpots([A.VAULT[0] - 1, A.VAULT[1]], [1, 0], 5)) expect(A.inVault(p)).toBe(false);
+    for (const p of A.scatterSpots([0.6, 0.6], [-0.7, -0.7], 5)) expect(Math.min(p[0], p[1])).toBeGreaterThanOrEqual(A.ARTIFACT_R);
   });
   test("spawns are four, inside the walls, clear of each other", () => {
     expect(A.SPAWNS).toHaveLength(A.MAX_PLAYERS);

@@ -126,66 +126,99 @@ test("moving in the vault banks everything; standing there banks nothing", () =>
   expect(w.store.vaultTotal()).toBeGreaterThanOrEqual(3);
 });
 
-test("a hard hit knocks the newest artifact loose, and a third robot can steal it", () => {
-  const w = world();
-  w.clearFloor();
-  const striker = w.join(), carrier = w.join(), thief = w.join();
-  w.give(carrier, 2);
-  const newest = w.store.cargo(carrier)[1].id;
-  w.place(carrier, [5, 2]);
-  w.place(thief, [5, 9]);
-  w.place(striker, [3.5, 2], [10, 0]);
-  w.run(200);
-  expect(w.store.cargo(carrier).map((c: any) => c.id)).not.toContain(newest);
-  expect(w.store.cargo(striker)).toHaveLength(0); // strikers don't take it in the hit
-  const loose: any = w.arena.floor().find((a: any) => a.id === newest);
-  expect(loose.readyAt).toBeGreaterThan(w.now() - 200);
-  w.run(A.PICKUP_DELAY_MS);
-  w.place(striker, [1, 9]);
-  w.place(carrier, [14, 9]);
-  w.place(thief, loose.pos);
-  w.run(40);
-  expect(w.store.cargo(thief).map((c: any) => c.id)).toContain(newest);
-});
-
-test("a dropped artifact can't be taken before it's ready, by anyone", () => {
+test("the slightest contact scatters both robots' entire cargo, whoever moved", () => {
   const w = world();
   w.clearFloor();
   const a = w.join(), b = w.join();
-  w.give(b);
+  w.give(a, 3);
+  w.give(b, 2);
+  w.place(a, [5, 2], [0.5, 0]);
+  w.place(b, [5.91, 2]);
+  w.run(40);
+  expect(w.store.cargo(a)).toHaveLength(0);
+  expect(w.store.cargo(b)).toHaveLength(0);
+  const loose = w.arena.floor().filter((x: any) => x.readyAt > w.now() - 40);
+  expect(loose).toHaveLength(5);
+});
+
+test("a robot with nothing still costs the other everything, and a second contact is safe", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join();
+  w.give(b, A.CARRY_MAX);
   w.place(b, [5, 2]);
   w.place(a, [3.5, 2], [10, 0]);
-  w.run(160);
-  const loose = w.arena.floor()[0];
-  expect(loose).toBeTruthy();
-  w.place(a, loose.pos);
-  w.place(b, [14, 9]);
-  w.arena.tick(w.now());
+  w.run(200);
+  expect(w.store.cargo(b)).toHaveLength(0);
   expect(w.store.cargo(a)).toHaveLength(0);
 });
 
-test("a shield stops a second knock; a slow bump or a tie drops nothing", () => {
+test("nobody takes a scattered artifact until it settles; then its previous owner can", () => {
   const w = world();
   w.clearFloor();
   const a = w.join(), b = w.join();
-  w.give(b, 3);
-  w.place(b, [5, 2]);
-  w.place(a, [3.5, 2], [10, 0]);
-  w.run(200);
-  expect(w.store.cargo(b)).toHaveLength(2);
-  w.place(b, [5, 5.5 + 3]);
-  w.place(a, [3.5, 8.5], [10, 0]);
-  w.run(200);
-  expect(w.store.cargo(b)).toHaveLength(2);
-  w.run(A.DROP_PROTECT_MS);
-  w.place(b, [8, 1]);
-  w.place(a, [7, 1], [3, 0]); // slow
-  w.run(120);
-  expect(w.store.cargo(b)).toHaveLength(2);
-  w.place(b, [10, 1], [-6, 0]);
-  w.place(a, [9, 1], [6, 0]); // head on: a tie
-  w.run(120);
-  expect(w.store.cargo(b)).toHaveLength(2);
+  w.give(a, 2);
+  const ids = w.store.cargo(a).map((c: any) => c.id);
+  w.place(a, [5, 2], [0.5, 0]);
+  w.place(b, [5.91, 2]);
+  w.run(40);
+  const f: any = w.arena.floor().find((x: any) => x.id === ids[0]);
+  w.place(b, [14, 9]);
+  w.place(a, f.pos);
+  w.run(20);
+  expect(w.store.cargo(a)).toHaveLength(0);
+  w.run(A.SETTLE_MS);
+  expect(w.store.cargo(a).map((c: any) => c.id)).toContain(ids[0]);
+});
+
+test("a third robot can take what's scattered", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join(), thief = w.join();
+  w.give(a, 1);
+  const id = w.store.cargo(a)[0].id;
+  w.place(a, [5, 2], [0.5, 0]);
+  w.place(b, [5.91, 2]);
+  w.place(thief, [14, 9]);
+  w.run(40);
+  const f: any = w.arena.floor().find((x: any) => x.id === id);
+  w.run(A.SETTLE_MS);
+  w.place(thief, f.pos);
+  w.run(20);
+  expect(w.store.cargo(thief).map((c: any) => c.id)).toContain(id);
+});
+
+test("what's sent to every page is where the store put each artifact", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join();
+  w.give(a, 2);
+  w.give(b, 1);
+  w.arena.hits();
+  w.place(a, [5, 2], [0.5, 0]);
+  w.place(b, [5.91, 2]);
+  w.run(40);
+  const [hit] = w.arena.hits();
+  expect(hit.scattered).toHaveLength(3);
+  for (const s of hit.scattered) expect(w.arena.floor().find((x: any) => x.id === s.id)?.pos).toEqual(s.to);
+});
+
+test("a contact in the vault scatters before banking; what's banked stays banked", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join();
+  w.give(a, 1);
+  w.place(a, A.VAULT, [1, 0]);
+  w.run(40);
+  expect(w.store.collection(a).fish).toBe(1);
+  w.give(a, 2);
+  w.give(b, 1);
+  w.place(a, [A.VAULT[0] - 0.4, A.VAULT[1]], [0.5, 0]);
+  w.place(b, [A.VAULT[0] + 0.51, A.VAULT[1]]);
+  w.run(40);
+  expect(w.store.collection(a).fish).toBe(1);
+  expect(w.store.collection(b).fish).toBe(0);
+  expect(w.store.cargo(a)).toHaveLength(0);
 });
 
 test("a ghost touches nothing and keeps its robot; back in time it's the same robot", () => {

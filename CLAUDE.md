@@ -68,24 +68,28 @@ ADR 28 says which still stand.
   `SPEED_MAX`, a collision included.
 - Robots slow to a stop and rebound off walls.
 
-### Hitting
+### Contact
 
-- **Robots bounce** as equal masses. A **knock** needs a closing speed of
-  at least `KNOCK_SPEED`; the struck robot is the one clearly
-  (`KNOCK_CLEAR`) moving less towards the other, and a tie drops nothing.
-- **The struck robot drops its newest artifact** just beyond it, away from
-  the striker, free for anyone after `PICKUP_DELAY_MS`. It's then shielded
-  from knocks for `DROP_PROTECT_MS`. Strikers never drop.
+- **Every contact scatters both robots' entire cargo**
+  ([ADR 29](docs/adr/0029-every-contact-scatters.md)), whatever the speed
+  and whoever started it. A contact is any step on which two robots
+  overlap and are closing. Robots bounce as equal masses. No striker, no
+  shield.
+- **Artifacts fan outward,** away from the other robot, to spots the server
+  picks on that step, inside the walls and out of the vault. After
+  `SETTLE_MS` anyone can take them, their previous owner included; before
+  that, nobody can.
 
 ### Artifacts and the vault
 
 - **Three kinds, one set of rules:** a luminous flying fish, a rain-filled
   cloud, a small door onto stars.
 - **New ones keep `MAX_AVAILABLE` on the floor**, at safe spots clear of
-  the vault. Knocked ones come back on top of that.
+  the vault. Scattered ones come back on top of that.
 - **Touching one collects it** once it's ready, seen by the server only.
-- **One vault in the middle.** Moving in it banks everything you carry;
-  standing in it doesn't. Banked is final, nothing takes it back.
+- **One vault in the middle, the only delivery point.** Moving in it banks
+  everything you carry into your permanent collection; standing in it
+  doesn't. A contact on the same step comes first. Banked is final.
 - **An artifact is available, carried or banked, never two:** one row, one
   `state`, a CHECK and a trigger, and single conditional UPDATEs.
 - **What persists:** your banked count per kind, the floor, and the
@@ -147,7 +151,7 @@ store with a test clock), `spec/store.test.ts` and `spec/http.test.ts`
   commit. Never commit red.
 - Look at the page at 1440x900 and 390x844 before calling a page change
   done: `node scripts/browser-check.ts` against the local app plays it as
-  several visitors (launching, a launch while moving, keys, a knock, the
+  several visitors (launching, a launch while moving, keys, a scatter, the
   line for a robot, a refused stream, no script) and screenshots into `.shots/`. Read the shots; it isn't in CI,
   which has no Chrome.
 - Before a change to the store, the arena or the server is done, run
