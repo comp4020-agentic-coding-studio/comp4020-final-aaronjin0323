@@ -7,6 +7,7 @@ import {
   GRACE_MS,
   MAX_PLAYERS,
   SETTLE_MS,
+  SPAWN,
   SPAWNS,
   STEP_MS,
   VAULT,
@@ -17,6 +18,7 @@ import {
   launch,
   nearestFree,
   onGrid,
+  rollMaterial,
   scatterSpots,
   standing,
   touches,
@@ -39,13 +41,14 @@ export type Welcome = { kind: "restored" } | { kind: "recovered"; carrying: numb
 const SWEEP_STEPS = 50; // a second
 const moving = (r: Robot) => r.vel[0] !== 0 || r.vel[1] !== 0;
 
-export function createArena(store: Store, { now = Date.now(), random = Math.random }: { now?: number; random?: () => number } = {}) {
+export function createArena(store: Store, { now = Date.now(), random = Math.random, spawn = SPAWN }: { now?: number; random?: () => number; spawn?: typeof SPAWN } = {}) {
   const robots = new Map<string, Entry>(); // by pid
   const line: { pid: string; streams: number }[] = []; // waiting for a robot, in order
   let clock = onGrid(now); // every robot has been stepped up to here
   let floor = store.floor(); // the artifacts available, as the store last said
   let hits: Hit[] = [];
   let steps = 0;
+  let nextSpawnAt = clock + spawn.everyMs[1];
   const tagOf = (pid: string) => store.who(pid)?.tag ?? "";
   const away = (e: Entry) => e.awayUntil !== null;
   // after a restart, everyone carrying gets the grace from the start
@@ -54,10 +57,21 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   const refresh = () => {
     floor = store.floor();
   };
-  const refill = (t: number) => {
-    store.fillFloor(t, [...robots.values()].map((e) => e.walked.pos), random);
-    refresh();
-  };
+  /** One artifact on the floor, rolled for `players` active. */
+  function spawnOne(t: number, players: number): boolean {
+    const added = store.spawn(t, [...robots.values()].map((e) => e.walked.pos), random, () => rollMaterial(players, random(), random(), spawn));
+    if (added) refresh();
+    return added;
+  }
+  /** The spawn timer: one artifact per gap, with someone playing, under the
+   * target for how many are playing. Ghosts and the line don't count. */
+  function spawnDue(t: number): boolean {
+    const players = Math.min([...robots.values()].filter((e) => !away(e)).length, spawn.target.length - 1);
+    const gap = spawn.everyMs[players];
+    if (!gap || t < nextSpawnAt) return false;
+    nextSpawnAt = t + gap;
+    return floor.length < spawn.target[players] && spawnOne(t, players);
+  }
   const freeSlot = () => {
     for (let s = 0; s < MAX_PLAYERS; s++) if (![...robots.values()].some((e) => e.slot === s)) return s;
     return -1;
@@ -92,7 +106,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
         log("pickup", { tag: tagOf(pid), id: a.id, kind: a.kind });
       }
     }
-    if (changed) refill(t);
+    if (changed) refresh();
     // banking needs a robot moving in the vault: standing in it banks nothing
     if (moving(e.walked) && inVault(pos)) {
       const n = store.bank(pid, t).banked;
@@ -150,6 +164,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
       pending.delete(pid);
       if (release(pid, VAULT, t)) changed = true;
     }
+    if (spawnDue(t)) changed = true;
     // and nothing stays with anyone who has neither a robot nor a grace
     if (++steps % SWEEP_STEPS === 0) {
       for (const pid of store.holders()) {
@@ -169,7 +184,8 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     return changed;
   }
 
-  refill(clock);
+  // the first arrival finds a floor
+  while (floor.length < spawn.target[1] && spawnOne(clock, 1));
 
   return {
     /** A stream opened: their robot kept for them, a new one, or a place in

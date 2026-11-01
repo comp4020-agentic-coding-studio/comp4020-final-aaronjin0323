@@ -43,7 +43,8 @@ function broadcast() {
   const hits = arena.hits();
   const vault = store.vaultTotal();
   for (const c of clients) {
-    const mine = { collection: store.collection(c.pid), place: arena.placeOf(c.pid) };
+    const catalog = store.catalog(c.pid);
+    const mine = { catalog, total: Object.values(catalog).reduce((a, b) => a + b, 0), place: arena.placeOf(c.pid) };
     c.res.write(`event: arena\ndata: ${JSON.stringify({ robots, artifacts, hits, vault, mine, you: { tag: c.tag }, serverTime: now })}\n\n`);
   }
 }
@@ -154,6 +155,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         broadcast();
       });
       return;
+    }
+    if (path === "/collection") {
+      const v = visitorOf(req, res);
+      return json(res, 200, { items: store.shelf(v.pid), catalog: store.catalog(v.pid) });
     }
     if (serveStatic(path, res)) return;
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

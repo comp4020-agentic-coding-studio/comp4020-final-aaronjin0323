@@ -110,7 +110,7 @@ describe("supply and rarity", () => {
   });
   test("every extra player makes rare and mythic likelier", () => {
     const share = (p: number, tier: string) => {
-      const w = A.SPAWN.rarity[p];
+      const w: any = A.SPAWN.rarity[p];
       return w[tier] / (w.common + w.rare + w.mythic);
     };
     for (const p of P.slice(1)) {

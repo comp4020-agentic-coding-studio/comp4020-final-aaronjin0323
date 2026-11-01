@@ -104,7 +104,7 @@ async function brawl(browser: Browser) {
     top = Math.max(top, ...sa.robots.map((r: any) => r.speed));
     const n = sa.carrying.length;
     if (n > prev) grabbed = Math.max(grabbed, n);
-    const bank = (await a.locator("[data-banked]").textContent())!.match(/\d+/g)!.reduce((x, y) => x + Number(y), 0);
+    const bank = Number((await a.locator("[data-banked]").textContent())!.match(/\d+/)![0]);
     if (n < prev && bank === banked) {
       knocked++;
       // the same scatter on both screens, artifact for artifact
@@ -126,7 +126,11 @@ async function brawl(browser: Browser) {
   check(same, "both screens show the same artifacts in the same places");
   check(banked >= 1, "delivering by flying through the vault", `${banked}`);
   check(top <= A.SPEED_MAX + 1e-6, "speed stays bounded through a real brawl", `top ${top.toFixed(1)} m/s`);
-  await a.screenshot({ path: ".shots/brawl-1440.png" });
+  await a.waitForFunction((n) => document.querySelectorAll("[data-shelf] .card").length >= n, banked, { timeout: 2000 }).then(() => check(true, "what's delivered appears on your shelf"), () => check(false, "what's delivered appears on your shelf"));
+  check(await a.locator("[data-shelf] canvas").first().isVisible(), "each card shows the artifact");
+  await a.locator(".catalog summary").click();
+  check((await a.locator("[data-catalog] li").count()) === A.CATALOG.length, "the catalog lists every entry, under the shelf");
+  await a.screenshot({ path: ".shots/brawl-1440.png", fullPage: true });
   await a.context().close();
   await b.context().close();
 }

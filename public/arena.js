@@ -43,11 +43,44 @@ export const loadCap = (n) => LAUNCH_MAX / (1 + LOAD_SLOW * n);
 export const loadKeep = (n) => LOAD_TURN * n;
 
 // ---- artifacts and the vault
-/** Three kinds, one set of rules. */
+/** An artifact is a kind, a material and a seed for its details (ADR 30). */
 export const KINDS = ["fish", "cloud", "door"];
+export const KIND_NAMES = { fish: "flying fish", cloud: "rain cloud", door: "door onto stars" };
+export const MATERIALS = {
+  tin: { name: "Tin", rarity: "common" },
+  glass: { name: "Glass", rarity: "rare" },
+  gold: { name: "Gold", rarity: "rare" },
+  starlight: { name: "Starlight", rarity: "mythic" },
+};
+/** Every entry a collector can find: "kind:material". */
+export const CATALOG = KINDS.flatMap((k) => Object.keys(MATERIALS).map((m) => `${k}:${m}`));
 export const ARTIFACT_R = 0.3;
-/** How many are on the floor at once. */
-export const MAX_AVAILABLE = 7;
+/**
+ * Every spawn and rarity parameter, by active players (0 to MAX_PLAYERS).
+ * `target`: the floor is topped up to this. `everyMs`: the gap between
+ * spawns, 0 for none. `rarity`: weights, compared within each row. Per
+ * player, target and spawn rate fall as players join; rarity rises.
+ */
+export const SPAWN = {
+  target: [4, 4, 6, 7, 8],
+  everyMs: [0, 2600, 1900, 1500, 1200],
+  rarity: [
+    { common: 90, rare: 9, mythic: 1 },
+    { common: 90, rare: 9, mythic: 1 },
+    { common: 80, rare: 17, mythic: 3 },
+    { common: 68, rare: 25, mythic: 7 },
+    { common: 54, rare: 32, mythic: 14 },
+  ],
+};
+/** The material a spawn gets with `players` active, from two rolls in 0 to 1. */
+export function rollMaterial(players, r1, r2, spawn = SPAWN) {
+  const w = spawn.rarity[Math.min(players, spawn.rarity.length - 1)];
+  const total = w.common + w.rare + w.mythic;
+  const x = r1 * total;
+  const tier = x < w.common ? "common" : x < w.common + w.rare ? "rare" : "mythic";
+  const names = Object.keys(MATERIALS).filter((m) => MATERIALS[m].rarity === tier);
+  return names[Math.min(names.length - 1, Math.floor(r2 * names.length))];
+}
 export const VAULT = [ARENA.w / 2, ARENA.h / 2];
 export const VAULT_R = 1.3;
 const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
@@ -105,6 +138,8 @@ export function collide(a, b) {
   return { a: na, b: nb, closing, n };
 }
 
+/** How far from a wall a scattered artifact lands, so it's drawn whole. */
+const WALL_GAP = 0.7;
 /** The unit fan a robot's cargo spreads in: straight on, then out to ±80°. */
 const FAN = [[1, 0], [0.766, 0.643], [0.766, -0.643], [0.174, 0.985], [0.174, -0.985]];
 /** Where `n` artifacts from a robot at `pos` land: spread outward around
@@ -116,7 +151,7 @@ export function scatterSpots(pos, away, n) {
     const f = FAN[i % FAN.length];
     const d = [away[0] * f[0] - away[1] * f[1], away[0] * f[1] + away[1] * f[0]];
     const reach = ROBOT_R + ARTIFACT_R + 0.9 + 0.3 * (i % 2);
-    const q = [clamp(pos[0] + d[0] * reach, ARTIFACT_R, ARENA.w - ARTIFACT_R), clamp(pos[1] + d[1] * reach, ARTIFACT_R, ARENA.h - ARTIFACT_R)];
+    const q = [clamp(pos[0] + d[0] * reach, WALL_GAP, ARENA.w - WALL_GAP), clamp(pos[1] + d[1] * reach, WALL_GAP, ARENA.h - WALL_GAP)];
     const v = [q[0] - VAULT[0], q[1] - VAULT[1]];
     const len = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
     const edge = VAULT_R + ARTIFACT_R + 0.1;

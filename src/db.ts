@@ -4,7 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 // @ts-ignore -- plain JS module shared with the page
-import { CARRY_MAX, KINDS, MAX_AVAILABLE, SPOTS, VAULT, touches } from "../public/arena.js";
+import { CARRY_MAX, KINDS, SPOTS, VAULT, touches } from "../public/arena.js";
 
 /** Every change to the schema, in order; `user_version` says how many are
  * applied. Never edit one that has shipped. */
@@ -26,7 +26,12 @@ const MIGRATIONS = [
    CREATE TRIGGER artifacts_banked_final BEFORE UPDATE OF state ON artifacts WHEN OLD.state = 'banked'
      BEGIN SELECT RAISE(ABORT, 'banked is final'); END;
    CREATE TRIGGER artifacts_kept BEFORE DELETE ON artifacts BEGIN SELECT RAISE(ABORT, 'artifacts are never deleted'); END;`,
+  // 2: what an artifact is made of, and the seed of its details (ADR 30)
+  `ALTER TABLE artifacts ADD COLUMN material TEXT NOT NULL DEFAULT 'tin';
+   ALTER TABLE artifacts ADD COLUMN seed INTEGER NOT NULL DEFAULT 0;`,
 ];
+/** How many artifacts a shelf shows. */
+export const SHELF_MAX = 60;
 
 /**
  * Brings a database up to the newest migration. Before changing a file that
@@ -96,24 +101,19 @@ export function openStore(path: string) {
       return r ? { tag: r.tag as string } : null;
     },
 
-    /** Tops the floor up to MAX_AVAILABLE, at free spots no robot in `avoid`
-     * is touching. How many it added. */
-    fillFloor(now: number, avoid: number[][] = [], random: () => number = Math.random): number {
-      return tx(() => {
-        const taken = db.prepare("SELECT x, y FROM artifacts WHERE state = 'available'").all() as Row[];
-        let free = (SPOTS as number[][]).filter((p) => !taken.some((t) => touches([t.x, t.y], p)) && !avoid.some((r) => touches(r, p)));
-        let added = 0;
-        for (let n = taken.length; n < MAX_AVAILABLE && free.length; n++, added++) {
-          const p = free[Math.floor(random() * free.length)];
-          free = free.filter((q) => q !== p);
-          const kind = KINDS[Math.floor(random() * KINDS.length)];
-          db.prepare("INSERT INTO artifacts (id, kind, x, y, state, spawned_at) VALUES (?, ?, ?, ?, 'available', ?)").run(randomUUID(), kind, p[0], p[1], now);
-        }
-        return added;
-      });
+    /** One new artifact at a free spot no robot in `avoid` is touching, of
+     * the material `roll` gives. False if there's no room. */
+    spawn(now: number, avoid: number[][] = [], random: () => number = Math.random, roll: () => string = () => "tin"): boolean {
+      const taken = db.prepare("SELECT x, y FROM artifacts WHERE state = 'available'").all() as Row[];
+      const free = (SPOTS as number[][]).filter((p) => !taken.some((t) => touches([t.x, t.y], p)) && !avoid.some((r) => touches(r, p)));
+      if (!free.length) return false;
+      const p = free[Math.floor(random() * free.length)];
+      const kind = KINDS[Math.floor(random() * KINDS.length)];
+      db.prepare("INSERT INTO artifacts (id, kind, material, seed, x, y, state, spawned_at) VALUES (?, ?, ?, ?, ?, ?, 'available', ?)").run(randomUUID(), kind, roll(), Math.floor(random() * 1_000_000), p[0], p[1], now);
+      return true;
     },
-    floor: () => (db.prepare("SELECT id, kind, x, y, ready_at FROM artifacts WHERE state = 'available' ORDER BY spawned_at, id").all() as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string, pos: [r.x, r.y], readyAt: r.ready_at as number })),
-    cargo: (pid: string) => (db.prepare("SELECT id, kind FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string })),
+    floor: () => (db.prepare("SELECT id, kind, material, seed, x, y, ready_at FROM artifacts WHERE state = 'available' ORDER BY spawned_at, id").all() as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string, material: r.material as string, seed: r.seed as number, pos: [r.x, r.y], readyAt: r.ready_at as number })),
+    cargo: (pid: string) => (db.prepare("SELECT id, kind, material, seed FROM artifacts WHERE state = 'carried' AND holder = ? ORDER BY picked_at, id").all(pid) as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string, material: r.material as string, seed: r.seed as number })),
 
     /** A touch: theirs to carry if it's still available and ready, and they
      * carry fewer than CARRY_MAX. */
@@ -165,6 +165,15 @@ export function openStore(path: string) {
       for (const r of db.prepare("SELECT kind, COUNT(*) AS c FROM artifacts WHERE state = 'banked' AND owner = ? GROUP BY kind").all(pid) as Row[]) out[r.kind] = r.c;
       return out;
     },
+    /** How many of each catalog entry a visitor has banked: only those found. */
+    catalog(pid: string): Record<string, number> {
+      const out: Record<string, number> = {};
+      for (const r of db.prepare("SELECT kind, material, COUNT(*) AS c FROM artifacts WHERE state = 'banked' AND owner = ? GROUP BY kind, material").all(pid) as Row[]) out[`${r.kind}:${r.material}`] = r.c;
+      return out;
+    },
+    /** A visitor's newest banked artifacts. */
+    shelf: (pid: string) =>
+      (db.prepare("SELECT id, kind, material, seed, banked_at FROM artifacts WHERE state = 'banked' AND owner = ? ORDER BY banked_at DESC, id LIMIT ?").all(pid, SHELF_MAX) as Row[]).map((r) => ({ id: r.id as string, kind: r.kind as string, material: r.material as string, seed: r.seed as number, at: r.banked_at as number })),
     /** Everything anyone has ever banked. */
     vaultTotal: () => (db.prepare("SELECT COUNT(*) AS c FROM artifacts WHERE state = 'banked' AND owner IS NOT NULL").get() as Row).c as number,
   };

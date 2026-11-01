@@ -11,7 +11,7 @@ const T0 = 1_800_000_000_000; // on the 20 ms grid
 
 function world(store: any = openStore(":memory:"), start = T0, spawn?: any) {
   let seed = 7;
-  const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647; // fits a double exactly
   const arena = createArena(store, { now: start, random, ...(spawn ? { spawn } : {}) });
   let now = start;
   let seq = 0;
@@ -324,8 +324,14 @@ test("more players, more rare and mythic artifacts actually spawned", () => {
     const s = openStore(":memory:");
     const w = world(s, T0, { ...A.SPAWN, target: [0, 400, 400, 400, 400], everyMs: [0, 20, 20, 20, 20] });
     for (let i = 0; i < players; i++) w.join();
-    w.run(20 * 300);
+    // the floor has few spots, so clear them to sample enough spawns
+    for (let i = 0; i < 40; i++) {
+      w.run(20 * 30);
+      s.db.exec("UPDATE artifacts SET state = 'banked' WHERE state = 'available'");
+      w.arena.refresh();
+    }
     const f: any[] = s.db.prepare("SELECT material FROM artifacts").all() as any[];
+    expect(f.length).toBeGreaterThan(500);
     return f.filter((x) => x.material !== "tin").length / f.length;
   };
   expect(rareShare(4)).toBeGreaterThan(rareShare(1));
@@ -344,4 +350,16 @@ test("an artifact keeps its material and seed from floor to collection", () => {
   w.run(40);
   expect(w.store.shelf(p)[0]).toMatchObject({ kind: "door", material: "starlight", seed: 77 });
   expect(w.store.catalog(p)["door:starlight"]).toBe(1);
+});
+
+test("a picked-up artifact leaves the floor on that step", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  w.store.db.prepare("INSERT INTO artifacts (id, kind, x, y, state, spawned_at) VALUES ('here', 'fish', 3, 3, 'available', 0)").run();
+  w.arena.refresh();
+  w.place(p, [3, 3]);
+  w.run(20);
+  expect(w.store.cargo(p)).toHaveLength(1);
+  expect(w.arena.floor().map((a: any) => a.id)).not.toContain("here");
 });

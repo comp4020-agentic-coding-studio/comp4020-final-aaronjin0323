@@ -84,7 +84,7 @@ async function chase(to: () => number[], done: () => boolean, ms = 15_000) {
   return done();
 }
 const nearest = () => [...last.artifacts].sort((a, b) => Math.hypot(a.pos[0] - here().pos[0], a.pos[1] - here().pos[1]) - Math.hypot(b.pos[0] - here().pos[0], b.pos[1] - here().pos[1]))[0].pos;
-const banked = () => Object.values(last.mine.collection as Record<string, number>).reduce((a, b) => a + b, 0);
+const banked = () => last.mine.total as number;
 
 await start();
 try {
