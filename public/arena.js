@@ -86,16 +86,17 @@ export const VAULT_R = 1.3;
 const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
 /** A robot at `pos` is in the vault. */
 export const inVault = (pos) => dist(pos, VAULT) < VAULT_R;
-/** Where artifacts may appear: a grid inside the walls, clear of the vault. */
+/** A robot at `pos` touches an artifact at `at`. */
+export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
+/** Where artifacts may appear: a grid inside the walls, clear of the vault
+ * and of every robot's starting spot. */
 export const SPOTS = [];
 for (let x = 1.4; x < ARENA.w - 1; x += 1.8) {
   for (let y = 1.4; y < ARENA.h - 1; y += 1.8) {
     const p = [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
-    if (dist(p, VAULT) > VAULT_R + ROBOT_R + ARTIFACT_R) SPOTS.push(p);
+    if (dist(p, VAULT) > VAULT_R + ROBOT_R + ARTIFACT_R && SPAWNS.every((q) => !touches(q, p))) SPOTS.push(p);
   }
 }
-/** A robot at `pos` touches an artifact at `at`. */
-export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
 
 // ---- contact
 /** Robots bounce off each other keeping this share of their closing speed. */

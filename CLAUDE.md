@@ -90,7 +90,8 @@ ADR 28 says which still stand.
   by active players (robots not ghosts, 0 to 4), and `createArena` accepts
   another table.
 - **One artifact appears each `everyMs` while the floor is under `target`,**
-  at safe spots clear of the vault, and only with someone playing. Per
+  at safe spots clear of the vault and the robots' starting spots, and only
+  with someone playing. Per
   player, both the target and the spawn rate fall as players join, and the
   chance of a rare or mythic rises. Nothing expires; scattered artifacts can
   take the floor over its target.

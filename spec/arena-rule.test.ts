@@ -82,6 +82,9 @@ describe("the vault and the floor", () => {
     for (const p of A.scatterSpots([A.VAULT[0] - 1, A.VAULT[1]], [1, 0], 5)) expect(A.inVault(p)).toBe(false);
     for (const p of A.scatterSpots([0.6, 0.6], [-0.7, -0.7], 5)) expect(Math.min(p[0], p[1])).toBeGreaterThanOrEqual(A.ARTIFACT_R);
   });
+  test("no artifact can appear on a robot's starting spot", () => {
+    for (const p of A.SPOTS) for (const s of A.SPAWNS) expect(A.touches(s, p)).toBe(false);
+  });
   test("spawns are four, inside the walls, clear of each other", () => {
     expect(A.SPAWNS).toHaveLength(A.MAX_PLAYERS);
     for (const s of A.SPAWNS) expect(s[0] > A.ROBOT_R && s[1] > A.ROBOT_R).toBe(true);
