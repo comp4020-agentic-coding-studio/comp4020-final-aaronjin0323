@@ -4,7 +4,7 @@
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
 import { ARENA, ARTIFACT_R, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
-import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, connection, connectionMessage, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, shield, trust } from "./arena-ui.js";
+import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, collectionWords, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, trust } from "./arena-ui.js";
 import { drawKind } from "./arena-draw.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -26,7 +26,8 @@ let pull = null; // { from, to } in metres, while dragging
 // where each robot was drawn minus where its new snapshot puts it, eased
 // away, so a robot never jumps when the server's word changes its path
 const corrections = new Map();
-let flashes = []; // knocks: where, and when (server ms)
+let flashes = []; // contacts: where, and when (server ms)
+const thrown = new Map(); // artifact id to where it left a robot, while it settles
 const serverNow = () => Date.now() + offset;
 const myRobot = () => (you ? robots.find((r) => r.tag === you.tag) : null);
 const myLoad = () => myRobot()?.carrying?.length ?? 0;
@@ -64,12 +65,14 @@ function connect() {
       const c = corrections.get(r.tag) ?? [0, 0];
       corrections.set(r.tag, [c[0] + was[0] - is[0], c[1] + was[1] - is[1]]);
     }
-    for (const h of d.hits ?? []) flashes.push(h);
+    for (const h of d.hits ?? []) {
+      flashes.push(h);
+      for (const s of h.scattered) thrown.set(s.id, s.from);
+    }
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
-    const banked = Object.values(d.mine.collection).reduce((a, b) => a + b, 0);
     $("[data-cargo]").textContent = `Carrying ${server?.carrying.length ?? 0}`;
-    $("[data-banked]").textContent = `Banked ${banked}`;
+    $("[data-banked]").textContent = collectionWords(d.mine.collection);
     $("[data-vault]").textContent = `Vault ${d.vault}`;
     place = d.mine.place;
     showStatus();
@@ -193,7 +196,6 @@ function draw() {
     drawCargo(p, snap.vel, r.carrying ?? [], now);
     drawRobot(p, r.slot, isMe);
     g.globalAlpha = 1;
-    drawShield(p, shield(r.protectedUntil ?? 0, now));
   }
   requestAnimationFrame(draw);
 }
@@ -229,8 +231,11 @@ function drawTrail(p, vel, colour) {
 }
 // an artifact: faded with a ring filling while it can't be taken yet
 function drawArtifact(a, now) {
-  const x = px(a.pos[0]), y = px(a.pos[1]);
   const ready = readiness(a.readyAt ?? 0, now);
+  const from = thrown.get(a.id);
+  if (ready >= 1) thrown.delete(a.id);
+  const at = from && ready < 1 && !reducedMotion.matches ? flying(from, a.pos, ready) : a.pos;
+  const x = px(at[0]), y = px(at[1]);
   g.globalAlpha = ready < 1 ? 0.4 + 0.4 * ready : 1;
   drawKind(g, a.kind, x, y, px(ARTIFACT_R) * 1.15, reducedMotion.matches ? 0 : now / 1000);
   g.globalAlpha = 1;
@@ -241,7 +246,7 @@ function drawArtifact(a, now) {
   g.lineWidth = 2.5;
   g.stroke();
 }
-// a knock: a ring opening out where it happened
+// a contact: a ring opening out where it happened
 function drawFlashes(now) {
   flashes = flashes.filter((f) => now - f.at < 700);
   for (const f of flashes) {
@@ -252,17 +257,6 @@ function drawFlashes(now) {
     g.lineWidth = 3;
     g.stroke();
   }
-}
-// a shield round a robot that just dropped one: strong, then fading away
-function drawShield(p, strength) {
-  if (strength <= 0) return;
-  g.beginPath();
-  g.arc(px(p[0]), px(p[1]), px(ROBOT_R) + 14, 0, Math.PI * 2);
-  g.setLineDash([6, 4]);
-  g.strokeStyle = `rgba(160,200,255,${0.25 + 0.75 * strength})`;
-  g.lineWidth = 3;
-  g.stroke();
-  g.setLineDash([]);
 }
 // cargo trails behind a robot: what it carries, then rings for the room left
 function drawCargo(p, vel, carrying, now) {

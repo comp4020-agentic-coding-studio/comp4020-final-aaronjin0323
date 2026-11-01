@@ -1,7 +1,7 @@
 // The arena page's decisions, as small pure functions. No DOM and no fetch,
 // so spec/arena-ui.test.ts holds them without a browser. The movement
 // numbers themselves are all in arena.js.
-import { ARENA, CARRY_MAX, DROP_PROTECT_MS, GRACE_MS, MIN_PULL, PICKUP_DELAY_MS, PULL_MAX } from "./arena.js";
+import { ARENA, CARRY_MAX, GRACE_MS, MIN_PULL, PULL_MAX, SETTLE_MS } from "./arena.js";
 
 /** The slots' colours; each differs by a mark too (arena-app.js). */
 export const SLOT_COLOURS = ["#ff6b4a", "#2ec4b6", "#ffc83d", "#b48cff"];
@@ -74,10 +74,17 @@ export function behind(vel, pos) {
   const d = Math.hypot(dx, dy);
   return d < 1e-9 ? [0, 1] : [dx / d, dy / d];
 }
-/** How ready a dropped artifact is at `now`: 0 just dropped, 1 free to take. */
-export const readiness = (readyAt, now) => (now >= readyAt ? 1 : Math.max(0, 1 - (readyAt - now) / PICKUP_DELAY_MS));
-/** How strong a robot's shield is at `now`: 1 just knocked, fading to 0. */
-export const shield = (protectedUntil, now) => (now >= protectedUntil ? 0 : Math.min(1, (protectedUntil - now) / DROP_PROTECT_MS));
+/** How settled a scattered artifact is at `now`: 0 just thrown, 1 free to take. */
+export const readiness = (readyAt, now) => (now >= readyAt ? 1 : Math.max(0, 1 - (readyAt - now) / SETTLE_MS));
+/** Where a thrown artifact is drawn: sliding out, slowing as it settles. */
+export function flying(from, to, ready) {
+  const k = 1 - (1 - ready) * (1 - ready);
+  return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+}
+/** Your permanent collection, in words. */
+export function collectionWords(c) {
+  return `Collected: ${c.fish} fish, ${c.cloud} cloud${c.cloud === 1 ? "" : "s"}, ${c.door} door${c.door === 1 ? "" : "s"}`;
+}
 /** The one line about you: playing, or your place in line. Never about anyone else. */
 export function placeWords(place) {
   return place ? `The arena is full. You're number ${place} in line for the next robot.` : "";
