@@ -8,12 +8,13 @@ import { marked } from "marked";
 import { openStore } from "./db.ts";
 import { log } from "./log.ts";
 import { createArena } from "./arena.ts";
+// @ts-ignore -- plain JS module shared with the page
+import { BEAT_MS } from "../public/arena.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PRODUCTION = process.env.NODE_ENV === "production";
 const DB_PATH = process.env.DB_PATH ?? "./.data/arena.db";
 const PUBLIC = resolve("public");
-const HEARTBEAT_MS = 15_000;
 const TICK_MS = 50;
 const STREAMS_PER_VISITOR = 4;
 const BODY_MAX = 4096;
@@ -54,8 +55,10 @@ setInterval(() => {
   if (arena.tick(Date.now())) broadcast();
 }, TICK_MS).unref();
 setInterval(() => {
-  for (const c of clients) c.res.write(": beat\n\n");
-}, HEARTBEAT_MS).unref();
+  // an event, not a comment: a page can't hear a comment, and silence is
+  // how it tells that its network has gone
+  for (const c of clients) c.res.write("event: beat\ndata: {}\n\n");
+}, BEAT_MS).unref();
 
 // ---- requests
 const json = (res: ServerResponse, status: number, body: unknown) => {

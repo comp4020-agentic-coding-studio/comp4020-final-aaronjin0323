@@ -9,6 +9,7 @@
 // Screenshots go to .shots/ (gitignored): read them. It plays in the arena
 // and banks artifacts, so point it at a throwaway database.
 import { mkdirSync } from "node:fs";
+import net from "node:net";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
 // @ts-ignore -- plain JS module shared with the page
@@ -358,7 +359,121 @@ async function journey(browser: Browser) {
   await trip(browser, { viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, "land", true);
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey };
+/** Four real pages at once, two desktop and two phones, playing and dropping out. */
+async function together(browser: Browser) {
+  const pages = [await visitor(browser), await visitor(browser), await visitor(browser, PHONE), await visitor(browser, PHONE)];
+  const [a, b, c, d] = pages;
+  await a.waitForTimeout(300);
+  const all = await Promise.all(pages.map(probe));
+  check(all.every((s) => s.robots.length === 4), "four pages, four robots on every screen");
+  check(new Set(all.map((s) => s.you)).size === 4, "each its own player");
+  check(new Set(all.map((s) => s.robots.map((r: any) => r.slot).sort().join())).size === 1, "each in its own slot");
+  const floor = (s: any) => s.artifacts.map((f: any) => `${f.id}:${f.pos}`).sort().join();
+  check(new Set(all.map(floor)).size === 1, "and every screen shows the same floor");
+  // the same robot, in motion, on four screens at one moment
+  await launch(a, [1, 0.5]);
+  await a.waitForTimeout(250);
+  const tag = all[0].you;
+  const seen = await Promise.all(pages.map((p) => p.evaluate((t) => {
+    const x = (document.querySelector("[data-arena]") as any).probe().robots.find((r: any) => r.tag === t);
+    return { pos: x.pos, at: Date.now() };
+  }, tag)));
+  const spread = Math.max(...seen.flatMap((u) => seen.map((v) => Math.hypot(u.pos[0] - v.pos[0], u.pos[1] - v.pos[1]) - 10 * Math.abs(u.at - v.at) / 1000)));
+  check(spread < 0.5, "a moving robot is in the same place on every screen", `within ${Math.max(0, spread).toFixed(2)} m`);
+  await Promise.all(pages.map((p, i) => p.screenshot({ path: `.shots/together-${i < 2 ? "1440" : "390"}-${i}.png` })));
+
+  // a refresh mid-carry
+  let held = false;
+  for (const end = Date.now() + 20_000; Date.now() < end && !held; await b.waitForTimeout(220)) {
+    const s = await probe(b);
+    held = s.carrying.length > 0;
+    const near = [...s.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(s).pos[0], x.pos[1] - me(s).pos[1]) - Math.hypot(y.pos[0] - me(s).pos[0], y.pos[1] - me(s).pos[1]))[0];
+    if (!held && near) await launch(b, toward(s, near.pos), 0.8);
+  }
+  check(held, "one page picks something up");
+  const before = await probe(b);
+  await b.waitForTimeout(800); // come to rest clear of the others
+  await b.reload();
+  await b.waitForFunction(() => document.body.dataset.conn === "live");
+  await b.waitForTimeout(300);
+  const after = await probe(b);
+  check(after.you === before.you && me(after).slot === me(before).slot, "a refresh keeps the same robot");
+  check(after.carrying.length >= 1 || me(after) === undefined, "and what it carried", after.carrying.length);
+  check((await b.locator("[data-tray] [data-full]").count()) === after.carrying.length, "and the tray shows it");
+
+  void c;
+  void d;
+  for (const p of pages) await p.context().close();
+}
+
+/** A network that vanishes without closing anything, through a proxy we can
+ * freeze: bytes just stop, which no browser "offline" switch reproduces. */
+async function stall(browser: Browser) {
+  const target = new URL(APP);
+  let frozen = false;
+  const open = new Set<net.Socket>();
+  const proxy = net.createServer((client) => {
+    if (frozen) return client.destroy();
+    const up = net.connect(Number(target.port), target.hostname);
+    open.add(client);
+    open.add(up);
+    client.on("data", (d) => { if (!frozen) up.write(d); });
+    up.on("data", (d) => { if (!frozen) client.write(d); });
+    const end = () => { client.destroy(); up.destroy(); open.delete(client); open.delete(up); };
+    client.on("close", end).on("error", end);
+    up.on("close", end).on("error", end);
+  });
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+  const port = (proxy.address() as net.AddressInfo).port;
+  const ctx = await browser.newContext(PHONE);
+  const p = await ctx.newPage();
+  await p.goto(`http://127.0.0.1:${port}/`);
+  await p.waitForFunction(() => document.body.dataset.conn === "live");
+  await p.waitForTimeout(A.BEAT_MS + 1500);
+  check((await p.evaluate(() => document.body.dataset.conn)) === "live", "a quiet arena stays live on the heartbeat alone");
+  frozen = true;
+  const t0 = Date.now();
+  await p.waitForFunction(() => document.body.dataset.conn !== "live", null, { timeout: A.BEAT_MISS_MS + 5000 }).then(() => check(true, "a stalled phone notices", `${((Date.now() - t0) / 1000).toFixed(1)} s`), () => check(false, "a stalled phone notices"));
+  check(/reconnecting/i.test((await p.locator("[data-status]").textContent()) ?? ""), "and says so");
+  await p.screenshot({ path: ".shots/stalled-390.png" });
+  frozen = false;
+  for (const s of open) s.destroy();
+  await p.waitForFunction(() => document.body.dataset.conn === "live", null, { timeout: 25_000 }).then(() => check(true, "and comes back on its own"), () => check(false, "and comes back on its own"));
+  check(await p.locator("[data-status]").isHidden(), "the message goes");
+  await ctx.close();
+  proxy.close();
+}
+
+/** Arranging on a phone: tap, choose, the arrow buttons, save. */
+async function phoneroom(browser: Browser) {
+  const p = await visitor(browser, PHONE);
+  check(await earn(p), "a phone earns an artifact");
+  await p.goto(`${APP}/room/`);
+  await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+  await p.tap("[data-edit]");
+  const s = await roomProbe(p);
+  const stand = s.items.find((i: any) => i.type === "plinth");
+  await p.locator("[data-room]").scrollIntoViewIfNeeded();
+  const now = (await roomProbe(p)).items.find((i: any) => i.uid === stand.uid);
+  await p.touchscreen.tap(now.cx, now.cy);
+  await p.waitForSelector("[data-selection]:not([hidden])");
+  check(true, "a tap selects a stand");
+  await p.selectOption("[data-artifact]", { index: 1 });
+  await p.tap('[data-nudge="1,0"]');
+  await p.tap('[data-nudge="1,0"]');
+  await p.tap('[data-nudge="0,1"]');
+  await p.screenshot({ path: ".shots/edit-390.png", fullPage: true });
+  await p.tap("[data-save]");
+  await p.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
+  await p.reload();
+  await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev > 0);
+  const moved = (await roomProbe(p)).items.find((i: any) => i.uid === stand.uid);
+  check(moved.x > stand.x && moved.y > stand.y && !!moved.artifact, "the arrow buttons moved it, and it saved", `${stand.x} to ${moved.x}`);
+  check((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, "the panel doesn't scroll sideways");
+  await p.context().close();
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

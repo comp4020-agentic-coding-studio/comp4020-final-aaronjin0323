@@ -37,3 +37,10 @@ test("the room asks for what's waiting", () => {
   expect(U.waitingWords(shelf.slice(0, 1), [{ artifact: "a" }])).toBe("");
   expect(U.waitingWords([], [])).toBe("");
 });
+
+test("silence counts as lost, but not a moment's quiet", () => {
+  expect(U.silent(1000, 1000 + A.BEAT_MS)).toBe(false);
+  expect(U.silent(1000, 1000 + A.BEAT_MISS_MS - 1)).toBe(false);
+  expect(U.silent(1000, 1000 + A.BEAT_MISS_MS + 1)).toBe(true);
+  expect(A.BEAT_MISS_MS).toBeGreaterThanOrEqual(A.BEAT_MS * 2); // one lost beat isn't enough
+});

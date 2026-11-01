@@ -193,6 +193,11 @@ export function checkLaunch(x) {
 
 /** A robot standing still at `pos` from server time `t`. */
 export const standing = (pos, t) => ({ pos: [pos[0], pos[1]], vel: [0, 0], t, seq: 0 });
+// ---- the connection
+/** How often the server speaks when nothing else is happening, in ms. */
+export const BEAT_MS = 5_000;
+/** How long a page waits, hearing nothing, before it calls the stream lost. */
+export const BEAT_MISS_MS = 12_000;
 // ---- leaving
 /** How long a disconnected player's robot waits for them, in ms. */
 export const GRACE_MS = 10_000;

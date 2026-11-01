@@ -1,7 +1,7 @@
 // The arena page's decisions, as small pure functions. No DOM and no fetch,
 // so spec/arena-ui.test.ts holds them without a browser. The movement
 // numbers themselves are all in arena.js.
-import { ARENA, CARRY_MAX, CATALOG, GRACE_MS, KIND_NAMES, LAUNCH_MAX, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS, loadCap } from "./arena.js";
+import { ARENA, BEAT_MISS_MS, CARRY_MAX, CATALOG, GRACE_MS, KIND_NAMES, LAUNCH_MAX, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS, loadCap } from "./arena.js";
 
 /** The slots' colours; each differs by a mark too (arena-app.js). */
 export const SLOT_COLOURS = ["#ff6b4a", "#2ec4b6", "#ffc83d", "#b48cff"];
@@ -15,6 +15,8 @@ export function connection(c, event) {
   return c;
 }
 export const canPlay = (c) => c.status === "live" && c.hasState;
+/** Whether a stream has been quiet too long to be alive. */
+export const silent = (lastHeard, now) => now - lastHeard > BEAT_MISS_MS;
 /** How long before opening a refused stream again: 1 s, doubling, at most 15 s. */
 export const retryDelay = (tries) => Math.min(15_000, 1000 * 2 ** Math.min(tries, 4));
 

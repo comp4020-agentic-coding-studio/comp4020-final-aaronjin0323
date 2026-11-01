@@ -63,7 +63,7 @@ async function open() {
       for await (const chunk of r.body as any) {
         buf += dec.decode(chunk, { stream: true });
         for (let i; (i = buf.indexOf("\n\n")) >= 0; buf = buf.slice(i + 2)) {
-          const m = /^data: (.*)$/m.exec(buf.slice(0, i));
+          const m = /^event: arena$/m.test(buf.slice(0, i)) ? /^data: (.*)$/m.exec(buf.slice(0, i)) : null;
           if (m) last = JSON.parse(m[1]);
         }
       }
