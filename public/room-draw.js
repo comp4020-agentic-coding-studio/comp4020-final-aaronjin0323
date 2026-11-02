@@ -106,17 +106,24 @@ function floorTexture(g, W, H, kind) {
       g.fill();
     }
   } else if (kind === "herringbone") {
-    const bw = W / 7, bh = bw / 2.4;
-    for (let a = -2; a < 10; a++) for (let b = -2; b < 12; b++) {
-      g.save();
-      g.translate((a * bw) / 1 + (b % 2) * bw * 0.5, (b * bw) / 1.4);
-      g.rotate(b % 2 ? Math.PI / 4 : -Math.PI / 4);
-      g.fillStyle = `rgba(${n() > 0.5 ? "255,232,196" : "54,32,14"},${n() * 0.12})`;
-      g.fillRect(0, 0, bw, bh);
-      g.strokeStyle = "rgba(50,30,14,.3)";
-      g.lineWidth = W * 0.0016;
-      g.strokeRect(0, 0, bw, bh);
-      g.restore();
+    // columns of slanted planks, leaning opposite ways, meeting at a seam
+    const cols = 6, cw = W / cols, ph = H / 16;
+    for (let c = 0; c < cols; c++) {
+      const lean = c % 2 ? -cw : cw;
+      for (let p = -8; p < 24; p++) {
+        const y = p * ph, x0 = c * cw;
+        g.fillStyle = `rgba(${n() > 0.5 ? "255,232,196" : "54,32,14"},${n() * 0.14})`;
+        g.beginPath();
+        g.moveTo(x0, y);
+        g.lineTo(x0 + cw, y + lean);
+        g.lineTo(x0 + cw, y + lean + ph);
+        g.lineTo(x0, y + ph);
+        g.closePath();
+        g.fill();
+        g.strokeStyle = "rgba(50,30,14,.32)";
+        g.lineWidth = W * 0.0014;
+        g.stroke();
+      }
     }
   } else if (kind === "checker") {
     for (let a = 0; a < 8; a++) for (let b = 0; b < 8; b++) if ((a + b) % 2) {
