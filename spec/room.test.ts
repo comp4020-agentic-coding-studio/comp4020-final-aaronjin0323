@@ -60,10 +60,19 @@ describe("the view", () => {
       }
     }
   });
-  test("what's nearer is drawn later, and larger", () => {
+  test("what's nearer is drawn later, and the wall comes first", () => {
     const o = R.order([{ uid: 1, type: "plinth", x: 0.5, y: 0.9 }, { uid: 2, type: "plinth", x: 0.5, y: 0.1 }, { uid: 3, type: "painting", x: 0.5, y: 0.5 }]);
     expect(o.map((i: any) => i.uid)).toEqual([3, 2, 1]);
-    expect(R.project({ x: 0.5, y: 0.9 }, "floor").s).toBeGreaterThan(R.project({ x: 0.5, y: 0.1 }, "floor").s);
+    expect(R.project({ x: 0.9, y: 0.9 }, "floor").Y).toBeGreaterThan(R.project({ x: 0.1, y: 0.1 }, "floor").Y);
+  });
+  test("the room fits its view, floor corners and all", () => {
+    for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const p = R.project({ x, y }, "floor");
+      expect(p.X).toBeGreaterThan(0);
+      expect(p.X).toBeLessThan(1);
+      expect(p.Y).toBeLessThan(1);
+    }
+    expect(R.project({ x: 0, y: 1 }, "wall").Y).toBeGreaterThan(0);
   });
   test("a press finds the frontmost thing there", () => {
     const items = [{ uid: 1, type: "plinth", x: 0.5, y: 0.5 }, { uid: 2, type: "plinth", x: 0.5, y: 0.6 }];
@@ -160,5 +169,63 @@ describe("the store", () => {
     s = openStore(path);
     expect(s.roomOf(a.tag)).toMatchObject({ rev: 1, layout: { wall: "walnut" } });
     s.close();
+  });
+});
+
+describe("walking", () => {
+  const stand = { uid: 1, type: "plinth", x: 0.5, y: 0.5 };
+  const dist = (a: any, b: any) => Math.hypot(a.x - b.x, a.y - b.y);
+  test("steering moves you, at a bounded pace", () => {
+    const n = R.stepWalker({ x: 0.2, y: 0.2 }, [1, 0], 0.1, []);
+    expect(n.x).toBeCloseTo(0.2 + R.WALK_SPEED * 0.1, 6);
+    expect(n.y).toBeCloseTo(0.2, 6);
+  });
+  test("the walls hold you in", () => {
+    let w = { x: 0.5, y: 0.5 };
+    for (let i = 0; i < 400; i++) w = R.stepWalker(w, [1, 1], 0.05, []);
+    expect(w.x).toBeLessThanOrEqual(1);
+    expect(w.y).toBeLessThanOrEqual(1);
+    expect(R.blocked(w, [])).toBe(false);
+  });
+  test("nothing placed can be walked through", () => {
+    let w = { x: 0.2, y: 0.5 };
+    for (let i = 0; i < 200; i++) {
+      w = R.stepWalker(w, [1, 0], 0.03, [stand]);
+      expect(R.blocked(w, [stand])).toBe(false);
+    }
+    expect(w.x).toBeLessThan(0.5);
+  });
+  test("a rug and a painting don't block anyone", () => {
+    const soft = [{ uid: 1, type: "rug", x: 0.5, y: 0.5 }, { uid: 2, type: "painting", x: 0.5, y: 0.5 }];
+    expect(R.blocked({ x: 0.5, y: 0.5 }, soft)).toBe(false);
+  });
+  test("you slide along what stops you", () => {
+    const n = R.stepWalker({ x: 0.5 - R.WALK_R - R.footR(stand) - 0.002, y: 0.47 }, [1, 0.6], 0.05, [stand]);
+    expect(n.y).toBeGreaterThan(0.47);
+  });
+  test("a route goes round things, and every step is clear", () => {
+    const wall = [0.15, 0.3, 0.45, 0.6, 0.75].map((y, i) => ({ uid: i + 1, type: "plinth", x: 0.5, y }));
+    const path = R.route({ x: 0.2, y: 0.4 }, { x: 0.8, y: 0.4 }, wall);
+    expect(path.length).toBeGreaterThan(2);
+    for (const p of path) expect(R.blocked(p, wall)).toBe(false);
+    expect(dist(path[path.length - 1], { x: 0.8, y: 0.4 })).toBeLessThan(0.08);
+  });
+  test("a route to somewhere blocked stops beside it", () => {
+    const path = R.route({ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }, [stand]);
+    const end = path[path.length - 1];
+    expect(R.blocked(end, [stand])).toBe(false);
+    expect(dist(end, stand)).toBeLessThan(0.2);
+  });
+  test("a start spot is always free", () => {
+    const items = [{ uid: 1, type: "plinth", x: R.WALK_START.x, y: R.WALK_START.y }];
+    expect(R.blocked(R.freeNear(R.WALK_START, items), items)).toBe(false);
+  });
+  test("what's in reach: artifacts on show and seats, the nearest first", () => {
+    const items = [{ ...stand, artifact: "a" }, { uid: 2, type: "plinth", x: 0.2, y: 0.2 }, { uid: 3, type: "bench", x: 0.8, y: 0.8 }];
+    const shown = { a: { kind: "fish" } };
+    expect(R.reachable({ x: 0.5, y: 0.42 }, items, shown)?.uid).toBe(1);
+    expect(R.reachable({ x: 0.2, y: 0.12 }, items, shown)).toBeNull(); // an empty stand offers nothing
+    expect(R.reachable({ x: 0.8, y: 0.7 }, items, shown)?.uid).toBe(3);
+    expect(R.reachable({ x: 0.05, y: 0.95 }, items, shown)).toBeNull();
   });
 });
