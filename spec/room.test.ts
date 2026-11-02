@@ -28,6 +28,11 @@ describe("checkLayout", () => {
       room([], { title: "hello" }),
       room([{ ...stand(), type: "throne" }]),
       room([{ ...stand(), note: "hi" }]),
+      room([{ ...stand(), rot: 4 }]),
+      room([{ ...stand(), rot: 1.5 }]),
+      room([{ ...stand(), colour: "hotpink" }]),
+      room([], { wallTint: "hotpink" }),
+      room([], { floorTint: 3 }),
       room([{ ...stand(), x: 1.5 }]),
       room([{ ...stand(), y: -0.1 }]),
       room([{ ...stand(), x: "0.5" }]),
@@ -41,11 +46,63 @@ describe("checkLayout", () => {
     for (const b of bad) expect(R.checkLayout(b).ok, JSON.stringify(b)).toBe(false);
   });
   test("a full room of artifacts fits the 4 KB body limit", () => {
-    const items = Array.from({ length: R.ROOM_MAX_ITEMS }, (_, i) => ({ uid: 1000 + i, type: "plinth", x: 0.123, y: 0.456, artifact: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
-    expect(JSON.stringify({ layout: room(items), was: 999999 }).length).toBeLessThan(4096);
+    const items = Array.from({ length: R.ROOM_MAX_ITEMS }, (_, i) => ({ uid: 1000 + i, type: "plinth", x: 0.123, y: 0.456, rot: 3, colour: "terracotta", artifact: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
+    expect(JSON.stringify({ layout: room(items, { wallTint: "terracotta", floorTint: "terracotta" }), was: 999999 }).length).toBeLessThan(4096);
   });
   test("every wall, floor, light and item has a name a person can read", () => {
     for (const t of [R.WALLS, R.FLOORS, R.LIGHTS, R.ITEMS]) for (const v of Object.values(t) as any[]) expect(v.name).toBeTruthy();
+  });
+});
+
+describe("decorating", () => {
+  test("a room saved before these fields is still valid, and they round-trip", () => {
+    expect(R.checkLayout(room([stand()])).ok).toBe(true);
+    const c: any = R.checkLayout(room([{ ...stand(), rot: 2, colour: "sage" }], { wallTint: "sage", floorTint: "ink" }));
+    expect(c.ok).toBe(true);
+    expect(c.layout.items[0]).toMatchObject({ rot: 2, colour: "sage" });
+    expect(c.layout.wallTint).toBe("sage");
+  });
+  test("the new things are in the table", () => {
+    for (const t of ["window", "lamp", "runner", "cat", "dog"]) expect((R.ITEMS as any)[t]?.name).toBeTruthy();
+    for (const w of ["wainscot"]) expect((R.WALLS as any)[w]).toBeTruthy();
+    expect((R.FLOORS as any).herringbone).toBeTruthy();
+    expect(Object.keys(R.COLOURS).length).toBe(15);
+  });
+  test("placing snaps to the grid and stays in the room", () => {
+    expect(R.snapSpot(0.51, 0.49)).toEqual([0.5, 0.5]);
+    const [x, y] = R.snapSpot(1.4, -2);
+    expect(x).toBeLessThanOrEqual(1);
+    expect(y).toBeGreaterThanOrEqual(0);
+  });
+  test("turning swaps a long thing's footprint; a round one has no need", () => {
+    expect(R.footOf("bench", 1)).toEqual([...R.footOf("bench", 0)].reverse());
+    expect(R.canTurn("bench")).toBe(true);
+    expect(R.canTurn("column")).toBe(false);
+    expect(R.canTurn("painting")).toBe(false);
+  });
+  test("small things stack on surfaces; big things and far things don't", () => {
+    const table = { uid: 1, type: "table", x: 0.5, y: 0.5 };
+    const vase = { uid: 2, type: "vase", x: 0.5, y: 0.5 };
+    expect(R.baseOf(vase, [table, vase])).toBeGreaterThan(0);
+    expect(R.baseOf({ ...vase, x: 0.9 }, [table, vase])).toBe(0);
+    expect(R.baseOf({ uid: 3, type: "plinth", x: 0.5, y: 0.5 }, [table])).toBe(0);
+    expect(R.baseOf(vase, [{ ...table, type: "plinth", artifact: "a" }, vase])).toBe(0); // a stand in use
+  });
+  test("a small thing dropped near a surface settles on it, and only then", () => {
+    const table = { uid: 1, type: "table", x: 0.5, y: 0.5 };
+    const vase = { uid: 2, type: "vase", x: 0, y: 0 };
+    expect(R.dropSpot(vase, [table, vase], 0.5625, 0.5625)).toEqual([0.5, 0.5]);
+    expect(R.dropSpot(vase, [table, vase], 0.8125, 0.8125)).toEqual([0.8125, 0.8125]);
+    const bench = { uid: 3, type: "bench", x: 0, y: 0 };
+    expect(R.dropSpot(bench, [table, bench], 0.5625, 0.5625)).toEqual([0.5625, 0.5625]); // too big to stack
+  });
+  test("what's stacked is drawn after what holds it, and doesn't block a walker", () => {
+    const table = { uid: 2, type: "table", x: 0.5, y: 0.5 };
+    const cat = { uid: 1, type: "cat", x: 0.5, y: 0.5 };
+    expect(R.order([cat, table]).map((i: any) => i.uid)).toEqual([2, 1]);
+    const r = R.footR(table) + R.WALK_R + 0.002;
+    expect(R.blocked({ x: 0.5 + r, y: 0.5 }, [table, cat])).toBe(false);
+    expect(R.blocked({ x: 0.5 + R.footR(cat), y: 0.5 }, [cat])).toBe(true); // on the floor, it's in the way
   });
 });
 
@@ -84,6 +141,15 @@ describe("the view", () => {
     expect(R.roomName("00000000")).toBe(R.roomName("00000000"));
     expect(R.roomName("ffffffff")).not.toBe(R.roomName("00000000"));
     expect(R.roomName("3fa2c1b0")).toMatch(/^The /);
+  });
+  test("a press on an artifact finds it, even with something taller in front", () => {
+    const behind = { uid: 1, type: "plinth", x: 0.4, y: 0.4, artifact: "a" };
+    const front = { uid: 2, type: "column", x: 0.45, y: 0.45 };
+    const shown = { a: { kind: "fish" } };
+    const r = R.restOn(behind);
+    expect(R.hitShown([behind, front], r.X, r.Y - 0.03, shown)?.uid).toBe(1);
+    expect(R.hitShown([behind, front], 0.02, 0.02, shown)).toBeNull();
+    expect(R.hitShown([{ ...behind, artifact: undefined }, front], r.X, r.Y - 0.03, shown)).toBeNull();
   });
   test("a new item lands clear of what's already there", () => {
     const items: any[] = [];

@@ -13,12 +13,22 @@ export const WALLS = {
   sage: { name: "Sage limewash" },
   walnut: { name: "Walnut panels" },
   midnight: { name: "Midnight lacquer" },
+  wainscot: { name: "Wainscot" },
+  stripe: { name: "Quiet stripe" },
 };
 export const FLOORS = {
   oak: { name: "Pale oak" },
   terrazzo: { name: "Terrazzo" },
   slate: { name: "Dark slate" },
   wool: { name: "Felted wool" },
+  herringbone: { name: "Herringbone" },
+  checker: { name: "Stone checker" },
+};
+/** The palette: muted, so a room stays a gallery however it's painted. */
+export const COLOURS = {
+  bone: "#e6dfd2", sand: "#cdbb9b", ochre: "#c49a4a", terracotta: "#b7664a", oxblood: "#7b3b2e",
+  blush: "#c9a39a", plum: "#6a4a63", ink: "#2c3142", slate: "#54606e", dusk: "#7a8aa0",
+  sage: "#8f9a7f", olive: "#66704f", moss: "#47533f", walnut: "#5c4030", char: "#2b2825",
 };
 export const LIGHTS = {
   warm: { name: "Afternoon" },
@@ -31,18 +41,23 @@ export const LIGHTS = {
  * scale; `top` is where an artifact rests, as a share of `h` up from the base.
  */
 export const ITEMS = {
-  plinth: { group: "stand", place: "floor", name: "White plinth", w: 0.13, h: 0.3, top: 1 },
+  plinth: { group: "stand", place: "floor", name: "White plinth", w: 0.13, h: 0.3, top: 1, surface: 1 },
   column: { group: "stand", place: "floor", name: "Slim column", w: 0.07, h: 0.4, top: 1 },
   case: { group: "stand", place: "floor", name: "Glass case", w: 0.17, h: 0.42, top: 0.74 },
   shelf: { group: "stand", place: "wall", name: "Wall shelf", w: 0.16, h: 0.03, top: 1 },
-  bench: { group: "furniture", place: "floor", name: "Oak bench", w: 0.36, h: 0.1, seat: true },
-  chair: { group: "furniture", place: "floor", name: "Low chair", w: 0.14, h: 0.17, seat: true },
-  table: { group: "furniture", place: "floor", name: "Round table", w: 0.17, h: 0.16 },
-  rug: { group: "decor", place: "floor", name: "Woven rug", w: 0.62, h: 0.05, flat: true },
+  bench: { group: "furniture", place: "floor", name: "Oak bench", w: 0.36, h: 0.1, seat: true, surface: 1, long: true },
+  chair: { group: "furniture", place: "floor", name: "Low chair", w: 0.14, h: 0.17, seat: true, turns: true },
+  table: { group: "furniture", place: "floor", name: "Round table", w: 0.17, h: 0.16, surface: 0.9 },
+  rug: { group: "rug", place: "floor", name: "Woven rug", w: 0.62, h: 0.05, flat: true },
   plant: { group: "decor", place: "floor", name: "Potted olive", w: 0.14, h: 0.4 },
-  vase: { group: "decor", place: "floor", name: "Tall vase", w: 0.08, h: 0.22 },
-  painting: { group: "decor", place: "wall", name: "Framed study", w: 0.26, h: 0.34 },
-  sconce: { group: "decor", place: "wall", name: "Wall light", w: 0.05, h: 0.09 },
+  vase: { group: "decor", place: "floor", name: "Tall vase", w: 0.08, h: 0.22, small: true },
+  painting: { group: "wall", place: "wall", name: "Framed study", w: 0.26, h: 0.34 },
+  sconce: { group: "wall", place: "wall", name: "Wall light", w: 0.05, h: 0.09 },
+  window: { group: "wall", place: "wall", name: "Tall window", w: 0.26, h: 0.42 },
+  runner: { group: "rug", place: "floor", name: "Long runner", w: 0.62, h: 0.05, flat: true, long: true },
+  lamp: { group: "decor", place: "floor", name: "Floor lamp", w: 0.1, h: 0.46 },
+  cat: { group: "pet", place: "floor", name: "Sleeping cat", w: 0.09, h: 0.08, small: true },
+  dog: { group: "pet", place: "floor", name: "Patient dog", w: 0.1, h: 0.14, small: true },
 };
 
 export const DEFAULT_ROOM = {
@@ -71,7 +86,8 @@ const only = (o, keys) => Object.keys(o).every((k) => keys.includes(k));
 export function checkLayout(x) {
   const no = (error) => ({ ok: false, error });
   if (!x || typeof x !== "object" || Array.isArray(x)) return no("a layout is an object");
-  if (!only(x, ["wall", "floor", "light", "items"])) return no("a layout is { wall, floor, light, items }");
+  if (!only(x, ["wall", "floor", "light", "items", "wallTint", "floorTint"])) return no("a layout is { wall, floor, light, items, wallTint?, floorTint? }");
+  for (const k of ["wallTint", "floorTint"]) if (x[k] !== undefined && !has(COLOURS, x[k])) return no("no such colour");
   if (!has(WALLS, x.wall)) return no("no such wall");
   if (!has(FLOORS, x.floor)) return no("no such floor");
   if (!has(LIGHTS, x.light)) return no("no such light");
@@ -79,12 +95,20 @@ export function checkLayout(x) {
   const uids = new Set(), shown = new Set(), items = [];
   for (const i of x.items) {
     if (!i || typeof i !== "object" || Array.isArray(i)) return no("an item is an object");
-    if (!only(i, ["uid", "type", "x", "y", "artifact"])) return no("an item is { uid, type, x, y, artifact? }");
+    if (!only(i, ["uid", "type", "x", "y", "artifact", "rot", "colour"])) return no("an item is { uid, type, x, y, artifact?, rot?, colour? }");
     if (!Number.isInteger(i.uid) || i.uid < 1 || i.uid > 1_000_000 || uids.has(i.uid)) return no("each item has its own uid");
     uids.add(i.uid);
     if (!has(ITEMS, i.type)) return no("no such item");
     if (!isUnit(i.x) || !isUnit(i.y)) return no("x and y are from 0 to 1");
     const out = { uid: i.uid, type: i.type, x: r3(i.x), y: r3(i.y) };
+    if (i.rot !== undefined) {
+      if (!Number.isInteger(i.rot) || i.rot < 0 || i.rot > 3) return no("rot is 0 to 3");
+      out.rot = i.rot;
+    }
+    if (i.colour !== undefined) {
+      if (!has(COLOURS, i.colour)) return no("no such colour");
+      out.colour = i.colour;
+    }
     if (i.artifact !== undefined) {
       if (ITEMS[i.type].group !== "stand") return no("artifacts stand on stands");
       if (typeof i.artifact !== "string" || i.artifact.length > 40 || shown.has(i.artifact)) return no("an artifact is shown once");
@@ -93,7 +117,9 @@ export function checkLayout(x) {
     }
     items.push(out);
   }
-  return { ok: true, layout: { wall: x.wall, floor: x.floor, light: x.light, items } };
+  const tints = {};
+  for (const k of ["wallTint", "floorTint"]) if (x[k] !== undefined) tints[k] = x[k];
+  return { ok: true, layout: { wall: x.wall, floor: x.floor, light: x.light, ...tints, items } };
 }
 
 // ---- the view (ADR 33): an isometric room. The floor is a diamond, its back
@@ -129,34 +155,74 @@ export function unproject(X, Y, place) {
   const a = (X - 0.5) / SPREAD, b = (Y - BACK) / SLOPE;
   return [unit((a + b) / 2), unit((b - a) / 2)];
 }
-const depth = (i) => i.x + i.y;
-/** Drawing order: the walls, what lies flat, then the floor from back to front. */
+/** A thing's footprint on the floor: half its size along x and along y. */
+export function footOf(type, rot = 0) {
+  const t = ITEMS[type];
+  const w = t.w * 0.3;
+  const foot = t.long ? (t.flat ? [w, w * 0.3] : [w, w * 0.34]) : t.flat ? [w, w * 0.62] : [w, w];
+  return rot % 2 ? [foot[1], foot[0]] : foot;
+}
+/** Whether turning shows: long things and things with a front. */
+export const canTurn = (type) => !!(ITEMS[type].long || ITEMS[type].turns || ITEMS[type].flat);
+/** How high a small thing sits: on the surface under it, or 0 on the floor. */
+export function baseOf(i, items) {
+  if (!ITEMS[i.type].small) return 0;
+  for (const s of items) {
+    const t = ITEMS[s.type];
+    if (s.uid === i.uid || !t.surface || s.artifact) continue;
+    const [fx, fy] = footOf(s.type, s.rot);
+    if (Math.abs(s.x - i.x) <= fx && Math.abs(s.y - i.y) <= fy) return t.h * SCALE * t.surface;
+  }
+  return 0;
+}
+const holderOf = (i, items) => (baseOf(i, items) ? items.find((s) => ITEMS[s.type].surface && !s.artifact && s.uid !== i.uid && Math.abs(s.x - i.x) <= footOf(s.type, s.rot)[0] && Math.abs(s.y - i.y) <= footOf(s.type, s.rot)[1]) : null);
+/** Drawing order: the walls, what lies flat, then the floor from back to
+ * front, and whatever's stacked just after what holds it. */
 export function order(items) {
   const rank = (i) => (ITEMS[i.type].place === "wall" ? 0 : ITEMS[i.type].flat ? 1 : 2);
+  const depth = (i) => {
+    const h = holderOf(i, items);
+    return h ? h.x + h.y + 0.0001 : i.x + i.y;
+  };
   return [...items].sort((a, b) => rank(a) - rank(b) || (rank(a) === 2 ? depth(a) - depth(b) : 0) || a.uid - b.uid);
 }
-/** A thing's footprint on the floor: half its size along x and along y. */
-export const footOf = (type) => {
-  const w = ITEMS[type].w * 0.3;
-  return ITEMS[type].flat ? [w, w * 0.62] : type === "bench" ? [w, w * 0.34] : [w, w];
-};
+/** Where a dragged or nudged thing lands: on the grid, inside the room. */
+export const SNAP = 16;
+export function snapSpot(x, y) {
+  const s = (v) => Math.max(0, Math.min(1, Math.round(v * SNAP) / SNAP));
+  return [s(x), s(y)];
+}
+/** Where a dragged thing lands: a small thing near a free surface settles in
+ * the middle of it, because a table is smaller than a grid square. */
+export function dropSpot(i, items, x, y) {
+  if (ITEMS[i.type].small) {
+    for (const s of items) {
+      const t = ITEMS[s.type];
+      if (s.uid === i.uid || !t.surface || s.artifact) continue;
+      const [fx, fy] = footOf(s.type, s.rot);
+      if (Math.abs(s.x - x) <= fx + 0.05 && Math.abs(s.y - y) <= fy + 0.05) return [s.x, s.y];
+    }
+  }
+  return [x, y];
+}
 /** A thing's box in the view, as fractions of the view's width and height. */
-export function bounds(i) {
+export function bounds(i, lifted = 0) {
   const t = ITEMS[i.type], p = project(i, t.place);
   const h = t.h * p.s;
   if (t.place === "wall") {
     const w = (t.w * p.s) / ROOM_ASPECT;
     return { left: p.X - w / 2, right: p.X + w / 2, top: p.Y - h / 2, bottom: p.Y + h / 2, X: p.X, Y: p.Y, s: p.s };
   }
-  const [fx, fy] = footOf(i.type);
+  const [fx, fy] = footOf(i.type, i.rot);
   const across = (fx + fy) * SPREAD, down = (fx + fy) * SLOPE;
-  return { left: p.X - across, right: p.X + across, top: p.Y - h - down, bottom: p.Y + down, X: p.X, Y: p.Y, s: p.s };
+  const up = lifted;
+  return { left: p.X - across, right: p.X + across, top: p.Y - h - down - up, bottom: p.Y + down - up, X: p.X, Y: p.Y - up, s: p.s };
 }
 /** The frontmost thing at a point in the view, or null. */
 export function hitItem(items, X, Y) {
   const near = order(items).reverse();
   return near.find((i) => {
-    const b = bounds(i);
+    const b = bounds(i, baseOf(i, items));
     return X >= b.left && X <= b.right && Y >= b.top - 0.01 && Y <= b.bottom + 0.01;
   }) ?? null;
 }
@@ -172,8 +238,18 @@ export function freeSpot(items, place) {
   const xs = [0.5, 0.3, 0.7, 0.15, 0.85, 0.4, 0.6];
   const ys = place === "wall" ? [0.6, 0.35, 0.8] : [0.5, 0.25, 0.72, 0.1, 0.9];
   const there = items.filter((i) => ITEMS[i.type].place === place);
-  for (const y of ys) for (const x of xs) if (there.every((o) => Math.hypot(o.x - x, o.y - y) > 0.12)) return [x, y];
+  for (const y of ys) for (const x of xs) if (there.every((o) => Math.hypot(o.x - x, o.y - y) > 0.12)) return snapSpot(x, y);
   return [0.5, ys[0]];
+}
+/** The artifact on show at a point in the view, the frontmost if there are
+ * several: people aim at it, whatever stands in front of its stand. */
+export function hitShown(items, X, Y, shown) {
+  for (const i of order(items).reverse()) {
+    if (!shown[i.artifact ?? ""]) continue;
+    const r = restOn(i);
+    if (Math.abs(X - r.X) < 0.04 && Y < r.Y + 0.01 && Y > r.Y - 0.1) return i;
+  }
+  return null;
 }
 export const nextUid = (items) => items.reduce((m, i) => Math.max(m, i.uid), 0) + 1;
 
@@ -187,9 +263,9 @@ const REACH = 0.1;
 export const footR = (i) => {
   const t = ITEMS[i.type];
   if (t.place === "wall" || t.flat) return 0;
-  return Math.max(...footOf(i.type)) * 0.9;
+  return Math.max(...footOf(i.type, i.rot)) * 0.9;
 };
-const solids = (items) => items.filter((i) => footR(i) > 0);
+const solids = (items) => items.filter((i) => footR(i) > 0 && !baseOf(i, items));
 /** Whether a walker can't stand at `p`. */
 export function blocked(p, items) {
   if (p.x < EDGE || p.x > 1 - EDGE || p.y < EDGE || p.y > 1 - EDGE) {
