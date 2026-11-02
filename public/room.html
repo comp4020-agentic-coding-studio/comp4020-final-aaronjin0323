@@ -11,74 +11,56 @@
 </head>
 <body>
   <header class="top">
-    <div>
-      <p class="kicker" data-kicker>Exhibition room</p>
-      <h1 data-name>&nbsp;</h1>
-    </div>
-    <nav><a href="/">Back to the arena</a><a href="/room/" data-my-room>Your room</a><a href="#rooms">Other rooms</a></nav>
+    <h1 data-name>&nbsp;</h1>
+    <nav><a href="/">← Arena</a><a href="#rooms">Rooms</a></nav>
   </header>
   <main class="stage">
     <div class="gallery">
-      <canvas data-room tabindex="0" aria-label="The room. Your robot walks in it. What's on show is listed below." aria-describedby="walk-hint"></canvas>
-      <p class="walk-hint" id="walk-hint" data-walk-hint>Tap the floor to walk. Keys: arrows or WASD, E to use.</p>
+      <canvas data-room tabindex="0" aria-label="The room. Your robot walks in it. What's on show is listed below." aria-describedby="walk-keys"></canvas>
+      <p class="sr" id="walk-keys">Tap the floor to walk, or use the arrows or WASD, and E to use what's near. When decorating: arrows move the selected thing, Enter picks the next thing, Delete removes it, Escape lets it go.</p>
+      <p class="walk-hint" data-walk-hint>Tap to walk</p>
       <button type="button" class="primary prompt" data-prompt hidden></button>
+      <button type="button" class="primary decorate" data-edit hidden>Decorate <span class="new" data-waiting hidden></span></button>
+      <a class="primary decorate" href="/" data-go-win hidden>Win your first artifact</a>
       <div class="tools" data-tools role="group" aria-label="The selected thing" hidden>
-        <span class="tool-name" data-selected-name></span>
         <button type="button" data-rotate>Turn</button>
-        <span class="pair" role="group" aria-label="Move it">
-          <button type="button" data-nudge="-1,0" aria-label="Move left">←</button>
-          <button type="button" data-nudge="0,-1" aria-label="Move up">↑</button>
-          <button type="button" data-nudge="0,1" aria-label="Move down">↓</button>
-          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
-        </span>
+        <button type="button" data-colour-tool aria-pressed="false">Colour</button>
         <button type="button" class="danger" data-remove>Remove</button>
-        <button type="button" class="tick" data-deselect aria-label="Finished with this">✓</button>
+        <div class="colours" data-colours role="group" aria-label="Colour" hidden></div>
       </div>
-      <button type="button" class="photo" data-photo>Save a picture</button>
       <p class="status" data-status role="status" hidden></p>
     </div>
-    <aside class="panel" data-panel hidden aria-label="Arrange your room">
-      <div class="panel-head">
-        <h2>Arrange your room</h2>
-        <button type="button" class="quiet" data-done>Done</button>
-      </div>
+    <aside class="panel" data-panel hidden aria-label="Decorate your room">
       <div class="tabs" data-tabs role="tablist" aria-label="What to change"></div>
       <div class="tiles" data-tiles></div>
       <p class="hint" data-tiles-hint hidden></p>
-      <h3 class="group" data-colours-title>Colour</h3>
-      <div class="colours" data-colours role="group" aria-label="Colour"></div>
       <div class="savebar">
-        <p class="dirty" data-dirty aria-live="polite">No changes</p>
-        <div class="saves">
-          <button type="button" class="quiet" data-discard disabled>Discard</button>
-          <button type="button" class="primary" data-save disabled>Save room</button>
-        </div>
+        <button type="button" class="quiet" data-photo>Photo</button>
+        <button type="button" class="quiet" data-cancel>Cancel</button>
+        <button type="button" class="primary" data-done>Done</button>
       </div>
     </aside>
   </main>
   <section class="below">
-    <p class="waiting" data-owner-tools hidden><button type="button" class="primary" data-edit>Arrange this room</button> <span data-waiting></span></p>
-    <p class="muted" data-go-win hidden>Your room is empty. <a href="/">Carry something to the vault</a> and it can stand here.</p>
     <h2 id="onshow-h">On show</h2>
     <ul class="onshow" data-onshow></ul>
     <p class="muted" data-nothing hidden>Nothing is on show yet.</p>
+    <details class="catalog" data-catalog-box hidden>
+      <summary data-catalog-count>Catalog</summary>
+      <ul data-catalog></ul>
+    </details>
     <h2 id="rooms">Other rooms</h2>
     <ul class="rooms" data-rooms></ul>
     <p><button type="button" data-rooms-more hidden>More rooms</button></p>
-    <p class="muted">Rooms are public. Yours belongs to this browser's cookie, and only you can change it.</p>
+    <p class="muted">Rooms are public. Your collection lives in this browser's cookie: clearing it, or another device, starts you fresh. <a href="/readme/">About the arena</a></p>
   </section>
   <dialog class="closer" data-closer aria-labelledby="closer-name">
     <canvas data-closeup width="900" height="900" aria-hidden="true"></canvas>
     <div class="plate">
+      <button type="button" class="quiet shut" data-close aria-label="Close">×</button>
       <h2 id="closer-name" data-closer-name></h2>
       <p class="tier" data-closer-tier></p>
-      <p data-closer-detail></p>
-      <p class="hint">Move across it to carry the light.</p>
-      <div class="actions">
-        <span class="pair" role="group" aria-label="Distance"><button type="button" data-further>Further</button><button type="button" data-nearer>Closer</button></span>
-        <button type="button" class="primary" data-wake>Wake it</button>
-        <button type="button" class="quiet" data-close>Close</button>
-      </div>
+      <div class="actions"><button type="button" class="primary" data-wake>Wake it</button></div>
     </div>
   </dialog>
   <noscript><p>The room needs JavaScript.</p></noscript>

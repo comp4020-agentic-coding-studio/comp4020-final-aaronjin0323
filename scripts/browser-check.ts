@@ -118,7 +118,7 @@ async function brawl(browser: Browser) {
       const [fa, fb] = [await probe(a), await probe(b)];
       same = same && spots(fa) === spots(fb);
       if (knocked === 1) {
-        check(/You dropped/.test((await a.locator("[data-toast]").textContent()) ?? ""), "the loser is told what they dropped");
+        check(/Dropped/.test((await a.locator("[data-toast]").textContent()) ?? ""), "the loser is told what they dropped");
         await a.screenshot({ path: ".shots/scatter-1440.png" });
       }
     }
@@ -134,10 +134,10 @@ async function brawl(browser: Browser) {
   check(same, "both screens show the same artifacts in the same places");
   check(banked >= 1, "delivering by flying through the vault", `${banked}`);
   check(top <= A.SPEED_MAX + 1e-6, "speed stays bounded through a real brawl", `top ${top.toFixed(1)} m/s`);
-  await a.waitForFunction((n) => document.querySelectorAll("[data-shelf] .card").length >= n, banked, { timeout: 2000 }).then(() => check(true, "what's delivered appears on your shelf"), () => check(false, "what's delivered appears on your shelf"));
-  check(await a.locator("[data-shelf] canvas").first().isVisible(), "each card shows the artifact");
+  await a.goto(`${APP}/room/`);
+  await a.waitForFunction((n) => document.querySelectorAll("[data-onshow] canvas").length >= n, banked, { timeout: 2000 }).then(() => check(true, "what's delivered appears in your room's collection"), () => check(false, "what's delivered appears in your room's collection"));
   await a.locator(".catalog summary").click();
-  check((await a.locator("[data-catalog] li").count()) === A.CATALOG.length, "the catalog lists every entry, under the shelf");
+  check((await a.locator("[data-catalog] li").count()) === A.CATALOG.length, "the catalog lists every entry, under the collection");
   await a.screenshot({ path: ".shots/brawl-1440.png", fullPage: true });
   await a.context().close();
   await b.context().close();
@@ -218,26 +218,27 @@ async function room(browser: Browser) {
   await a.mouse.down();
   await a.mouse.move(stand.cx + 90, stand.cy + 10, { steps: 4 });
   await a.mouse.up();
-  // the editor works like a decorating game
-  await a.click('[data-tab="walls"]');
+  // the editor works like a decorating game, one thing at a time
+  const room_ = (await a.locator("[data-room]").boundingBox())!;
+  const letGo = () => a.mouse.click(room_.x + 6, room_.y + 6);
+  await a.click('[data-tab="room"]');
   await a.click('[data-tiles] button:has-text("Sage")');
-  check((await a.locator("[data-tabs] button").count()) === 10, "icon tabs over the tiles");
+  check((await a.locator("[data-tabs] button").count()) === 3, "three tabs over the tiles");
   check((await a.locator("[data-tiles] canvas").count()) >= 6, "tiles are pictures of the thing");
-  await a.click('[data-colours] [data-colour="ink"]');
-  check((await roomProbe(a)).wallTint === "ink", "the palette tints the walls");
-  await a.click('[data-colours] [data-colour="ink"]');
+  await a.click('.tiles [data-colour="ink"]');
+  check((await roomProbe(a)).wallTint === "ink", "the palette opens under the walls, and tints them");
+  await a.click('.tiles [data-colour="ink"]');
   check((await roomProbe(a)).wallTint === undefined, "and tapping it again clears it");
-  await a.click("[data-deselect]");
-  await a.click('[data-tab="furniture"]');
-  await a.click('[data-colours] [data-colour="terracotta"]');
+  await letGo();
+  check((await roomProbe(a)).selected === null, "a tap on nothing lets go");
+  check(await a.locator("[data-tools]").isHidden(), "and the tools go with it");
+  await a.click('[data-tab="things"]');
   await a.click('[data-tiles] button:has-text("Round table")');
+  await a.click("[data-colour-tool]");
+  await a.click('[data-colours] [data-colour="terracotta"]');
   const table = (await roomProbe(a)).items.at(-1);
-  check(table.type === "table" && table.colour === "terracotta" && (await roomProbe(a)).selected === table.uid, "a tile places its thing, selected, in the chosen colour");
-  await a.click('[data-colours] [data-colour="terracotta"]');
-  await a.click("[data-deselect]");
-  check((await roomProbe(a)).selected === null, "the tick lets it go");
-  await a.click('[data-colours] [data-colour="terracotta"]');
-  await a.click('[data-tab="decor"]');
+  check(table.type === "table" && table.colour === "terracotta" && (await roomProbe(a)).selected === table.uid, "a tile places its thing, selected, and Colour tints it");
+  await letGo();
   await a.click('[data-tiles] button:has-text("Tall vase")');
   const vase = (await roomProbe(a)).items.at(-1);
   await a.mouse.move(vase.cx, vase.cy);
@@ -247,13 +248,20 @@ async function room(browser: Browser) {
   const stacked = (await roomProbe(a)).items.at(-1);
   check(stacked.up > 0, "a vase dragged onto a table sits on it", `${stacked.x}, ${stacked.y}`);
   check(Number.isInteger(stacked.x * 16), "and it snapped to the grid");
-  await a.click('[data-tab="furniture"]');
   await a.click('[data-tiles] button:has-text("Oak bench")');
   await a.click("[data-rotate]");
   check((await roomProbe(a)).items.at(-1).rot === 1, "Turn turns the selected thing");
   await a.screenshot({ path: ".shots/editor-1440.png" });
+  const benchNow = (await roomProbe(a)).items.at(-1);
+  await a.locator("[data-room]").focus();
+  await a.keyboard.press("ArrowRight");
+  const keyed = (await roomProbe(a)).items.at(-1);
+  check(keyed.x !== benchNow.x || keyed.y !== benchNow.y, "arrow keys move the selected thing");
+  await a.keyboard.press("Delete");
+  check((await roomProbe(a)).items.every((i: any) => i.uid !== benchNow.uid), "Delete takes it away");
+  await a.click('[data-tiles] button:has-text("Oak bench")');
   await a.click("[data-remove]");
-  check((await roomProbe(a)).items.every((i: any) => i.uid !== stacked.uid + 1), "Remove takes it away");
+  check((await roomProbe(a)).items.every((i: any) => i.uid !== benchNow.uid), "and so does Remove");
   const shot = a.waitForEvent("download", { timeout: 4000 }).then((d) => d.suggestedFilename(), () => "");
   await a.click("[data-photo]");
   check(/\.png$/.test(await shot), "the picture button saves a PNG");
@@ -261,27 +269,25 @@ async function room(browser: Browser) {
     const c = getComputedStyle(el);
     return { bg: c.backgroundColor, border: `${c.borderTopStyle} ${c.borderTopWidth}`, weight: c.fontWeight };
   });
-  const save = await styleOf("[data-save]"), discard = await styleOf("[data-discard]"), done = await styleOf("[data-done]");
+  const done = await styleOf("[data-done]"), cancel = await styleOf("[data-cancel]");
   const clear = (c: string) => c === "rgba(0, 0, 0, 0)";
-  check(!clear(save.bg) && clear(discard.bg), "Save is the one filled action", `${save.bg}`);
-  check(discard.border.startsWith("none") && done.border.startsWith("none"), "Discard and Done are quiet");
-  check((await a.locator("[data-dirty]").textContent()) === "Unsaved changes", "the panel says there are unsaved changes");
-  await a.click('[data-tab="walls"]');
+  check(!clear(done.bg) && clear(cancel.bg), "Done is the one filled action", `${done.bg}`);
+  check(cancel.border.startsWith("none"), "Cancel is quiet");
+  await a.click("[data-cancel]");
+  check((await a.locator("[data-cancel]").textContent()) === "Lose changes?" && (await a.locator("[data-panel]").isVisible()), "with changes, Cancel asks once before losing them");
+  await a.click('[data-tab="room"]');
   await a.click('[data-tiles] button:has-text("Walnut")');
-  await a.click('[data-tab="floors"]');
+  check((await a.locator("[data-cancel]").textContent()) === "Cancel", "and carrying on stands it down");
   await a.click('[data-tiles] button:has-text("Terrazzo")');
-  await a.click('[data-tab="light"]');
   await a.click('[data-tiles] button:has-text("After hours")');
-  await a.click('[data-tab="stand"]');
+  await a.click('[data-tab="things"]');
   await a.click('[data-tiles] button:has-text("Glass case")');
-  await a.click('[data-tab="decor"]');
   await a.click('[data-tiles] button:has-text("Potted olive")');
-  await a.click('[data-tab="wall"]');
   await a.click('[data-tiles] button:has-text("Framed study")');
-  await a.click("[data-save]");
-  await a.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
   s = await roomProbe(a);
   await a.click("[data-done]");
+  await a.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
+  check(await a.locator("[data-panel]").isHidden(), "Done saves and leaves");
   await a.reload();
   await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev > 0);
   const back = await roomProbe(a);
@@ -323,11 +329,10 @@ async function room(browser: Browser) {
   await b.mouse.click(held.ax, held.ay);
   await b.waitForFunction(() => document.querySelector("dialog")?.open, null, { timeout: 8000 });
   check(true, "pressing an artifact walks over to it, and opens it large");
-  await b.click("[data-nearer]");
   await b.click("[data-wake]");
   await b.waitForTimeout(400);
   const look = (await roomProbe(b)).looking;
-  check(look.zoom > 1 && look.t > 0, "closer and wake both answer", `zoom ${look.zoom.toFixed(2)}`);
+  check(look.t > 0, "Wake it answers");
   await b.mouse.move(600, 300);
   await b.screenshot({ path: ".shots/closer-1440.png" });
   await b.click("[data-close]");
@@ -390,14 +395,7 @@ async function trip(browser: Browser, opts: Opts, name: string, touch: boolean) 
   const arena = await box("[data-arena]");
   const vh = opts!.viewport!.height;
   check(arena.y >= 0 && arena.y + arena.height <= vh + 1, `${name}: the whole arena fits on screen`, `${Math.round(arena.width)}x${Math.round(arena.height)}`);
-  check((await probe(a)).coach.length > 0, `${name}: a newcomer gets one line`, (await probe(a)).coach);
-  const lineSeen = (await a.locator("[data-coach]").isVisible()) || (await a.locator("[data-pad-words]").isVisible());
-  check(lineSeen, `${name}: and the line is really on screen`);
-  const covers = await a.evaluate(() => {
-    const f = document.querySelector("[data-arena]")!.getBoundingClientRect(), c = document.querySelector("[data-coach]")!.getBoundingClientRect();
-    return c.width > 0 && c.left < f.right && c.right > f.left && c.top < f.bottom && c.bottom > f.top;
-  });
-  check(!covers, `${name}: the line doesn't cover the arena`);
+  check((await probe(a)).mark === "pull", `${name}: a newcomer is shown the pull`, (await probe(a)).coach);
   await shot("1-first");
   const s0 = await probe(a);
   await pull(toward(s0, [8, 5]), 0.7, async () => {
@@ -406,32 +404,29 @@ async function trip(browser: Browser, opts: Opts, name: string, touch: boolean) 
   });
   await a.waitForTimeout(80);
   check(me(await probe(a)).speed > 0.5, `${name}: a pull launches`);
-  check(/touch an artifact/i.test((await probe(a)).coach), `${name}: the line moves on after a launch`);
+  check((await probe(a)).mark === "artifact", `${name}: the mark moves to an artifact after a launch`);
   const total = async () => (await probe(a)).held.total as number;
   let saw = false;
   for (const end = Date.now() + 45_000; Date.now() < end && (await total()) < 1; await a.waitForTimeout(240)) {
     const s = await probe(a);
     if (s.carrying.length && !saw) {
       saw = true;
-      check(/vault/i.test(s.coach), `${name}: carrying, the line points to the vault`);
-      check((await a.locator("[data-tray] [data-full]").count()) >= 1, `${name}: cargo shows in the at-risk tray`);
-      const sp = (await a.locator("[data-speed]").textContent())!;
-      check(sp !== "Top speed 100%", `${name}: weight shows as top speed`, sp);
+      check(s.mark === "vault", `${name}: carrying, the mark points to the vault`);
       await shot("3-cargo");
     }
     const near = [...s.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(s).pos[0], x.pos[1] - me(s).pos[1]) - Math.hypot(y.pos[0] - me(s).pos[0], y.pos[1] - me(s).pos[1]))[0];
     await pull(toward(s, s.carrying.length ? A.VAULT : near?.pos ?? A.VAULT), 0.8);
   }
   check((await total()) >= 1, `${name}: delivered`);
-  await a.waitForFunction(() => /kept for good/.test(document.querySelector("[data-toast]")?.textContent ?? ""), null, { timeout: 2000 }).then(() => check(true, `${name}: the delivery is announced, and offers the room`), () => check(false, `${name}: the delivery is announced`));
+  await a.waitForFunction(() => /kept!/.test(document.querySelector("[data-toast]")?.textContent ?? ""), null, { timeout: 2000 }).then(() => check(true, `${name}: the delivery is announced`), () => check(false, `${name}: the delivery is announced`));
   await shot("4-delivered");
-  check((await probe(a)).coach === "", `${name}: guidance stops once delivered`);
-  check((await a.locator(".journey li[data-now]").textContent().catch(() => "")) === "Exhibit" || name === "land", `${name}: the journey points on to Exhibit`);
-  await a.locator("[data-toast] a").click();
+  check((await probe(a)).mark === null, `${name}: guidance stops once delivered`);
+  check((await a.locator("[data-room-link][data-calling]").count()) === 1, `${name}: the Room button calls`);
+  await a.locator("[data-room-link]").click();
   await a.waitForURL("**/room/");
   await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
-  await a.waitForFunction(() => /on show/.test(document.querySelector("[data-waiting]")?.textContent ?? ""));
-  check(true, `${name}: the room says what's waiting`);
+  await a.waitForFunction(() => /new/.test(document.querySelector("[data-waiting]")?.textContent ?? ""));
+  check(await a.locator("[data-edit]").isVisible(), `${name}: Decorate says something new is waiting`);
   await a.waitForTimeout(150);
   check((await a.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `${name}: the room doesn't scroll sideways`);
   const seen = await a.locator("[data-room]").boundingBox();
@@ -490,7 +485,6 @@ async function together(browser: Browser) {
   const ids = (s: any) => s.carrying.map((i: any) => i.id).join();
   check(after.you === before.you && me(after).slot === me(before).slot, "a refresh keeps the same robot");
   check(ids(after) === ids(before), "and exactly what it carried", after.carrying.length);
-  check((await b.locator("[data-tray] [data-full]").count()) === after.carrying.length, "and the tray shows it");
 
   void c;
   void d;
@@ -544,34 +538,84 @@ async function phoneroom(browser: Browser) {
   await p.tap("[data-edit]");
   const s = await roomProbe(p);
   const stand = s.items.find((i: any) => i.type === "plinth");
+  await p.tap("[data-tiles] .tile");
+  const placed = await roomProbe(p);
+  check(placed.shown === 1 && placed.items.length === s.items.length, "an artifact goes on the first empty stand");
+  check(await p.locator("[data-tools]").isHidden(), "no tools until something is selected");
   await p.locator("[data-room]").scrollIntoViewIfNeeded();
   const now = (await roomProbe(p)).items.find((i: any) => i.uid === stand.uid);
   await p.touchscreen.tap(now.cx, now.cy);
   await p.waitForSelector("[data-tools]:not([hidden])");
   check(true, "a tap selects a stand");
-  await p.tap('[data-tab="shown"]');
-  await p.tap("[data-tiles] .tile");
-  await p.tap('[data-nudge="1,0"]');
-  await p.tap('[data-nudge="1,0"]');
-  await p.tap('[data-nudge="0,1"]');
-  await p.screenshot({ path: ".shots/edit-390.png", fullPage: true });
-  await p.locator("[data-colours]").scrollIntoViewIfNeeded();
-  const bar = await p.locator("[data-save]").boundingBox();
-  check(!!bar && bar.y >= 0 && bar.y + bar.height <= 844, "Save stays in reach deep in the panel");
+  await p.tap("[data-colour-tool]");
+  await p.screenshot({ path: ".shots/edit-390-colour.png" });
+  await p.tap("[data-colour-tool]");
+  const cdp = await p.context().newCDPSession(p);
+  const touch = (type: string, x = 0, y = 0) => cdp.send("Input.dispatchTouchEvent", { type: type as any, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+  await touch("touchStart", now.cx, now.cy);
+  for (let d = 10; d <= 50; d += 10) await touch("touchMove", now.cx + d, now.cy + d / 3);
+  await touch("touchEnd");
+  await p.tap('[data-tab="things"]');
+  await p.screenshot({ path: ".shots/edit-390.png" });
+  await p.locator("[data-tiles] .tile").last().scrollIntoViewIfNeeded();
+  const bar = await p.locator("[data-done]").boundingBox();
+  check(!!bar && bar.y >= 0 && bar.y + bar.height <= 844, "Done stays in reach deep in the panel");
   const pic = await p.locator("[data-room]").boundingBox();
   check(!!pic && pic.y >= 0 && pic.y < 200, "and the room stays in view above the tiles", `y ${Math.round(pic?.y ?? -1)}`);
   await p.screenshot({ path: ".shots/edit-390-deep.png" });
-  await p.tap("[data-save]");
+  await p.tap("[data-done]");
   await p.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
   await p.reload();
   await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev > 0);
   const moved = (await roomProbe(p)).items.find((i: any) => i.uid === stand.uid);
-  check(moved.x > stand.x && !!moved.artifact, "the arrow buttons moved it, and it saved", `${stand.x} to ${moved.x}`);
+  check((moved.x !== stand.x || moved.y !== stand.y) && !!moved.artifact, "a drag by touch moved it, and it saved", `${stand.x} to ${moved.x}`);
   check((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, "the panel doesn't scroll sideways");
   await p.context().close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom };
+/** What a person can actually see in the window: words and controls, not what's scrolled away. */
+const inWindow = (p: Page) => p.evaluate(() => {
+  const seen = (el: Element) => {
+    const r = el.getBoundingClientRect(), c = getComputedStyle(el);
+    return el.checkVisibility({ contentVisibilityAuto: true } as any) && r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight && c.visibility !== "hidden" && Number(c.opacity) > 0;
+  };
+  const controls = [...document.querySelectorAll("a, button, summary, select, input")].filter((e) => seen(e) && !e.closest(".tiles, .colours"));
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let words = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const el = n.parentElement!;
+    if (el.closest(".sr, script, style, noscript, .tiles") || !seen(el)) continue;
+    words += (n.textContent ?? "").trim().split(/\s+/).filter(Boolean).length;
+  }
+  return { words, controls: controls.length };
+});
+function within(n: { words: number; controls: number }, words: number, controls: number, what: string) {
+  check(n.words <= words, `${what}: at most ${words} words in view`, `${n.words}`);
+  check(n.controls <= controls, `${what}: at most ${controls} controls in view`, `${n.controls}`);
+}
+/** ADR 35: each screen's budget, read from the screen itself, at both sizes. */
+async function budget(browser: Browser) {
+  for (const [opts, name] of [[DESKTOP, "desktop"], [PHONE, "phone"]] as [Opts, string][]) {
+    const p = await visitor(browser, opts);
+    within(await inWindow(p), 12, 2, `${name}, a newcomer's arena`);
+    check(await earn(p), `${name}: earned something`);
+    await p.waitForTimeout(5300); // the delivery's message has gone
+    within(await inWindow(p), 12, 2, `${name}, the arena in play`);
+    await p.goto(`${APP}/room/`);
+    await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+    await p.waitForTimeout(150);
+    within(await inWindow(p), 16, 4, `${name}, your room`);
+    await p.click("[data-edit]");
+    await p.waitForTimeout(100);
+    within(await inWindow(p), 12, 6, `${name}, decorating with nothing selected`);
+    await p.click('[data-tab="things"]');
+    check((await p.locator(".colours button:visible").count()) === 0, `${name}: no palette until it applies`);
+    await p.context().close();
+    await new Promise((r) => setTimeout(r, A.GRACE_MS + 500));
+  }
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, budget };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

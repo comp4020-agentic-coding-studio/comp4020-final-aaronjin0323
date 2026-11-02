@@ -11,7 +11,6 @@ body { background: var(--bg); min-height: 100svh; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 8px 32px; max-width: 1360px; margin: 0 auto; padding: 22px 28px 14px; }
-.kicker { margin: 0 0 2px; font-size: .74rem; letter-spacing: .16em; text-transform: uppercase; color: var(--soft); }
 h1 { margin: 0; font-size: 1.75rem; font-weight: 400; letter-spacing: .01em; }
 nav { display: flex; gap: 20px; font-size: .92rem; }
 nav a { display: inline-flex; align-items: center; min-height: 32px; }
@@ -19,7 +18,7 @@ nav a { display: inline-flex; align-items: center; min-height: 32px; }
 .gallery { position: relative; flex: 1; min-width: 0; }
 canvas[data-room] { display: block; width: min(100%, calc((100svh - 140px) * 12 / 7)); margin-inline: auto; aspect-ratio: 12 / 7; border-radius: 2px; touch-action: pan-y; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
 body[data-editing] canvas[data-room] { touch-action: none; cursor: grab; }
-.status { position: absolute; left: 12px; bottom: 12px; margin: 0; padding: 6px 12px; background: rgba(22,19,15,.86); font-size: .88rem; }
+.status { position: absolute; left: 12px; top: 12px; z-index: 2; margin: 0; padding: 6px 12px; background: rgba(22,19,15,.86); font-size: .88rem; }
 .panel { width: 340px; flex: none; max-height: calc(100svh - 110px); overflow-y: auto; padding: 14px 14px 0; background: var(--panel); border: 1px solid var(--line); font-size: .9rem; }
 .panel h2 { margin: 0 0 6px; font-size: 1rem; font-weight: 400; }
 .selection { padding: 10px 12px; margin: 10px 0; background: #2a2419; border-left: 3px solid var(--accent); }
@@ -42,7 +41,6 @@ button.danger:hover:not(:disabled) { border-color: #e58f7a; }
 select { width: 100%; margin-top: 4px; background: var(--bg); }
 .actions, .swatches, .adds, .keys { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
 .keys { margin-top: 8px; }
-.keys [data-nudge] { min-width: 40px; padding: 0; }
 .hint { margin: 8px 0 0; color: var(--soft); font-size: .84rem; }
 .below { max-width: 1360px; margin: 26px auto 40px; padding: 0 28px; }
 .below h2 { margin: 26px 0 10px; font-size: 1.15rem; font-weight: 400; }
@@ -71,24 +69,19 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
   .closer canvas { width: 100%; max-height: 50svh; }
 }
 
-.waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; color: var(--accent); font-size: .92rem; }
 .onshow button { border: 1px solid #a58a3f; }
-.onshow .sub::before { content: "Kept for good · "; color: var(--accent); }
 
 /* a phone on its side: the room as tall as it can be, the header out of its way */
 @media (max-height: 500px) and (orientation: landscape) {
   .top { padding: 6px 14px; flex-wrap: nowrap; align-items: center; }
-  .kicker { display: none; }
   h1 { font-size: 1.1rem; }
   canvas[data-room] { width: min(100%, calc((100svh - 64px) * 12 / 7)); }
   .below { margin-top: 12px; }
 }
 
 /* the editor: tabs over picture tiles, then colour, then saving */
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.panel-head h2 { margin: 0; font-size: 1.1rem; }
-.tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-top: 10px; }
-.tabs button { min-height: 34px; padding: 0 2px; border: 0; border-bottom: 2px solid var(--line); font-size: .76rem; color: var(--soft); }
+.tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.tabs button { min-height: 40px; padding: 0 2px; border: 0; border-bottom: 2px solid var(--line); font-size: .92rem; color: var(--soft); }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); background: #2a2419; }
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
 .tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 3px; padding: 6px 3px; min-height: 106px; background: #2a2419; border: 1px solid transparent; font-size: .74rem; line-height: 1.12; text-align: center; }
@@ -100,22 +93,16 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
 .chip[data-finish="warm"] { background: radial-gradient(circle at 50% 20%, #ffe2b4, #6d5236); }
 .chip[data-finish="cool"] { background: radial-gradient(circle at 50% 20%, #e2ecff, #4c586e); }
 .chip[data-finish="dusk"] { background: radial-gradient(circle at 50% 20%, #ffce8c, #1e1a33 70%); }
-.group { margin: 12px 0 6px; font-size: .78rem; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; color: var(--soft); }
-.colours { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
-.colours button { min-height: 30px; padding: 0; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+.group { grid-column: 1 / -1; margin: 10px 0 0; font-size: .82rem; font-weight: 400; color: var(--soft); }
+.group:first-child { margin-top: 0; }
+.colours { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(8, 28px); gap: 5px; justify-content: start; }
+.colours button { min-height: 28px; padding: 0; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
 .colours button[aria-pressed="true"] { border-color: var(--ink); }
-.tools { position: absolute; top: 8px; right: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; max-width: calc(100% - 16px); padding: 5px 7px; background: rgba(22,19,15,.9); border: 1px solid var(--line); font-size: .84rem; }
+.tools { position: absolute; top: 8px; right: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; width: max-content; max-width: calc(100% - 16px); padding: 5px 7px; background: rgba(22,19,15,.9); border: 1px solid var(--line); font-size: .84rem; }
 .tools button { min-height: 34px; }
-.tool-name { color: var(--soft); margin-right: 4px; }
 .tools .danger { margin-left: 0; border-color: var(--line); }
-.tools .tick { color: var(--accent); border-color: var(--accent); font-weight: 700; padding: 0 12px; }
-.tools .pair button { padding: 0 9px; }
-.photo { position: absolute; left: 8px; bottom: 8px; min-height: 32px; font-size: .78rem; background: rgba(22,19,15,.8); }
-.savebar { position: sticky; bottom: 0; margin: 16px -14px 0; padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line); }
-.dirty { margin: 0 0 6px; font-size: .84rem; color: var(--soft); }
-.dirty[data-on] { color: var(--accent); }
-.saves { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.saves .primary { flex: 1; }
+.savebar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 6px; margin: 14px -14px 0; padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line); }
+.savebar .primary { flex: 1; min-height: 42px; }
 .pair { display: inline-flex; }
 .pair button + button { border-left: 0; }
 .plate .actions { align-items: center; }
@@ -127,20 +114,44 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
 }
 
 /* walking: a word of how, and the thing you're next to */
-.walk-hint { position: absolute; left: 10px; top: 8px; margin: 0; font-size: .78rem; color: var(--soft); pointer-events: none; }
+.walk-hint { position: absolute; left: 12px; top: 10px; margin: 0; font-size: .92rem; color: var(--ink); pointer-events: none; }
 .prompt { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 90%; }
 canvas[data-room] { background: #16130f; }
 @media (max-width: 900px) {
   /* a line under the room, so the prompt never covers it and nothing jumps */
-  .gallery { padding-bottom: 50px; }
-  .walk-hint { top: auto; bottom: 14px; left: 14px; right: 14px; }
-  .prompt { bottom: 2px; }
-  .photo { bottom: 54px; }
+  .gallery { padding-bottom: 58px; }
+  .walk-hint { top: auto; bottom: 18px; left: 14px; right: auto; }
+  .prompt { bottom: 6px; }
+  .decorate { bottom: 6px; right: 14px; }
   /* arranging on a phone: the room stays in view while the tiles scroll */
   body[data-editing] .gallery { position: sticky; top: 0; z-index: 4; padding-bottom: 0; background: var(--bg); }
-  body[data-editing] .photo { bottom: 6px; }
   .tiles { grid-template-columns: repeat(4, 1fr); }
-  .tools { position: static; max-width: none; justify-content: center; }
-  body[data-editing] .tools ~ .photo { display: none; }
-  .tool-name { display: none; }
+}
+
+/* the one thing to do here, on the room itself */
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.decorate { position: absolute; right: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 16px; font: inherit; font-weight: 600; text-decoration: none; }
+a.primary { background: var(--accent); color: #1c1608; }
+.new { padding: 1px 7px; border-radius: 10px; background: #1c1608; color: var(--accent); font-size: .78rem; }
+.top { align-items: center; padding-block: 16px 12px; }
+.prompt { min-height: 42px; }
+body[data-editing] nav { display: none; }
+.tools .colours { flex-basis: 100%; }
+.plate { position: relative; }
+.shut { position: absolute; top: 8px; right: 8px; min-width: 40px; font-size: 1.4rem; text-decoration: none !important; }
+.catalog { margin-top: 18px; color: var(--soft); font-size: .9rem; }
+.catalog summary { cursor: pointer; min-height: 32px; }
+.catalog ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.catalog li { display: flex; align-items: center; gap: 6px; }
+.catalog li[data-found="no"] { opacity: .55; }
+/* the room has the screen to itself; everything else is a scroll away, and away while decorating */
+body:not([data-editing]) .stage { min-height: calc(100svh - 72px); }
+body[data-editing] .below { display: none; }
+@media (max-width: 900px) { body:not([data-editing]) .stage { min-height: calc(100svh - 96px); } }
+@media (max-width: 900px) {
+  /* under the room, a space kept for them, so nothing covers what's being changed */
+  body[data-editing] .gallery { padding-bottom: 94px; }
+  .tools { top: auto; bottom: 4px; left: 8px; right: 8px; width: auto; max-width: none; justify-content: flex-start; border: 0; background: none; padding: 0; }
+  .tools .colours { display: flex; flex-wrap: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tools .colours button { flex: none; width: 34px; min-height: 34px; }
 }

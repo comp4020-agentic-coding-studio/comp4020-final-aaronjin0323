@@ -3,9 +3,9 @@
 // server's snapshot advanced on the shared clock by arena.js; the page only
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
-import { ARENA, ARTIFACT_R, CATALOG, MATERIALS, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
-import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, cargoSlots, catalogCell, coach, collectionWords, deliveryWords, dropWords, itemName, journeyStep, speedShare, connection, connectionMessage, flying, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, silent, trust } from "./arena-ui.js";
-import { drawAura, drawItem, itemIcon } from "./arena-draw.js";
+import { ARENA, ARTIFACT_R, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
+import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, connection, connectionMessage, deliveryWords, dropWords, flying, guide, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, roomCalls, silent, trust } from "./arena-ui.js";
+import { drawAura, drawItem } from "./arena-draw.js";
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $("[data-arena]");
@@ -82,12 +82,11 @@ function connect() {
     }
     for (const b of d.deliveries ?? []) {
       bursts.push(b);
-      if (b.tag === you.tag) toast("kept", deliveryWords(b.items), true);
+      if (b.tag === you.tag) toast("kept", deliveryWords(b.items));
     }
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
-    renderHud(server?.carrying ?? [], d.mine, d.vault);
-    if (d.mine.total !== shelfTotal) loadShelf(d.mine.total);
+    renderHud(server?.carrying ?? [], d.mine);
     place = d.mine.place;
     showStatus();
   });
@@ -98,96 +97,35 @@ function connect() {
     setTimeout(connect, retryDelay(tries++));
   });
 }
-// ---- the journey: what's at risk, what's kept, and the one thing to do next
-let trayKey = null;
+// ---- what you hold, and the one thing to do next
 let launched = localStorage.getItem("arena-launched") === "yes";
 let held = { carrying: 0, total: 0, onShow: 0 };
-function renderHud(carrying, m, vault) {
+function renderHud(carrying, m) {
   held = { carrying: carrying.length, total: m.total, onShow: m.onShow };
-  const key = carrying.map((c) => c.id).join();
-  if (key !== trayKey) {
-    trayKey = key;
-    $("[data-tray]").replaceChildren(
-      ...cargoSlots(carrying).map((item) => {
-        const li = document.createElement("li");
-        if (item) {
-          li.dataset.full = "";
-          li.append(itemIcon(item, 40));
-          li.title = itemName(item.kind, item.material);
-        }
-        return li;
-      }),
-    );
-  }
-  const speed = speedShare(carrying.length);
-  $("[data-speed]").textContent = `Top speed ${speed}%`;
-  $("[data-meter]").style.width = `${speed}%`;
-  $("[data-banked]").textContent = collectionWords(m.total, m.catalog);
-  $("[data-vault]").textContent = `Vault ${vault}`;
-  const step = journeyStep(held);
-  for (const li of document.querySelectorAll(".journey li")) li.toggleAttribute("data-now", Number(li.dataset.step) === step);
+  const count = $("[data-banked]");
+  count.textContent = m.total;
+  count.toggleAttribute("data-none", !m.total);
+  const link = $("[data-room-link]");
+  link.toggleAttribute("data-calling", roomCalls(held));
+  link.setAttribute("aria-label", `Your room, ${m.total} collected`);
   showCoach();
 }
+const nextThing = () => (myRobot() ? guide({ launched, ...held }) : null);
 function showCoach() {
-  const line = myRobot() ? coach({ launched, ...held }) : "";
+  const words = nextThing()?.words ?? "";
   const c = $("[data-coach]");
-  c.textContent = line;
-  c.hidden = !line;
-  const padWords = $("[data-pad-words]");
-  padWords.textContent = line || "Drag back here to aim, let go to launch";
-  $("[data-pad]").toggleAttribute("data-coaching", !!line);
+  if (c.textContent !== words) c.textContent = words;
 }
 let toastTimer = 0;
-function toast(kind, words, toRoom = false) {
+function toast(kind, words) {
   const t = $("[data-toast]");
   t.dataset.kind = kind;
   t.textContent = words;
-  if (toRoom) {
-    const a = document.createElement("a");
-    a.href = "/room/";
-    a.textContent = "Exhibit it";
-    t.append(a);
-  }
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), toRoom ? 5000 : 3000);
+  toastTimer = setTimeout(() => (t.hidden = true), 2500);
 }
 
-// ---- your shelf first, the catalog under it; fetched when your count changes
-let shelfTotal = -1;
-async function loadShelf(total) {
-  shelfTotal = total;
-  const j = await fetch("/collection").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  if (!j) {
-    shelfTotal = -1; // the next event tries again
-    return;
-  }
-  const shelf = $("[data-shelf]");
-  shelf.replaceChildren(
-    ...j.items.map((it) => {
-      const li = document.createElement("li");
-      li.className = `card ${MATERIALS[it.material].rarity}`;
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = itemName(it.kind, it.material);
-      const tier = document.createElement("span");
-      tier.className = "tier";
-      tier.textContent = MATERIALS[it.material].rarity;
-      li.append(itemIcon(it), name, tier);
-      return li;
-    }),
-  );
-  $("[data-shelf-empty]").hidden = j.items.length > 0;
-  $("[data-catalog]").replaceChildren(
-    ...CATALOG.map((entry) => {
-      const c = catalogCell(entry, j.catalog);
-      const li = document.createElement("li");
-      li.dataset.found = c.found ? "yes" : "no";
-      li.append(itemIcon({ kind: c.kind, material: c.material, seed: 1 }, 48, { dark: !c.found }), c.words);
-      return li;
-    }),
-  );
-}
 // a network can vanish without the stream ever closing: silence counts as lost
 setInterval(() => {
   if (!stream || stream.readyState === EventSource.CLOSED || !silent(lastHeard, Date.now())) return;
@@ -314,17 +252,90 @@ function draw() {
     drawRobot(p, r.slot, isMe);
     g.globalAlpha = 1;
   }
+  drawGuide(now);
   requestAnimationFrame(draw);
+}
+// the next thing, marked on the arena itself: a hand pulling back, a ring on
+// the nearest artifact, a line to the vault. Three words beside it at most.
+function nearestArtifact(p, now) {
+  return artifacts.filter((a) => readiness(a.readyAt ?? 0, now) >= 1).sort((a, b) => Math.hypot(a.pos[0] - p[0], a.pos[1] - p[1]) - Math.hypot(b.pos[0] - p[0], b.pos[1] - p[1]))[0];
+}
+function drawGuide(now) {
+  const next = nextThing();
+  const r = myRobot();
+  if (!next || !r || aim) return;
+  const p = shownAt(snapOf(r), now);
+  const beat = reducedMotion.matches ? 0.7 : (now % 1600) / 1600;
+  let at = p;
+  if (next.mark === "pull") {
+    // a press out in the open, pulled back towards your robot: what launches it the other way
+    const to = behind([0, 0], p).map((v) => -v); // away from the middle
+    const way = to.map((v) => -v); // towards the middle: the room to show it in
+    const press = [p[0] + way[0] * 4.2, p[1] + way[1] * 4.2];
+    const pulled = 2.4 * Math.min(1, beat * 1.4);
+    const q = [press[0] + to[0] * pulled, press[1] + to[1] * pulled];
+    at = press;
+    g.beginPath();
+    g.moveTo(px(press[0]), px(press[1]));
+    g.lineTo(px(q[0]), px(q[1]));
+    g.strokeStyle = "rgba(255,255,255,.55)";
+    g.lineWidth = 3;
+    g.stroke();
+    g.beginPath();
+    g.arc(px(q[0]), px(q[1]), 12, 0, Math.PI * 2);
+    g.fillStyle = "rgba(255,255,255,.9)";
+    g.fill();
+    // and where the robot would go
+    for (let d = 1.2; d <= 1.2 + pulled * 2; d += 0.7) {
+      g.beginPath();
+      g.arc(px(p[0] + way[0] * d), px(p[1] + way[1] * d), 2.5, 0, Math.PI * 2);
+      g.fill();
+    }
+  } else if (next.mark === "artifact") {
+    const a = nearestArtifact(p, now);
+    if (!a) return;
+    at = a.pos;
+    g.beginPath();
+    g.arc(px(at[0]), px(at[1]), px(ARTIFACT_R) + 8 + 14 * beat, 0, Math.PI * 2);
+    g.strokeStyle = `rgba(255,255,255,${1 - beat * 0.8})`;
+    g.lineWidth = 3;
+    g.stroke();
+  } else {
+    at = VAULT;
+    g.beginPath();
+    g.moveTo(px(p[0]), px(p[1]));
+    g.lineTo(px(at[0]), px(at[1]));
+    g.setLineDash([8, 10]);
+    g.lineDashOffset = reducedMotion.matches ? 0 : -now / 40;
+    g.strokeStyle = "rgba(255,200,61,.8)";
+    g.lineWidth = 3;
+    g.stroke();
+    g.setLineDash([]);
+    g.lineDashOffset = 0;
+  }
+  g.font = "700 14px system-ui, sans-serif";
+  const w = g.measureText(next.words).width + 18;
+  const x = Math.max(w / 2 + 6, Math.min(px(ARENA.w) - w / 2 - 6, px(at[0])));
+  const y = next.mark === "pull" || px(at[1]) < 70 ? px(at[1]) + 44 : px(at[1]) - 44; // the pull's words sit clear of your robot
+  g.fillStyle = "rgba(255,255,255,.95)";
+  g.beginPath();
+  g.roundRect(x - w / 2, y - 13, w, 26, 6);
+  g.fill();
+  g.fillStyle = "#14131f";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(next.words, x, y + 1);
 }
 function drawVault(now) {
   const x = px(VAULT[0]), y = px(VAULT[1]);
   const pulse = reducedMotion.matches ? 0 : Math.sin(now / 500) * 0.06;
   g.beginPath();
   g.arc(x, y, px(VAULT_R), 0, Math.PI * 2);
-  g.fillStyle = `rgba(255, 200, 61, ${0.14 + pulse})`;
+  const lit = held.carrying > 0;
+  g.fillStyle = `rgba(255, 200, 61, ${(lit ? 0.32 : 0.14) + pulse})`;
   g.fill();
   g.strokeStyle = "#ffc83d";
-  g.lineWidth = 3;
+  g.lineWidth = lit ? 5 : 3;
   g.setLineDash([10, 6]);
   g.stroke();
   g.setLineDash([]);
@@ -584,7 +595,8 @@ canvas.probe = () => {
     artifacts: artifacts.map((a) => ({ ...a, ...at(a.pos) })),
     carrying: myRobot()?.carrying ?? [],
     cap: loadCap(myLoad()),
-    coach: $("[data-coach]").hidden ? "" : $("[data-coach]").textContent,
+    coach: $("[data-coach]").textContent,
+    mark: nextThing()?.mark ?? null,
     held,
     players: MAX_PLAYERS,
   };

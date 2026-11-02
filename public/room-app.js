@@ -3,9 +3,9 @@
 // enforces that: POST /room names no room. Everything here shows or edits a
 // draft; a layout counts once the server has saved it.
 import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
-import { MATERIALS } from "./arena.js";
+import { CATALOG, MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
-import { itemName, waitingWords } from "./arena-ui.js";
+import { catalogCell, itemName, waitingCount } from "./arena-ui.js";
 
 const $ = (s) => document.querySelector(s);
 const canvas = $("[data-room]");
@@ -64,24 +64,32 @@ function show(j) {
   dirty = false;
   walker = { ...freeNear(WALK_START, draft.items), moving: false, sitting: false, seat: null, face: [-0.7, -0.7] };
   $("[data-name]").textContent = j.name;
-  $("[data-kicker]").textContent = mine ? "Your exhibition room" : "Exhibition room";
   document.title = `${j.name} · Exhibition room`;
-  $("[data-owner-tools]").hidden = !mine || editing || !shelf.length;
-  $("[data-go-win]").hidden = !mine || shelf.length > 0;
-  $("[data-waiting]").textContent = mine ? waitingWords(shelf, j.layout.items) : "";
-  $("[data-my-room]").hidden = mine;
+  showOwner();
   renderOnShow();
   renderPanel();
+  if (mine) loadCatalog();
+}
+/** What the owner can do next: decorate, or go and win something to decorate with. */
+function showOwner() {
+  const hasAny = mine && shelf.length > 0;
+  $("[data-edit]").hidden = !hasAny || editing;
+  $("[data-go-win]").hidden = !mine || shelf.length > 0;
+  const n = hasAny ? waitingCount(shelf, room.layout.items) : 0;
+  const w = $("[data-waiting]");
+  w.textContent = `${n} new`;
+  w.hidden = !n;
 }
 
-// ---- what's on show: buttons, so nothing depends on the canvas
+// ---- what's on show, or all you've collected: buttons, so nothing depends on the canvas
 function renderOnShow() {
   const all = artifactsNow();
-  const shown = draft.items.filter((i) => all[i.artifact ?? ""]);
-  $("[data-nothing]").hidden = shown.length > 0;
+  const list = mine ? shelf : draft.items.filter((i) => all[i.artifact ?? ""]).map((i) => all[i.artifact]);
+  $("[data-nothing]").hidden = mine || list.length > 0;
+  $("#onshow-h").textContent = mine ? "Your collection" : "On show";
+  $("#onshow-h").hidden = mine && !list.length;
   $("[data-onshow]").replaceChildren(
-    ...shown.map((i) => {
-      const a = all[i.artifact];
+    ...list.map((a) => {
       const li = document.createElement("li");
       const b = document.createElement("button");
       b.type = "button";
@@ -91,6 +99,21 @@ function renderOnShow() {
       b.append(itemIcon(a, 72), itemName(a.kind, a.material), sub);
       b.addEventListener("click", () => closer(a));
       li.append(b);
+      return li;
+    }),
+  );
+}
+async function loadCatalog() {
+  const j = await fetch("/collection").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!j) return;
+  $("[data-catalog-box]").hidden = false;
+  $("[data-catalog-count]").textContent = `Catalog ${Object.keys(j.catalog).length} of ${CATALOG.length}`;
+  $("[data-catalog]").replaceChildren(
+    ...CATALOG.map((entry) => {
+      const c = catalogCell(entry, j.catalog);
+      const li = document.createElement("li");
+      li.dataset.found = c.found ? "yes" : "no";
+      li.append(itemIcon({ kind: c.kind, material: c.material, seed: 1 }, 48, { dark: !c.found }), c.words);
       return li;
     }),
   );
@@ -121,25 +144,19 @@ async function loadRooms(more = false) {
 }
 $("[data-rooms-more]").addEventListener("click", () => loadRooms(true));
 
-// ---- arranging: a draft, for the owner's eyes, until it's saved
-function showDirty() {
-  $("[data-save]").disabled = !dirty;
-  $("[data-discard]").disabled = !dirty;
-  const d = $("[data-dirty]");
-  d.textContent = dirty ? "Unsaved changes" : "No changes";
-  d.toggleAttribute("data-on", dirty);
-}
+// ---- decorating: a draft, for the owner's eyes, until Done saves it
 function changed() {
   dirty = true;
-  showDirty();
+  disarmCancel();
   say("");
   renderOnShow();
   renderSelection();
 }
-// the editor: tabs over picture tiles, and a palette for what's in hand
-const TABS = [["walls", "Walls"], ["floors", "Floors"], ["light", "Light"], ["stand", "Stands"], ["furniture", "Seats"], ["wall", "On walls"], ["rug", "Rugs"], ["decor", "Decor"], ["pet", "Pets"], ["shown", "Artifacts"]];
+const TABS = [["shown", "Artifacts"], ["things", "Things"], ["room", "Room"]];
+const GROUPS = [["stand", "Stands"], ["furniture", "Seats"], ["rug", "Rugs"], ["wall", "On walls"], ["decor", "Decor"], ["pet", "Pets"]];
 let tab = "shown";
-let brush = null; // the colour new things come in
+let colourOpen = false;
+let finishAim = null; // "wall" or "floor": the finish whose palette is open
 function tile(label, picture, pressed, onPick, key) {
   const b = document.createElement("button");
   b.type = "button";
@@ -173,37 +190,81 @@ function chipOf(k) {
   c.dataset.finish = k;
   return c;
 }
-function renderTiles() {
-  const pick = (key) => (k) => () => {
-    draft[key] = k;
+const heading = (words) => Object.assign(document.createElement("h3"), { className: "group", textContent: words });
+/** A row of colours; `key` is the one in use, and pressing it again clears it. */
+function swatches(key, set) {
+  return Object.entries(COLOURS).map(([name, hex]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.style.background = hex;
+    b.dataset.colour = name;
+    b.setAttribute("aria-label", name);
+    b.title = name;
+    b.setAttribute("aria-pressed", String(key === name));
+    b.addEventListener("click", () => {
+      set(key === name ? null : name);
+      changed();
+      renderPanel();
+    });
+    return b;
+  });
+}
+function finishRow(aim, title, table, value, tintKey) {
+  const out = [heading(title), ...Object.entries(table).map(([k, v]) => tile(v.name, finishThumb(aim, k, draft[tintKey]), draft[value] === k, () => {
+    draft[value] = k;
+    finishAim = aim;
     changed();
     renderPanel();
-  };
+  }, k))];
+  if (finishAim === aim) {
+    const row = document.createElement("div");
+    row.className = "colours";
+    row.setAttribute("aria-label", `Colour of the ${title.toLowerCase()}`);
+    row.append(...swatches(draft[tintKey] ?? null, (c) => (c ? (draft[tintKey] = c) : delete draft[tintKey])));
+    out.push(row);
+  }
+  return out;
+}
+/** Where an artifact goes: the stand you chose, else the first empty one, else a new plinth. */
+const chosenStand = () => {
+  const i = selectedItem();
+  return i && ITEMS[i.type].group === "stand" ? i : null;
+};
+function renderTiles() {
   let tiles = [];
   let hint = "";
-  if (tab === "walls") tiles = Object.entries(WALLS).map(([k, v]) => tile(v.name, finishThumb("wall", k, draft.wallTint), draft.wall === k, pick("wall")(k), k));
-  else if (tab === "floors") tiles = Object.entries(FLOORS).map(([k, v]) => tile(v.name, finishThumb("floor", k, draft.floorTint), draft.floor === k, pick("floor")(k), k));
-  else if (tab === "light") tiles = Object.entries(LIGHTS).map(([k, v]) => tile(v.name, chipOf(k), draft.light === k, pick("light")(k), k));
-  else if (tab === "shown") {
-    const i = selectedItem();
-    const stand = i && ITEMS[i.type].group === "stand" ? i : null;
+  if (tab === "room") {
+    tiles = [
+      ...finishRow("wall", "Walls", WALLS, "wall", "wallTint"),
+      ...finishRow("floor", "Floors", FLOORS, "floor", "floorTint"),
+      heading("Light"),
+      ...Object.entries(LIGHTS).map(([k, v]) => tile(v.name, chipOf(k), draft.light === k, () => {
+        draft.light = k;
+        changed();
+        renderPanel();
+      }, k)),
+    ];
+  } else if (tab === "shown") {
+    const stand = chosenStand();
     const used = new Set(draft.items.filter((x) => x.artifact && x.uid !== stand?.uid).map((x) => x.artifact));
     const free = shelf.filter((a) => !used.has(a.id));
     tiles = free.map((a) => {
       const pressed = stand?.artifact === a.id;
       return tile(itemName(a.kind, a.material), itemIcon(a, 64), pressed, () => showArtifact(a, stand, pressed), a.id);
     });
-    hint = !shelf.length ? "Nothing collected yet." : !free.length ? "Everything you've collected is on show." : stand ? "Tap one to show it on this stand." : "Tap one to place it on a new plinth, or select a stand first.";
+    if (!free.length) hint = "Everything is on show.";
   } else {
     const full = draft.items.length >= ROOM_MAX_ITEMS;
-    tiles = Object.entries(ITEMS)
-      .filter(([, t]) => t.group === tab)
-      .map(([type, t]) => {
-        const b = tile(t.name, itemThumb(type, brush), false, () => add(type), type);
+    for (const [group, title] of GROUPS) {
+      tiles.push(heading(title));
+      for (const [type, t] of Object.entries(ITEMS)) {
+        if (t.group !== group) continue;
+        const b = tile(t.name, itemThumb(type, null), false, () => add(type), type);
         b.disabled = full;
-        return b;
-      });
-    if (full) hint = `A room holds ${ROOM_MAX_ITEMS} things. Remove one to add another.`;
+        tiles.push(b);
+      }
+    }
+    if (full) hint = `The room is full. Remove something first.`;
   }
   $("[data-tiles]").replaceChildren(...tiles);
   const h = $("[data-tiles-hint]");
@@ -215,47 +276,18 @@ function showArtifact(a, stand, pressed) {
     if (pressed) delete stand.artifact;
     else stand.artifact = a.id;
   } else {
-    if (draft.items.length >= ROOM_MAX_ITEMS) return say(`A room holds ${ROOM_MAX_ITEMS} things.`);
-    const [x, y] = freeSpot(draft.items, "floor");
-    const i = { uid: nextUid(draft.items), type: "plinth", x, y, artifact: a.id };
-    draft.items.push(i);
-    selected = i.uid;
+    const empty = draft.items.find((i) => ITEMS[i.type].group === "stand" && !i.artifact);
+    if (empty) empty.artifact = a.id;
+    else {
+      if (draft.items.length >= ROOM_MAX_ITEMS) return say("The room is full. Remove something first.");
+      const [x, y] = freeSpot(draft.items, "floor");
+      draft.items.push({ uid: nextUid(draft.items), type: "plinth", x, y, artifact: a.id });
+    }
   }
   changed();
   renderPanel();
 }
-/** What the palette paints right now, and what it's called. */
-function paintTarget() {
-  if (tab === "walls") return { key: draft.wallTint ?? null, label: "Colour: the walls", set: (c) => (c ? (draft.wallTint = c) : delete draft.wallTint) };
-  if (tab === "floors") return { key: draft.floorTint ?? null, label: "Colour: the floor", set: (c) => (c ? (draft.floorTint = c) : delete draft.floorTint) };
-  const i = selectedItem();
-  if (i) return { key: i.colour ?? null, label: `Colour: ${ITEMS[i.type].name}`, set: (c) => (c ? (i.colour = c) : delete i.colour) };
-  return { key: brush, label: "Colour: new things", set: (c) => (brush = c), brush: true };
-}
-function renderColours() {
-  const target = paintTarget();
-  $("[data-colours-title]").textContent = target.label;
-  $("[data-colours]").replaceChildren(
-    ...Object.entries(COLOURS).map(([name, hex]) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.style.background = hex;
-      b.dataset.colour = name;
-      b.setAttribute("aria-label", name);
-      b.title = name;
-      b.setAttribute("aria-pressed", String(target.key === name));
-      b.addEventListener("click", () => {
-        const t = paintTarget();
-        t.set(t.key === name ? null : name); // tapping it again clears it
-        if (!t.brush) changed();
-        renderPanel();
-      });
-      return b;
-    }),
-  );
-}
 function renderPanel() {
-  showDirty();
   renderTabs();
   renderTiles();
   renderSelection();
@@ -263,7 +295,7 @@ function renderPanel() {
 function add(type) {
   if (draft.items.length >= ROOM_MAX_ITEMS) return;
   const [x, y] = freeSpot(draft.items, ITEMS[type].place);
-  const i = { uid: nextUid(draft.items), type, x, y, ...(brush ? { colour: brush } : {}) };
+  const i = { uid: nextUid(draft.items), type, x, y };
   draft.items.push(i);
   selected = i.uid;
   changed();
@@ -272,17 +304,23 @@ function add(type) {
 function renderSelection() {
   const i = selectedItem();
   $("[data-tools]").hidden = !i || !editing;
-  renderColours();
+  const open = !!i && colourOpen;
+  $("[data-colours]").hidden = !open;
+  $("[data-colour-tool]").setAttribute("aria-pressed", String(open));
   if (!i) return;
-  $("[data-selected-name]").textContent = ITEMS[i.type].name;
-  $("[data-rotate]").disabled = !canTurn(i.type);
+  $("[data-rotate]").hidden = !canTurn(i.type);
+  if (open) $("[data-colours]").replaceChildren(...swatches(i.colour ?? null, (c) => (c ? (i.colour = c) : delete i.colour)));
 }
 function select(uid) {
+  if (uid !== selected) colourOpen = false;
   selected = uid;
   renderTiles();
   renderSelection();
 }
-$("[data-deselect]").addEventListener("click", () => select(null));
+$("[data-colour-tool]").addEventListener("click", () => {
+  colourOpen = !colourOpen;
+  renderSelection();
+});
 $("[data-rotate]").addEventListener("click", () => {
   const i = selectedItem();
   if (!i) return;
@@ -291,23 +329,34 @@ $("[data-rotate]").addEventListener("click", () => {
   else delete i.rot;
   changed();
 });
-$("[data-remove]").addEventListener("click", () => {
+function removeSelected() {
   draft.items = draft.items.filter((i) => i.uid !== selected);
   selected = null;
+  colourOpen = false;
   changed();
   renderPanel();
-});
-for (const b of document.querySelectorAll("[data-nudge]")) {
-  b.addEventListener("click", () => {
-    const i = selectedItem();
-    if (!i) return;
-    const [dx, dy] = b.dataset.nudge.split(",").map(Number);
-    // as it looks on screen: on the floor, right is along x and away from y
-    const wall = ITEMS[i.type].place === "wall";
-    const mx = wall ? dx : dx + dy, my = wall ? -dy : dy - dx;
-    [i.x, i.y] = snapSpot(i.x + mx / 16, i.y + my / 16);
-    changed();
-  });
+}
+$("[data-remove]").addEventListener("click", removeSelected);
+/** One grid step, as it looks on screen: on the floor, right is along x and away from y. */
+function nudge(dx, dy) {
+  const i = selectedItem();
+  if (!i) return;
+  const wall = ITEMS[i.type].place === "wall";
+  const mx = wall ? dx : dx + dy, my = wall ? -dy : dy - dx;
+  [i.x, i.y] = snapSpot(i.x + mx / 16, i.y + my / 16);
+  changed();
+}
+const MOVE = { ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowRight: [1, 0] };
+function editKey(e) {
+  if (MOVE[e.key]) nudge(...MOVE[e.key]);
+  else if (e.key === "Enter") {
+    const at = draft.items.findIndex((i) => i.uid === selected);
+    select(draft.items[(at + 1) % draft.items.length]?.uid ?? null);
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    if (selected !== null) removeSelected();
+  } else if (e.key === "Escape") select(null);
+  else return;
+  e.preventDefault();
 }
 $("[data-photo]").addEventListener("click", () => {
   const was = selected;
@@ -329,46 +378,64 @@ function setEditing(on) {
   editing = on;
   document.body.toggleAttribute("data-editing", on);
   $("[data-panel]").hidden = !on;
-  $("[data-owner-tools]").hidden = !mine || on || !shelf.length;
-  if (!on) selected = null;
+  if (on) tab = waitingCount(shelf, draft.items) ? "shown" : "things";
+  else {
+    selected = null;
+    finishAim = null;
+    colourOpen = false;
+  }
+  showOwner();
   path = [];
   goal = null;
   $("[data-prompt]").hidden = true;
-  $("[data-walk-hint]").hidden = on;
+  $("[data-walk-hint]").hidden = on || walked;
   renderPanel();
   if (!on && draft) walker = { ...walker, ...freeNear(walker, draft.items), sitting: false };
 }
 $("[data-edit]").addEventListener("click", () => setEditing(true));
-$("[data-done]").addEventListener("click", () => {
-  if (dirty) return say("Save or discard your changes first.");
-  setEditing(false);
-});
-$("[data-discard]").addEventListener("click", () => {
+// Cancel loses work, so with changes it asks once, on the button itself
+let cancelArmed = 0;
+function disarmCancel() {
+  clearTimeout(cancelArmed);
+  cancelArmed = 0;
+  $("[data-cancel]").textContent = "Cancel";
+}
+$("[data-cancel]").addEventListener("click", () => {
+  if (dirty && !cancelArmed) {
+    $("[data-cancel]").textContent = "Lose changes?";
+    cancelArmed = setTimeout(disarmCancel, 3000);
+    return;
+  }
+  disarmCancel();
   draft = structuredClone(room.layout);
-  selected = null;
   dirty = false;
   say("");
   renderOnShow();
-  renderPanel();
+  setEditing(false);
 });
-$("[data-save]").addEventListener("click", async () => {
-  $("[data-save]").disabled = true;
+$("[data-done]").addEventListener("click", async () => {
+  if (!dirty) return setEditing(false);
+  const done = $("[data-done]");
+  done.disabled = true;
   const r = await fetch("/room", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layout: draft, was: room.rev }) }).catch(() => null);
   const j = await r?.json().catch(() => ({}));
+  done.disabled = false;
   if (!r?.ok) {
     if (j?.error === "stale-room") {
       await load();
       return say(`${j.message}.`);
     }
-    $("[data-save]").disabled = false;
-    return say(j?.message ?? "The room didn't save. Try again.");
+    return say(j?.message ?? "That didn't save. Try again.");
   }
   room = { ...room, rev: j.rev, layout: structuredClone(draft) };
   dirty = false;
-  $("[data-waiting]").textContent = waitingWords(shelf, draft.items);
-  renderPanel();
+  setEditing(false);
   say("Saved.");
+  setTimeout(() => $("[data-status]").textContent === "Saved." && say(""), 2500);
   loadRooms();
+});
+addEventListener("beforeunload", (e) => {
+  if (dirty) e.preventDefault();
 });
 
 // the room's pointer: dragging when arranging, looking closer otherwise
@@ -418,7 +485,14 @@ function standUp() {
   walker.seat = null;
   Object.assign(walker, freeNear({ x: walker.x + 0.08, y: walker.y + 0.08 }, draft.items));
 }
+let walked = localStorage.getItem("room-walked") === "yes";
+function hideWalkHint() {
+  if (walked) return;
+  walked = true;
+  localStorage.setItem("room-walked", "yes");
+}
 function walkTo(to, item = null) {
+  hideWalkHint();
   standUp();
   path = route(walker, to, draft.items);
   goal = item;
@@ -450,7 +524,8 @@ canvas.addEventListener("click", (e) => {
 });
 const STEER = { ArrowUp: [-1, -1], ArrowDown: [1, 1], ArrowLeft: [-1, 1], ArrowRight: [1, -1], w: [-1, -1], s: [1, 1], a: [-1, 1], d: [1, -1] };
 canvas.addEventListener("keydown", (e) => {
-  if (editing || dialog.open) return;
+  if (editing) return editKey(e);
+  if (dialog.open) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (STEER[k]) {
     e.preventDefault();
@@ -458,6 +533,7 @@ canvas.addEventListener("keydown", (e) => {
     path = [];
     goal = null;
     standUp();
+    hideWalkHint();
   } else if (k === "e" || k === "Enter") {
     e.preventDefault();
     act();
@@ -497,10 +573,10 @@ function showPrompt() {
   near = walker.sitting ? null : reachable(walker, draft.items, artifactsNow());
   const p = $("[data-prompt]");
   const a = near && artifactsNow()[near.artifact ?? ""];
-  const words = walker.sitting ? "Stand up" : a ? `Look closely at the ${itemName(a.kind, a.material).toLowerCase()}` : near ? `Sit on the ${ITEMS[near.type].name.toLowerCase()}` : "";
+  const words = walker.sitting ? "Stand up" : a ? "Look closely" : near ? "Sit" : "";
   if (words !== p.textContent) p.textContent = words;
   p.hidden = !words || editing;
-  $("[data-walk-hint]").hidden = !p.hidden || editing;
+  $("[data-walk-hint]").hidden = walked || !p.hidden || editing;
   if (near?.uid !== was) stir = 0;
 }
 
@@ -533,11 +609,10 @@ const up = $("[data-closeup]");
 const cg = up.getContext("2d");
 let look = null; // { item, zoom, light: [x, y], wakeUntil, t }
 function closer(a) {
-  look = { item: a, zoom: 1, light: [0.38, 0.3], wakeUntil: 0, t: 0 };
+  look = { item: a, light: [0.38, 0.3], wakeUntil: 0, t: 0 };
   $("[data-closer-name]").textContent = itemName(a.kind, a.material);
-  $("[data-closer-tier]").textContent = MATERIALS[a.material].rarity;
   const when = a.at ? new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "";
-  $("[data-closer-detail]").textContent = `Piece no. ${a.seed}${when ? `, collected ${when}` : ""}.`;
+  $("[data-closer-tier]").textContent = [MATERIALS[a.material].rarity, when].filter(Boolean).join(" · ");
   dialog.showModal();
   requestAnimationFrame(drawCloser);
 }
@@ -552,7 +627,7 @@ function drawCloser(ms) {
   bg.addColorStop(1, "#0d0b09");
   cg.fillStyle = bg;
   cg.fillRect(0, 0, W, W);
-  const r = (W * 0.27 * look.zoom);
+  const r = W * 0.27;
   cg.fillStyle = "rgba(0,0,0,.3)";
   cg.filter = `blur(${W * 0.012}px)`;
   cg.beginPath();
@@ -577,17 +652,13 @@ const moveLight = (e) => {
 };
 up.addEventListener("pointermove", moveLight);
 up.addEventListener("pointerdown", moveLight);
-const zoomBy = (k) => {
-  look.zoom = Math.max(0.7, Math.min(1.5, look.zoom * k));
-};
-$("[data-nearer]").addEventListener("click", () => zoomBy(1.2));
-$("[data-further]").addEventListener("click", () => zoomBy(1 / 1.2));
-$("[data-wake]").addEventListener("click", () => {
+function wake() {
   look.wakeUntil = performance.now() + 2600;
-  look.wokenAt = performance.now();
   // with reduced motion a wake is one still step: the pose changes, not a run
   if (reduced.matches) look.t += 0.5;
-});
+}
+$("[data-wake]").addEventListener("click", wake);
+up.addEventListener("click", wake);
 $("[data-close]").addEventListener("click", () => dialog.close());
 dialog.addEventListener("click", (e) => {
   if (e.target === dialog) dialog.close();
@@ -609,7 +680,7 @@ canvas.probe = () => {
     selected,
     shelf: shelf.length,
     shown: draft?.items.filter((i) => i.artifact).length ?? 0,
-    looking: dialog.open ? { zoom: look.zoom, t: look.t } : null,
+    looking: dialog.open ? { t: look.t } : null,
     items: (draft?.items ?? []).map((i) => {
       const up = baseOf(i, draft.items);
       const b = bounds(i, up);
