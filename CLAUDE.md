@@ -111,9 +111,9 @@ ADR 28 says which still stand.
 ### Your room
 
 - **Everyone has an exhibition room** at `/room/<tag>`
-  ([ADR 31](docs/adr/0031-exhibition-rooms.md)), `/room/` being your own: one
-  fixed view of a wall and a floor, a layout of wall, floor, light and at
-  most `ROOM_MAX_ITEMS` items. Everything placeable is in `public/room.js`.
+  ([ADR 31](docs/adr/0031-exhibition-rooms.md)), `/room/` being your own: a
+  isometric room ([ADR 33](docs/adr/0033-walkable-isometric-room.md)), a
+  layout of wall, floor, light and at most `ROOM_MAX_ITEMS` items. Everything placeable is in `public/room.js`.
 - **Artifacts stand on stands,** one each, once in a room, and only ones the
   room's owner banked. The store checks ownership; nothing else can.
 - **Only the owner can edit, and it's enforced by shape:** `POST /room` names
@@ -128,6 +128,10 @@ ADR 28 says which still stand.
   for choosing a finish, "+" tiles for adding, a card for what's selected, and
   Remove marked as destructive. The panel always says whether there are unsaved
   changes, and Save stays in reach while it scrolls.
+- **You walk it:** a local robot, by tap or click (routed round things) or
+  arrows and WASD, blocked by what's placed, never stored or sent. Near an
+  artifact, it stirs and a prompt offers a close look; benches and chairs can
+  be sat on. Arranging hides the robot.
 - **Close observation:** any exhibited artifact opens large, with a light you
   move, closer and further, and a short wake. The room also lists them as
   buttons, so nothing depends on the canvas.
@@ -228,7 +232,7 @@ store with a test clock), `spec/room.test.ts`, `spec/store.test.ts` and `spec/ht
 
 Accounts, names, chat, emotes, avatars, uploaded assets, runtime AI models,
 a physics library, more arenas, bots, leaderboards of people, free text
-in rooms, 3D, rounds,
+in rooms, a 3D renderer, shared presence in rooms, rounds,
 countdowns, upgrades, elimination, rate limiting.
 
 ## The live arena is not a test fixture
