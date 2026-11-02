@@ -101,9 +101,9 @@ ADR 28 says which still stand.
   doesn't. A contact on the same step comes first. Banked is final.
 - **An artifact is available, carried or banked, never two:** one row, one
   `state`, a CHECK and a trigger, and single conditional UPDATEs.
-- **Your collection comes first:** every artifact you've banked as its own
-  card, newest first. The catalog is a closed section under it: twelve
-  entries, silhouettes until found.
+- **Your collection lives in your room:** every artifact you've banked as its
+  own card, newest first, with the closed catalog under it: twelve entries,
+  silhouettes until found.
 - **What persists:** your collection, the floor, and the all-time vault
   total. There are no rounds, countdowns or expiry. Robots
   are presence, in memory only.
@@ -124,20 +124,20 @@ ADR 28 says which still stand.
 - **No free text in a room.** Names are generated from the tag; no titles or
   captions. Rooms are public, and read-only to everyone but their owner.
 - **Arranging works like a decorating game** ([ADR 34](docs/adr/0034-room-editor-like-a-decorating-game.md)):
-  icon tabs over picture tiles; a tile places its item, selected; rotate,
-  remove and confirm sit on the room; a muted palette tints what's selected,
-  or the wall or floor; things snap to a grid; small things stack on surfaces;
-  a picture button saves a PNG locally. Mechanics are copied, never art.
-- **Each kind of control looks like its job:** one filled primary (Save),
-  quiet text for backing out (Discard, Done), tiles for choosing and adding, a
-  tick on what's chosen, and Remove marked as destructive. The panel always
-  says whether there are unsaved changes, and Save stays in reach.
+  three tabs over picture tiles ([ADR 35](docs/adr/0035-say-less-show-the-next-thing.md));
+  a tile places its item, selected; Turn, Colour and Remove appear on the room
+  only for what's selected; a muted palette tints it, or the wall or floor;
+  things snap to a grid; small things stack on surfaces; a picture button
+  saves a PNG locally. Mechanics are copied, never art.
+- **Each kind of control looks like its job:** one filled primary (Done, which
+  saves), quiet Cancel, tiles for choosing and adding, a tick on what's chosen,
+  and Remove marked as destructive. Done stays in reach.
 - **You walk it:** a local robot, by tap or click (routed round things) or
   arrows and WASD, blocked by what's placed, never stored or sent. Near an
   artifact, it stirs and a prompt offers a close look; benches and chairs can
   be sat on. Arranging hides the robot.
 - **Close observation:** any exhibited artifact opens large, with a light you
-  move, closer and further, and a short wake. The room also lists them as
+  move and a short wake. The room also lists them as
   buttons, so nothing depends on the canvas.
 
 ### Staying and leaving
@@ -157,16 +157,17 @@ ADR 28 says which still stand.
 
 ### The journey
 
-- **Grab, deliver, exhibit** ([ADR 32](docs/adr/0032-one-player-journey.md)):
-  three steps always shown, the current one marked, from what the server says
-  you hold.
-- **At risk is amber and dashed; kept for good is solid gold,** everywhere,
-  with words too. Never mix them.
-- **Weight shows as top speed,** a percentage and a meter.
-- **One line of guidance at a time, on the arena,** gone once done. Words about
-  you only, never about anyone else.
+- **Grab, deliver, exhibit** ([ADR 32](docs/adr/0032-one-player-journey.md))
+  is shown, not listed ([ADR 35](docs/adr/0035-say-less-show-the-next-thing.md)):
+  the arena marks the next thing itself, and the Room button glows when
+  something of yours isn't on show.
+- **At risk is amber and dashed; kept for good is solid gold,** everywhere.
+  Never mix them.
+- **Weight is felt:** the aim line and the flight show it.
+- **Guidance is one mark on the arena, three words at most,** gone once done.
+  Words about you only, never about anyone else.
 - **Every delivery is an event:** a burst at the vault for everyone, the
-  message for the deliverer, a link on to the room.
+  message for the deliverer.
 
 ### The page
 
@@ -176,9 +177,11 @@ ADR 28 says which still stand.
 - **Silence counts as lost.** A network can vanish without a stream ever
   closing, so a `beat` event goes out every `BEAT_MS`, and a page that hears
   nothing for `BEAT_MISS_MS` drops the stream, says so and reconnects.
-- **Nothing is explained by a wall of text.** At 390x844 the arena fills the
-  width, a pull pad sits under it, and nothing scrolls sideways; at 844x390
-  the panel sits beside the arena.
+- **Each screen has a budget of words and controls,** enforced by
+  `browser-check`'s `budget` section. Add to a screen only by removing
+  something, or by raising the budget with a reason.
+- **At 390x844** the arena fills the width, a pull pad fills the rest, and
+  nothing scrolls sideways; at 844x390 the arena fills the height.
 - **Every animation has a `prefers-reduced-motion` path.**
 
 ## The contract
