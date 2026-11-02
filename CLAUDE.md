@@ -123,6 +123,11 @@ ADR 28 says which still stand.
   `409 stale-room`. Layouts persist across restarts.
 - **No free text in a room.** Names are generated from the tag; no titles or
   captions. Rooms are public, and read-only to everyone but their owner.
+- **Each kind of control looks like its job:** one filled primary (Save),
+  quiet text for backing out (Discard, Done), material swatches with a tick
+  for choosing a finish, "+" tiles for adding, a card for what's selected, and
+  Remove marked as destructive. The panel always says whether there are unsaved
+  changes, and Save stays in reach while it scrolls.
 - **Close observation:** any exhibited artifact opens large, with a light you
   move, closer and further, and a short wake. The room also lists them as
   buttons, so nothing depends on the canvas.
