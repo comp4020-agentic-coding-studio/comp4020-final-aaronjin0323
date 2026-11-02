@@ -22,6 +22,19 @@
       <canvas data-room tabindex="0" aria-label="The room. Your robot walks in it. What's on show is listed below." aria-describedby="walk-hint"></canvas>
       <p class="walk-hint" id="walk-hint" data-walk-hint>Tap the floor to walk. Keys: arrows or WASD, E to use.</p>
       <button type="button" class="primary prompt" data-prompt hidden></button>
+      <div class="tools" data-tools role="group" aria-label="The selected thing" hidden>
+        <span class="tool-name" data-selected-name></span>
+        <button type="button" data-rotate>Turn</button>
+        <span class="pair" role="group" aria-label="Move it">
+          <button type="button" data-nudge="-1,0" aria-label="Move left">←</button>
+          <button type="button" data-nudge="0,-1" aria-label="Move up">↑</button>
+          <button type="button" data-nudge="0,1" aria-label="Move down">↓</button>
+          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
+        </span>
+        <button type="button" class="danger" data-remove>Remove</button>
+        <button type="button" class="tick" data-deselect aria-label="Finished with this">✓</button>
+      </div>
+      <button type="button" class="photo" data-photo>Save a picture</button>
       <p class="status" data-status role="status" hidden></p>
     </div>
     <aside class="panel" data-panel hidden aria-label="Arrange your room">
@@ -29,26 +42,11 @@
         <h2>Arrange your room</h2>
         <button type="button" class="quiet" data-done>Done</button>
       </div>
-      <div class="selection" data-selection hidden>
-        <h3 data-selected-name></h3>
-        <label data-artifact-label>On show <select data-artifact></select></label>
-        <p class="keys" role="group" aria-label="Move it">
-          <button type="button" data-nudge="-1,0" aria-label="Move left">←</button>
-          <button type="button" data-nudge="0,-1" aria-label="Move back or up">↑</button>
-          <button type="button" data-nudge="0,1" aria-label="Move forward or down">↓</button>
-          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
-          <button type="button" class="danger" data-remove>Remove</button>
-        </p>
-      </div>
-      <p class="hint" data-select-hint>Select anything in the room to move it, or to choose what a stand shows.</p>
-      <h3 class="group">Add to the room</h3>
-      <fieldset><legend>Display stands</legend><div class="adds" data-add-stand></div></fieldset>
-      <fieldset><legend>Furniture</legend><div class="adds" data-add-furniture></div></fieldset>
-      <fieldset><legend>Decoration</legend><div class="adds" data-add-decor></div></fieldset>
-      <h3 class="group">Room finish</h3>
-      <fieldset><legend>Walls</legend><div class="swatches" data-walls></div></fieldset>
-      <fieldset><legend>Flooring</legend><div class="swatches" data-floors></div></fieldset>
-      <fieldset><legend>Light</legend><div class="swatches" data-lights></div></fieldset>
+      <div class="tabs" data-tabs role="tablist" aria-label="What to change"></div>
+      <div class="tiles" data-tiles></div>
+      <p class="hint" data-tiles-hint hidden></p>
+      <h3 class="group" data-colours-title>Colour</h3>
+      <div class="colours" data-colours role="group" aria-label="Colour"></div>
       <div class="savebar">
         <p class="dirty" data-dirty aria-live="polite">No changes</p>
         <div class="saves">

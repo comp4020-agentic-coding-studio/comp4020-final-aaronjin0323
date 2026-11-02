@@ -2,7 +2,7 @@
 // show; its owner, and only its owner, can arrange it. The server is what
 // enforces that: POST /room names no room. Everything here shows or edits a
 // draft; a layout counts once the server has saved it.
-import { FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, bounds, freeNear, freeSpot, hitItem, iso, nextUid, project, reachable, route, stepWalker, unproject } from "./room.js";
+import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
 import { MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
 import { itemName, waitingWords } from "./arena-ui.js";
@@ -136,50 +136,134 @@ function changed() {
   renderOnShow();
   renderSelection();
 }
+// the editor: tabs over picture tiles, and a palette for what's in hand
+const TABS = [["walls", "Walls"], ["floors", "Floors"], ["light", "Light"], ["stand", "Stands"], ["furniture", "Seats"], ["wall", "On walls"], ["rug", "Rugs"], ["decor", "Decor"], ["pet", "Pets"], ["shown", "Artifacts"]];
+let tab = "shown";
+let brush = null; // the colour new things come in
+function tile(label, picture, pressed, onPick, key) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "tile";
+  b.dataset.tile = key;
+  b.setAttribute("aria-pressed", String(!!pressed));
+  b.append(picture, label);
+  b.addEventListener("click", onPick);
+  return b;
+}
+function renderTabs() {
+  $("[data-tabs]").replaceChildren(
+    ...TABS.map(([id, label]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.dataset.tab = id;
+      b.textContent = label;
+      b.setAttribute("aria-selected", String(id === tab));
+      b.addEventListener("click", () => {
+        tab = id;
+        renderPanel();
+      });
+      return b;
+    }),
+  );
+}
+function chipOf(k) {
+  const c = document.createElement("span");
+  c.className = "chip";
+  c.dataset.finish = k;
+  return c;
+}
+function renderTiles() {
+  const pick = (key) => (k) => () => {
+    draft[key] = k;
+    changed();
+    renderPanel();
+  };
+  let tiles = [];
+  let hint = "";
+  if (tab === "walls") tiles = Object.entries(WALLS).map(([k, v]) => tile(v.name, finishThumb("wall", k, draft.wallTint), draft.wall === k, pick("wall")(k), k));
+  else if (tab === "floors") tiles = Object.entries(FLOORS).map(([k, v]) => tile(v.name, finishThumb("floor", k, draft.floorTint), draft.floor === k, pick("floor")(k), k));
+  else if (tab === "light") tiles = Object.entries(LIGHTS).map(([k, v]) => tile(v.name, chipOf(k), draft.light === k, pick("light")(k), k));
+  else if (tab === "shown") {
+    const i = selectedItem();
+    const stand = i && ITEMS[i.type].group === "stand" ? i : null;
+    const used = new Set(draft.items.filter((x) => x.artifact && x.uid !== stand?.uid).map((x) => x.artifact));
+    const free = shelf.filter((a) => !used.has(a.id));
+    tiles = free.map((a) => {
+      const pressed = stand?.artifact === a.id;
+      return tile(itemName(a.kind, a.material), itemIcon(a, 64), pressed, () => showArtifact(a, stand, pressed), a.id);
+    });
+    hint = !shelf.length ? "Nothing collected yet." : !free.length ? "Everything you've collected is on show." : stand ? "Tap one to show it on this stand." : "Tap one to place it on a new plinth, or select a stand first.";
+  } else {
+    const full = draft.items.length >= ROOM_MAX_ITEMS;
+    tiles = Object.entries(ITEMS)
+      .filter(([, t]) => t.group === tab)
+      .map(([type, t]) => {
+        const b = tile(t.name, itemThumb(type, brush), false, () => add(type), type);
+        b.disabled = full;
+        return b;
+      });
+    if (full) hint = `A room holds ${ROOM_MAX_ITEMS} things. Remove one to add another.`;
+  }
+  $("[data-tiles]").replaceChildren(...tiles);
+  const h = $("[data-tiles-hint]");
+  h.textContent = hint;
+  h.hidden = !hint;
+}
+function showArtifact(a, stand, pressed) {
+  if (stand) {
+    if (pressed) delete stand.artifact;
+    else stand.artifact = a.id;
+  } else {
+    if (draft.items.length >= ROOM_MAX_ITEMS) return say(`A room holds ${ROOM_MAX_ITEMS} things.`);
+    const [x, y] = freeSpot(draft.items, "floor");
+    const i = { uid: nextUid(draft.items), type: "plinth", x, y, artifact: a.id };
+    draft.items.push(i);
+    selected = i.uid;
+  }
+  changed();
+  renderPanel();
+}
+/** What the palette paints right now, and what it's called. */
+function paintTarget() {
+  if (tab === "walls") return { key: draft.wallTint ?? null, label: "Colour: the walls", set: (c) => (c ? (draft.wallTint = c) : delete draft.wallTint) };
+  if (tab === "floors") return { key: draft.floorTint ?? null, label: "Colour: the floor", set: (c) => (c ? (draft.floorTint = c) : delete draft.floorTint) };
+  const i = selectedItem();
+  if (i) return { key: i.colour ?? null, label: `Colour: ${ITEMS[i.type].name}`, set: (c) => (c ? (i.colour = c) : delete i.colour) };
+  return { key: brush, label: "Colour: new things", set: (c) => (brush = c), brush: true };
+}
+function renderColours() {
+  const target = paintTarget();
+  $("[data-colours-title]").textContent = target.label;
+  $("[data-colours]").replaceChildren(
+    ...Object.entries(COLOURS).map(([name, hex]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.style.background = hex;
+      b.dataset.colour = name;
+      b.setAttribute("aria-label", name);
+      b.title = name;
+      b.setAttribute("aria-pressed", String(target.key === name));
+      b.addEventListener("click", () => {
+        const t = paintTarget();
+        t.set(t.key === name ? null : name); // tapping it again clears it
+        if (!t.brush) changed();
+        renderPanel();
+      });
+      return b;
+    }),
+  );
+}
 function renderPanel() {
   showDirty();
-  const pick = (host, table, key) => {
-    $(host).replaceChildren(
-      ...Object.entries(table).map(([k, v]) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        chip.dataset.finish = k;
-        b.append(chip, v.name);
-        b.setAttribute("aria-pressed", String(draft[key] === k));
-        b.addEventListener("click", () => {
-          draft[key] = k;
-          changed();
-          renderPanel();
-        });
-        return b;
-      }),
-    );
-  };
-  pick("[data-walls]", WALLS, "wall");
-  pick("[data-floors]", FLOORS, "floor");
-  pick("[data-lights]", LIGHTS, "light");
-  for (const group of ["stand", "furniture", "decor"]) {
-    $(`[data-add-${group}]`).replaceChildren(
-      ...Object.entries(ITEMS)
-        .filter(([, t]) => t.group === group)
-        .map(([type, t]) => {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.textContent = t.name;
-          b.disabled = draft.items.length >= ROOM_MAX_ITEMS;
-          b.addEventListener("click", () => add(type));
-          return b;
-        }),
-    );
-  }
+  renderTabs();
+  renderTiles();
   renderSelection();
 }
 function add(type) {
   if (draft.items.length >= ROOM_MAX_ITEMS) return;
   const [x, y] = freeSpot(draft.items, ITEMS[type].place);
-  const i = { uid: nextUid(draft.items), type, x, y };
+  const i = { uid: nextUid(draft.items), type, x, y, ...(brush ? { colour: brush } : {}) };
   draft.items.push(i);
   selected = i.uid;
   changed();
@@ -187,24 +271,24 @@ function add(type) {
 }
 function renderSelection() {
   const i = selectedItem();
-  $("[data-selection]").hidden = !i;
-  $("[data-select-hint]").hidden = !!i;
+  $("[data-tools]").hidden = !i || !editing;
+  renderColours();
   if (!i) return;
   $("[data-selected-name]").textContent = ITEMS[i.type].name;
-  const isStand = ITEMS[i.type].group === "stand";
-  $("[data-artifact-label]").hidden = !isStand;
-  if (!isStand) return;
-  const used = new Set(draft.items.filter((x) => x.artifact && x.uid !== i.uid).map((x) => x.artifact));
-  const sel = $("[data-artifact]");
-  sel.replaceChildren(new Option("Nothing", ""), ...shelf.filter((a) => !used.has(a.id)).map((a) => new Option(`${itemName(a.kind, a.material)} (no. ${a.seed})`, a.id)));
-  sel.value = i.artifact ?? "";
-  sel.disabled = shelf.length === 0;
+  $("[data-rotate]").disabled = !canTurn(i.type);
 }
-$("[data-artifact]").addEventListener("change", (e) => {
+function select(uid) {
+  selected = uid;
+  renderTiles();
+  renderSelection();
+}
+$("[data-deselect]").addEventListener("click", () => select(null));
+$("[data-rotate]").addEventListener("click", () => {
   const i = selectedItem();
   if (!i) return;
-  if (e.target.value) i.artifact = e.target.value;
-  else delete i.artifact;
+  const r = ((i.rot ?? 0) + 1) % 4;
+  if (r) i.rot = r;
+  else delete i.rot;
   changed();
 });
 $("[data-remove]").addEventListener("click", () => {
@@ -221,11 +305,26 @@ for (const b of document.querySelectorAll("[data-nudge]")) {
     // as it looks on screen: on the floor, right is along x and away from y
     const wall = ITEMS[i.type].place === "wall";
     const mx = wall ? dx : dx + dy, my = wall ? -dy : dy - dx;
-    i.x = Math.max(0, Math.min(1, Math.round((i.x + mx * 0.02) * 1000) / 1000));
-    i.y = Math.max(0, Math.min(1, Math.round((i.y + my * 0.02) * 1000) / 1000));
+    [i.x, i.y] = snapSpot(i.x + mx / 16, i.y + my / 16);
     changed();
   });
 }
+$("[data-photo]").addEventListener("click", () => {
+  const was = selected;
+  selected = null;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      canvas.toBlob((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(room?.name ?? "room").toLowerCase().replace(/[^a-z]+/g, "-")}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        selected = was;
+      });
+    }),
+  );
+});
 function setEditing(on) {
   editing = on;
   document.body.toggleAttribute("data-editing", on);
@@ -236,6 +335,7 @@ function setEditing(on) {
   goal = null;
   $("[data-prompt]").hidden = true;
   $("[data-walk-hint]").hidden = on;
+  renderPanel();
   if (!on && draft) walker = { ...walker, ...freeNear(walker, draft.items), sitting: false };
 }
 $("[data-edit]").addEventListener("click", () => setEditing(true));
@@ -282,8 +382,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (!editing) return; // a visitor walks, on the click that follows
   const hit = hitItem(draft.items, X, Y);
   e.preventDefault();
-  selected = hit?.uid ?? null;
-  renderSelection();
+  select(hit?.uid ?? null);
   if (!hit) return;
   const p = project(hit, ITEMS[hit.type].place);
   drag = { id: e.pointerId, dx: p.X - X, dy: p.Y - Y };
@@ -292,15 +391,14 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointermove", (e) => {
   const [X, Y] = inView(e);
   if (!editing && draft) {
-    const h = hitItem(draft.items, X, Y);
+    const h = hitShown(draft.items, X, Y, artifactsNow()) ?? hitItem(draft.items, X, Y);
     canvas.style.cursor = h && (artifactsNow()[h.artifact ?? ""] || ITEMS[h.type].seat) ? "pointer" : "default";
   }
   if (!drag || e.pointerId !== drag.id) return;
   const i = selectedItem();
   if (!i) return;
   const [x, y] = unproject(X + drag.dx, Y + drag.dy, ITEMS[i.type].place);
-  i.x = Math.round(x * 1000) / 1000;
-  i.y = Math.round(y * 1000) / 1000;
+  [i.x, i.y] = dropSpot(i, draft.items, ...snapSpot(x, y));
   drag.moved = true;
 });
 const drop = (e) => {
@@ -342,6 +440,8 @@ function arrive() {
 canvas.addEventListener("click", (e) => {
   if (editing || !draft) return;
   const [X, Y] = inView(e);
+  const shownHit = hitShown(draft.items, X, Y, artifactsNow());
+  if (shownHit) return walkTo(shownHit, shownHit);
   const hit = hitItem(draft.items, X, Y);
   if (hit && ITEMS[hit.type].place === "floor" && (artifactsNow()[hit.artifact ?? ""] || ITEMS[hit.type].seat)) return walkTo(hit, hit);
   const [x, y] = unproject(X, Y, "floor");
@@ -505,17 +605,21 @@ canvas.probe = () => {
     rev: room?.rev ?? null,
     tag: room?.tag ?? null,
     wall: draft?.wall,
+    wallTint: draft?.wallTint,
+    selected,
     shelf: shelf.length,
     shown: draft?.items.filter((i) => i.artifact).length ?? 0,
     looking: dialog.open ? { zoom: look.zoom, t: look.t } : null,
     items: (draft?.items ?? []).map((i) => {
-      const b = bounds(i);
-      return { uid: i.uid, type: i.type, x: i.x, y: i.y, artifact: i.artifact, cx: r.left + b.X * r.width, cy: r.top + ((b.top + b.bottom) / 2) * r.height };
+      const up = baseOf(i, draft.items);
+      const b = bounds(i, up);
+      const rest = restOn(i);
+      return { uid: i.uid, type: i.type, x: i.x, y: i.y, rot: i.rot, colour: i.colour, up, artifact: i.artifact, ax: r.left + rest.X * r.width, ay: r.top + (rest.Y - 0.03) * r.height, cx: r.left + b.X * r.width, cy: r.top + ((b.top + b.bottom) / 2) * r.height };
     }),
   };
 };
 
-import { drawRoom } from "./room-draw.js";
+import { drawRoom, finishThumb, itemThumb } from "./room-draw.js";
 load();
 loadRooms();
 requestAnimationFrame(frame);
