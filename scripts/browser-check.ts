@@ -67,9 +67,13 @@ async function launching(browser: Browser) {
   await a.waitForTimeout(200);
   const before = me(await probe(a));
   await launch(a, [-1, 0.2]); // back the other way, in flight
-  await a.waitForTimeout(60);
+  // two samples after the launch: comparing with one taken before the drag
+  // races the robot, which is still flying forward while the mouse moves
+  await a.waitForTimeout(40);
+  const turned = me(await probe(a));
+  await a.waitForTimeout(120);
   const after = me(await probe(a));
-  check(before.speed > 1 && after.pos[0] < before.pos[0], "a launch takes hold in mid-flight, the robot turning back", `was ${before.speed.toFixed(1)} m/s`);
+  check(before.speed > 1 && after.pos[0] < turned.pos[0], "a launch takes hold in mid-flight, the robot turning back", `was ${before.speed.toFixed(1)} m/s, ${(turned.pos[0] - after.pos[0]).toFixed(2)} m back`);
   check(Math.hypot(after.pos[0] - start[0], after.pos[1] - start[1]) > 0.2, "it has really moved");
   await a.keyboard.press("Escape");
   await a.locator("[data-arena]").focus();
@@ -264,9 +268,24 @@ async function room(browser: Browser) {
   }, { wall: "plaster", floor: "oak", light: "warm", items: [{ uid: 1, type: "plinth", x: 0.5, y: 0.5, artifact: back.items.find((i: any) => i.artifact).artifact }] });
   check(refused === 409, "and can't show the owner's artifact in their own room", `${refused}`);
   const held = back.items.find((i: any) => i.artifact);
-  await b.mouse.click(held.cx, held.cy - 40);
-  await b.waitForFunction(() => document.querySelector("dialog")?.open, null, { timeout: 2000 });
-  check(true, "pressing an artifact opens it large");
+  // walking: a visitor goes round the room
+  await b.waitForTimeout(250);
+  await b.screenshot({ path: ".shots/iso-1440.png" });
+  const w0 = (await roomProbe(b)).walker;
+  await b.locator("[data-room]").focus();
+  await b.keyboard.down("ArrowUp");
+  await b.waitForTimeout(500);
+  await b.keyboard.up("ArrowUp");
+  const w1 = (await roomProbe(b)).walker;
+  check(w1.x < w0.x && w1.y < w0.y, "the keys walk a visitor's robot", `${w0.x.toFixed(2)} to ${w1.x.toFixed(2)}`);
+  await b.keyboard.down("ArrowUp");
+  await b.waitForTimeout(3500);
+  await b.keyboard.up("ArrowUp");
+  const w2 = (await roomProbe(b)).walker;
+  check(w2.x >= 0.03 && w2.y >= 0.03, "and the walls hold it in", `${w2.x.toFixed(2)}, ${w2.y.toFixed(2)}`);
+  await b.mouse.click(held.cx, held.cy);
+  await b.waitForFunction(() => document.querySelector("dialog")?.open, null, { timeout: 8000 });
+  check(true, "pressing an artifact walks over to it, and opens it large");
   await b.click("[data-nearer]");
   await b.click("[data-wake]");
   await b.waitForTimeout(400);
@@ -275,6 +294,14 @@ async function room(browser: Browser) {
   await b.mouse.move(600, 300);
   await b.screenshot({ path: ".shots/closer-1440.png" });
   await b.click("[data-close]");
+  await b.waitForFunction(() => (document.querySelector("[data-room]") as any).probe().near !== null);
+  check(/Look closely/.test((await roomProbe(b)).prompt), "beside an artifact, a prompt offers a look", (await roomProbe(b)).prompt);
+  await b.screenshot({ path: ".shots/iso-near-1440.png" });
+  const bench = back.items.find((i: any) => i.type === "bench");
+  await b.mouse.click(bench.cx, bench.cy);
+  await b.waitForFunction(() => (document.querySelector("[data-room]") as any).probe().walker.sitting, null, { timeout: 9000 }).then(() => check(true, "pressing a bench walks over and sits"), () => check(false, "pressing a bench walks over and sits"));
+  await b.click("[data-prompt]");
+  check(!(await roomProbe(b)).walker.sitting, "and the prompt stands up again");
   await b.context().close();
 
   const c = await visitor(browser, PHONE);
@@ -282,6 +309,12 @@ async function room(browser: Browser) {
   await c.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().shown > 0);
   check((await c.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, "the room doesn't scroll sideways at 390x844");
   await c.waitForTimeout(200);
+  const before = (await roomProbe(c)).walker;
+  const pic = (await c.locator("[data-room]").boundingBox())!;
+  await c.touchscreen.tap(pic.x + pic.width * 0.5, pic.y + pic.height * 0.62);
+  await c.waitForTimeout(1200);
+  const after = (await roomProbe(c)).walker;
+  check(Math.hypot(after.x - before.x, after.y - before.y) > 0.1, "a tap walks the robot on a phone", `${before.x.toFixed(2)} to ${after.x.toFixed(2)}`);
   await c.screenshot({ path: ".shots/room-390.png" });
   await c.context().close();
   await a.context().close();
@@ -401,22 +434,25 @@ async function together(browser: Browser) {
   await Promise.all(pages.map((p, i) => p.screenshot({ path: `.shots/together-${i < 2 ? "1440" : "390"}-${i}.png` })));
 
   // a refresh mid-carry
-  let held = false;
-  for (const end = Date.now() + 20_000; Date.now() < end && !held; await b.waitForTimeout(220)) {
+  // only once it's at rest with cargo aboard: a moving robot can legally
+  // bank in the vault or lose its cargo to a contact on the way
+  let ready = false;
+  for (const end = Date.now() + 30_000; Date.now() < end && !ready; await b.waitForTimeout(220)) {
     const s = await probe(b);
-    held = s.carrying.length > 0;
+    ready = s.carrying.length > 0 && me(s).speed < 0.05;
+    if (s.carrying.length) continue;
     const near = [...s.artifacts].filter((x: any) => x.readyAt <= Date.now()).sort((x: any, y: any) => Math.hypot(x.pos[0] - me(s).pos[0], x.pos[1] - me(s).pos[1]) - Math.hypot(y.pos[0] - me(s).pos[0], y.pos[1] - me(s).pos[1]))[0];
-    if (!held && near) await launch(b, toward(s, near.pos), 0.8);
+    if (near) await launch(b, toward(s, near.pos), 0.8);
   }
-  check(held, "one page picks something up");
+  check(ready, "one page picks something up and comes to rest");
   const before = await probe(b);
-  await b.waitForTimeout(800); // come to rest clear of the others
   await b.reload();
   await b.waitForFunction(() => document.body.dataset.conn === "live");
   await b.waitForTimeout(300);
   const after = await probe(b);
+  const ids = (s: any) => s.carrying.map((i: any) => i.id).join();
   check(after.you === before.you && me(after).slot === me(before).slot, "a refresh keeps the same robot");
-  check(after.carrying.length >= 1 || me(after) === undefined, "and what it carried", after.carrying.length);
+  check(ids(after) === ids(before), "and exactly what it carried", after.carrying.length);
   check((await b.locator("[data-tray] [data-full]").count()) === after.carrying.length, "and the tray shows it");
 
   void c;
@@ -490,7 +526,7 @@ async function phoneroom(browser: Browser) {
   await p.reload();
   await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev > 0);
   const moved = (await roomProbe(p)).items.find((i: any) => i.uid === stand.uid);
-  check(moved.x > stand.x && moved.y > stand.y && !!moved.artifact, "the arrow buttons moved it, and it saved", `${stand.x} to ${moved.x}`);
+  check(moved.x > stand.x && !!moved.artifact, "the arrow buttons moved it, and it saved", `${stand.x} to ${moved.x}`);
   check((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, "the panel doesn't scroll sideways");
   await p.context().close();
 }

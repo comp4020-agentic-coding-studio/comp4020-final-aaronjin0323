@@ -1,8 +1,8 @@
-// The room, on a 2D canvas (ADR 31): wall and floor as materials, every stand
-// under its own pool of light, soft contact shadows, and a vignette, so it
-// reads like a photograph of a quiet gallery. Nothing here decides anything:
-// geometry and tables are in room.js.
-import { HORIZON, ITEMS, bounds, order, restOn } from "./room.js";
+// The room, on a 2D canvas (ADR 33): an isometric space of two walls and a
+// floor in real materials, things built from lit boxes, each artifact in a pool
+// of light, and a small robot that's drawn in depth order with everything else.
+// Nothing here decides anything: geometry and tables are in room.js.
+import { ITEMS, WALL_H, bounds, footOf, iso, order, project, restOn } from "./room.js";
 import { drawItem } from "./arena-draw.js";
 
 const rngOf = (seed) => {
@@ -10,13 +10,13 @@ const rngOf = (seed) => {
   return () => (s = (s * 48271) % 2147483647) / 2147483647;
 };
 const LIGHT = {
-  warm: { tint: "rgba(255,214,160,.10)", dark: 0.16, pool: "255,226,180", wash: 0.5 },
-  cool: { tint: "rgba(190,214,255,.08)", dark: 0.12, pool: "226,236,255", wash: 0.46 },
-  dusk: { tint: "rgba(30,24,60,.18)", dark: 0.34, pool: "255,206,140", wash: 0.82 },
+  warm: { tint: "rgba(255,214,160,.08)", dark: 0.12, pool: "255,226,180", wash: 0.5 },
+  cool: { tint: "rgba(190,214,255,.07)", dark: 0.1, pool: "226,236,255", wash: 0.46 },
+  dusk: { tint: "rgba(30,24,60,.12)", dark: 0.2, pool: "255,206,140", wash: 0.82 },
 };
 
-function wall(g, w, h, kind) {
-  const H = h * HORIZON;
+function wallTexture(g, w, H, kind) {
+  const h = H;
   const base = { plaster: ["#d9cfbf", "#c5b9a6"], sage: ["#a9b3a0", "#8f9a87"], walnut: ["#5c4030", "#46301f"], midnight: ["#1d2233", "#141827"] }[kind];
   const f = g.createLinearGradient(0, 0, 0, H);
   f.addColorStop(0, base[1]);
@@ -60,95 +60,131 @@ function wall(g, w, h, kind) {
     g.fillStyle = s;
     g.fillRect(0, 0, w, H);
   }
-  // the skirting
-  g.fillStyle = "rgba(0,0,0,.28)";
-  g.fillRect(0, H - h * 0.012, w, h * 0.012);
 }
 
-function floor(g, w, h, kind) {
-  const H = h * HORIZON, D = h - H;
-  const base = { oak: ["#b5946b", "#8d6f4c"], terrazzo: ["#cfc9bf", "#a7a196"], slate: ["#3c3e42", "#26282b"], wool: ["#7c6a58", "#5f5042"] }[kind];
-  const f = g.createLinearGradient(0, H, 0, h);
-  f.addColorStop(0, base[1]);
-  f.addColorStop(1, base[0]);
-  g.fillStyle = f;
-  g.fillRect(0, H, w, D);
+function floorTexture(g, W, H, kind) {
+  const base = { oak: ["#b5946b", "#a2835c"], terrazzo: ["#cfc9bf", "#bdb7ac"], slate: ["#3c3e42", "#303236"], wool: ["#7c6a58", "#6e5e4e"] }[kind];
+  g.fillStyle = base[0];
+  g.fillRect(0, 0, W, H);
   const n = rngOf(29);
   if (kind === "oak") {
-    // boards running to a vanishing point
-    const vx = w / 2, vy = H - D * 1.1;
-    for (let i = -14; i <= 14; i++) {
-      const x = w / 2 + (i * w) / 9;
-      g.strokeStyle = "rgba(50,30,14,.3)";
-      g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(vx + (x - vx) * ((H - vy) / (h - vy)), H);
-      g.lineTo(x, h);
-      g.stroke();
-    }
-    // short butt joints between the boards, closer together towards the wall
-    for (let i = -14; i < 14; i++) {
-      for (let k = 0; k < 3; k++) {
-        const u = n();
-        const y = H + u * u * D;
-        const at = (bx) => vx + (w / 2 + (bx * w) / 9 - vx) * ((y - vy) / (h - vy));
-        g.strokeStyle = "rgba(50,30,14,.22)";
-        g.beginPath();
-        g.moveTo(at(i), y);
-        g.lineTo(at(i + 1), y);
-        g.stroke();
-      }
-    }
-    // the boards' grain and tone
-    for (let i = -14; i < 14; i++) {
-      const x0 = vx + (w / 2 + (i * w) / 9 - vx) * ((H - vy) / (h - vy));
-      const x1 = vx + (w / 2 + ((i + 1) * w) / 9 - vx) * ((H - vy) / (h - vy));
-      g.fillStyle = `rgba(${n() > 0.5 ? "255,230,190" : "50,30,14"},${n() * 0.06})`;
-      g.beginPath();
-      g.moveTo(x0, H);
-      g.lineTo(x1, H);
-      g.lineTo(w / 2 + ((i + 1) * w) / 9, h);
-      g.lineTo(w / 2 + (i * w) / 9, h);
-      g.closePath();
-      g.fill();
+    const boards = 11;
+    for (let i = 0; i < boards; i++) {
+      const y = (i * H) / boards;
+      g.fillStyle = `rgba(${n() > 0.5 ? "255,232,196" : "54,32,14"},${n() * 0.07})`;
+      g.fillRect(0, y, W, H / boards);
+      g.fillStyle = "rgba(50,30,14,.32)";
+      g.fillRect(0, y, W, Math.max(1, H * 0.002));
+      for (let x = n() * W * 0.4; x < W; x += W * (0.25 + n() * 0.3)) g.fillRect(x, y, Math.max(1, W * 0.002), H / boards);
     }
   } else if (kind === "terrazzo") {
-    for (let i = 0; i < 620; i++) {
-      const d = n();
-      g.fillStyle = ["rgba(90,80,70,.5)", "rgba(240,235,225,.7)", "rgba(150,110,80,.45)", "rgba(70,90,90,.4)"][Math.floor(n() * 4)];
+    for (let i = 0; i < 700; i++) {
+      g.fillStyle = ["rgba(90,80,70,.55)", "rgba(240,235,225,.75)", "rgba(150,110,80,.5)", "rgba(70,90,90,.45)"][Math.floor(n() * 4)];
       g.beginPath();
-      g.ellipse(n() * w, H + d * D, (1 + n() * 3) * (0.5 + d), (0.6 + n() * 1.4) * (0.5 + d), n() * 3, 0, Math.PI * 2);
+      g.ellipse(n() * W, n() * H, W * (0.002 + n() * 0.005), H * (0.002 + n() * 0.004), n() * 3, 0, Math.PI * 2);
       g.fill();
     }
   } else if (kind === "slate") {
-    for (let i = 0; i < 6; i++) {
-      const y = H + (D * i * i) / 36;
-      g.strokeStyle = "rgba(0,0,0,.4)";
-      g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(0, y);
-      g.lineTo(w, y);
-      g.stroke();
+    for (let i = 0; i <= 5; i++) {
+      g.fillStyle = "rgba(0,0,0,.42)";
+      g.fillRect((i * W) / 5, 0, Math.max(1, W * 0.003), H);
+      g.fillRect(0, (i * H) / 5, W, Math.max(1, H * 0.003));
     }
-    for (let i = -8; i <= 8; i++) {
-      g.strokeStyle = "rgba(0,0,0,.28)";
-      g.beginPath();
-      g.moveTo(w / 2 + (i * w) / 8, H);
-      g.lineTo(w / 2 + (i * w) / 5, h);
-      g.stroke();
+    for (let i = 0; i < 25; i++) {
+      g.fillStyle = `rgba(255,255,255,${n() * 0.05})`;
+      g.fillRect((Math.floor(n() * 5) * W) / 5, (Math.floor(n() * 5) * H) / 5, W / 5, H / 5);
     }
   } else {
-    for (let i = 0; i < 900; i++) {
-      g.fillStyle = `rgba(${n() > 0.5 ? "255,240,220" : "30,20,10"},.05)`;
-      g.fillRect(n() * w, H + n() * D, 2, 1);
+    for (let i = 0; i < 1400; i++) {
+      g.fillStyle = `rgba(${n() > 0.5 ? "255,240,220" : "30,20,10"},.06)`;
+      g.fillRect(n() * W, n() * H, W * 0.006, H * 0.003);
     }
   }
-  // the wall's reflection, fading into the floor
-  const r = g.createLinearGradient(0, H, 0, H + D * 0.34);
-  r.addColorStop(0, "rgba(255,245,230,.12)");
-  r.addColorStop(1, "rgba(255,245,230,0)");
-  g.fillStyle = r;
-  g.fillRect(0, H, w, D * 0.34);
+}
+
+/** Draws `paint(g, W, H)` onto the parallelogram from `o` along `u` and `v`. */
+function surface(g, o, u, v, W, H, paint) {
+  g.save();
+  g.transform(u[0] / W, u[1] / W, v[0] / H, v[1] / H, o[0], o[1]);
+  g.beginPath();
+  g.rect(0, 0, W, H);
+  g.clip();
+  paint(g, W, H);
+  g.restore();
+}
+const at = (w, h, x, y, up = 0) => {
+  const p = iso(x, y, up);
+  return [p.X * w, p.Y * h];
+};
+const minus = (a, b) => [a[0] - b[0], a[1] - b[1]];
+
+// what never moves is painted once: materials are too costly for every frame
+let backdrop = null, backKey = "";
+function shell(w, h, dpr, layout) {
+  const key = `${w}|${h}|${dpr}|${layout.wall}|${layout.floor}|${layout.light}`;
+  if (key === backKey) return backdrop;
+  backKey = key;
+  backdrop = document.createElement("canvas");
+  backdrop.width = Math.round(w * dpr);
+  backdrop.height = Math.round(h * dpr);
+  const g = backdrop.getContext("2d");
+  g.scale(dpr, dpr);
+  const look = LIGHT[layout.light] ?? LIGHT.warm;
+  const bg = g.createRadialGradient(w / 2, h * 0.5, h * 0.1, w / 2, h * 0.5, w * 0.7);
+  bg.addColorStop(0, "#2b2620");
+  bg.addColorStop(1, "#14110d");
+  g.fillStyle = bg;
+  g.fillRect(0, 0, w, h);
+  const P = (x, y, up) => at(w, h, x, y, up);
+  const W = 1000, T = 420;
+  const back = P(0, 0, WALL_H), left = P(0, 1, WALL_H), right = P(1, 0, WALL_H), down = minus(P(0, 0), back);
+  surface(g, left, minus(back, left), down, W, T, (c, a, b) => wallTexture(c, a, b, layout.wall));
+  surface(g, back, minus(right, back), down, W, T, (c, a, b) => wallTexture(c, a, b, layout.wall));
+  // the walls take the light differently, which is what makes it a corner
+  surface(g, left, minus(back, left), down, 10, 10, (c, a, b) => {
+    c.fillStyle = "rgba(10,8,8,.26)";
+    c.fillRect(0, 0, a, b);
+  });
+  surface(g, P(0, 0), minus(P(1, 0), P(0, 0)), minus(P(0, 1), P(0, 0)), 1000, 1000, (c, a, b) => {
+    floorTexture(c, a, b, layout.floor);
+    const fade = c.createRadialGradient(a * 0.1, b * 0.1, 0, a * 0.2, b * 0.2, a * 1.1);
+    fade.addColorStop(0, "rgba(255,245,230,.14)");
+    fade.addColorStop(1, "rgba(0,0,0,.2)");
+    c.fillStyle = fade;
+    c.fillRect(0, 0, a, b);
+  });
+  // skirting, and the corner's shadow
+  g.lineCap = "round";
+  g.strokeStyle = "rgba(0,0,0,.38)";
+  g.lineWidth = Math.max(2, h * 0.007);
+  g.beginPath();
+  g.moveTo(...P(0, 1));
+  g.lineTo(...P(0, 0));
+  g.lineTo(...P(1, 0));
+  g.stroke();
+  g.strokeStyle = "rgba(0,0,0,.28)";
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.moveTo(...P(0, 0));
+  g.lineTo(...P(0, 0, WALL_H));
+  g.stroke();
+  // the floor's edge, a slab it stands on
+  g.fillStyle = "#0e0c09";
+  const lip = h * 0.018;
+  g.beginPath();
+  g.moveTo(...P(0, 1));
+  g.lineTo(...P(1, 1));
+  g.lineTo(...P(1, 0));
+  g.lineTo(P(1, 0)[0], P(1, 0)[1] + lip);
+  g.lineTo(P(1, 1)[0], P(1, 1)[1] + lip);
+  g.lineTo(P(0, 1)[0], P(0, 1)[1] + lip);
+  g.closePath();
+  g.fill();
+  g.fillStyle = look.tint;
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = `rgba(10,8,12,${look.dark})`;
+  g.fillRect(0, 0, w, h);
+  return backdrop;
 }
 
 function shadow(g, cx, cy, rx, ry, a = 0.36) {
@@ -164,99 +200,89 @@ function shadow(g, cx, cy, rx, ry, a = 0.36) {
   g.fill();
   g.restore();
 }
-function box(g, x, y, bw, bh, face, side) {
-  const f = g.createLinearGradient(x, 0, x + bw, 0);
-  f.addColorStop(0, side);
-  f.addColorStop(0.35, face);
-  f.addColorStop(1, side);
-  g.fillStyle = f;
-  g.fillRect(x, y, bw, bh);
+function quad(g, pts, fill) {
+  g.fillStyle = fill;
+  g.beginPath();
+  g.moveTo(...pts[0]);
+  for (const p of pts.slice(1)) g.lineTo(...p);
+  g.closePath();
+  g.fill();
 }
+/** A lit box: centred at x, y on the floor, half-sizes fx, fy, from `up` to `up + tall`. */
+function box(g, w, h, x, y, fx, fy, up, tall, [top, lit, dim]) {
+  const P = (a, b, c) => at(w, h, a, b, c);
+  const t = up + tall;
+  quad(g, [P(x - fx, y + fy, up), P(x + fx, y + fy, up), P(x + fx, y + fy, t), P(x - fx, y + fy, t)], dim);
+  quad(g, [P(x + fx, y + fy, up), P(x + fx, y - fy, up), P(x + fx, y - fy, t), P(x + fx, y + fy, t)], lit);
+  quad(g, [P(x - fx, y - fy, t), P(x + fx, y - fy, t), P(x + fx, y + fy, t), P(x - fx, y + fy, t)], top);
+}
+const WHITE = ["#fbf8f2", "#e9e3d8", "#c9c1b3"];
+const DARK = ["#5b554e", "#35312c", "#1e1b18"];
+const OAK = ["#c9a473", "#a67f53", "#7f5e3a"];
+const IRON = ["#3a2c1d", "#2c2115", "#1f170e"];
 
-/** A thing, in pixels: box `l, t, bw, bh`. */
-function piece(g, i, b, w, h, time) {
-  const t = ITEMS[i.type];
-  const l = b.left * w, r = b.right * w, top = b.top * h, bot = b.bottom * h;
-  const bw = r - l, bh = bot - top, cx = (l + r) / 2;
-  if (t.place === "floor" && !t.flat) shadow(g, cx, bot, bw * 0.62, Math.max(4, bw * 0.13));
-  if (i.type === "plinth") {
-    box(g, l, top, bw, bh, "#f1ece3", "#c8c0b2");
-    g.fillStyle = "#faf7f1";
-    g.fillRect(l, top, bw, Math.max(2, bh * 0.012));
-  } else if (i.type === "column") {
-    box(g, l, top, bw, bh, "#3a3632", "#191715");
-    g.fillStyle = "#57514a";
-    g.fillRect(l - 2, top, bw + 4, Math.max(2, bh * 0.015));
-    g.fillRect(l - 3, bot - bh * 0.03, bw + 6, bh * 0.03);
-  } else if (i.type === "case") {
-    const base = top + bh * 0.74;
-    box(g, l, base, bw, bot - base, "#2c2823", "#14120f");
-    g.fillStyle = "rgba(220,235,240,.08)";
-    g.fillRect(l, top, bw, base - top);
-    g.strokeStyle = "rgba(235,245,250,.5)";
-    g.lineWidth = 1;
-    g.strokeRect(l + 0.5, top + 0.5, bw - 1, base - top);
-  } else if (i.type === "shelf") {
-    shadow(g, cx, bot + bh, bw * 0.55, bh * 1.6, 0.3);
-    box(g, l, top, bw, bh, "#6e5236", "#3f2d1b");
-  } else if (i.type === "bench") {
-    box(g, l, top, bw, bh * 0.3, "#b08a5c", "#7f5e3a");
-    g.fillStyle = "#3a2c1d";
-    g.fillRect(l + bw * 0.06, top + bh * 0.3, bw * 0.04, bh * 0.7);
-    g.fillRect(r - bw * 0.1, top + bh * 0.3, bw * 0.04, bh * 0.7);
+/** Along whichever wall an item is on: the view's vector for its own width. */
+function wallRun(i, w, h, width) {
+  const a = at(w, h, 0, 0), b = i.x < 0.5 ? at(w, h, 0, 1) : at(w, h, 1, 0);
+  const u = minus(b, a);
+  const len = Math.hypot(u[0], u[1]);
+  const run = [(u[0] / len) * width, (u[1] / len) * width];
+  return i.x < 0.5 ? [-run[0], -run[1]] : run;
+}
+function piece(g, i, w, h) {
+  const t = ITEMS[i.type], s = project(i, t.place).s;
+  const tall = t.h * s;
+  const [fx, fy] = footOf(i.type);
+  const { x, y } = i;
+  const P = (a, b, c = 0) => at(w, h, a, b, c);
+  if (t.place === "wall") return onTheWall(g, i, w, h);
+  const [cx, cy] = P(x, y);
+  const spread = (fx + fy) * w * 0.4;
+  if (!t.flat) shadow(g, cx, cy + spread * 0.12, spread * 1.25, spread * 0.62);
+  if (i.type === "plinth") box(g, w, h, x, y, fx, fy, 0, tall, WHITE);
+  else if (i.type === "column") box(g, w, h, x, y, fx, fy, 0, tall, DARK);
+  else if (i.type === "case") box(g, w, h, x, y, fx, fy, 0, tall * t.top, DARK);
+  else if (i.type === "bench") {
+    for (const [dx, dy] of [[-0.8, 0], [0.8, 0]]) box(g, w, h, x + dx * fx, y + dy * fy, fy * 0.3, fy * 0.8, 0, tall * 0.62, IRON);
+    box(g, w, h, x, y, fx, fy, tall * 0.62, tall * 0.38, OAK);
   } else if (i.type === "chair") {
-    g.fillStyle = "#6b4a33";
-    g.beginPath();
-    g.roundRect(l + bw * 0.08, top, bw * 0.84, bh * 0.55, bw * 0.1);
-    g.fill();
-    g.fillStyle = "#83604a";
-    g.beginPath();
-    g.roundRect(l, top + bh * 0.46, bw, bh * 0.26, bw * 0.07);
-    g.fill();
-    g.fillStyle = "#2a2018";
-    g.fillRect(l + bw * 0.12, top + bh * 0.72, bw * 0.06, bh * 0.28);
-    g.fillRect(r - bw * 0.18, top + bh * 0.72, bw * 0.06, bh * 0.28);
+    box(g, w, h, x, y - fy * 0.85, fx * 0.85, fy * 0.18, tall * 0.45, tall * 0.55, ["#7c5a44", "#6b4a33", "#54392a"]);
+    box(g, w, h, x, y, fx * 0.85, fy * 0.85, tall * 0.3, tall * 0.2, ["#a07f66", "#83604a", "#6b4a33"]);
+    for (const [dx, dy] of [[-0.7, 0.7], [0.7, 0.7]]) box(g, w, h, x + dx * fx, y + dy * fy, fx * 0.1, fy * 0.1, 0, tall * 0.3, IRON);
   } else if (i.type === "table") {
-    g.fillStyle = "#2b2622";
-    g.fillRect(cx - bw * 0.03, top + bh * 0.1, bw * 0.06, bh * 0.9);
+    box(g, w, h, x, y, fx * 0.14, fy * 0.14, 0, tall * 0.9, DARK);
+    const [tx, ty] = P(x, y, tall * 0.9);
+    const rx = spread * 0.72, ry = rx * 0.5;
+    g.fillStyle = "#8f7857";
     g.beginPath();
-    g.ellipse(cx, bot, bw * 0.24, bw * 0.05, 0, 0, Math.PI * 2);
+    g.ellipse(tx, ty + h * 0.008, rx, ry, 0, 0, Math.PI * 2);
     g.fill();
-    g.fillStyle = "#cdb48c";
+    g.fillStyle = "#d4bc95";
     g.beginPath();
-    g.ellipse(cx, top + bh * 0.1, bw / 2, bw * 0.1, 0, 0, Math.PI * 2);
+    g.ellipse(tx, ty, rx, ry, 0, 0, Math.PI * 2);
     g.fill();
   } else if (i.type === "rug") {
-    const inset = bw * 0.1;
-    const trap = (a, c) => {
-      g.fillStyle = c;
-      g.beginPath();
-      g.moveTo(l + inset + a, bot - bh * 2.4 + a / 3);
-      g.lineTo(r - inset - a, bot - bh * 2.4 + a / 3);
-      g.lineTo(r - a, bot - a / 3);
-      g.lineTo(l + a, bot - a / 3);
-      g.closePath();
-      g.fill();
-    };
-    trap(0, "#7b3b2e");
-    trap(bw * 0.025, "#d2b98c");
-    trap(bw * 0.04, "#5b2b23");
+    surface(g, P(x - fx, y - fy), minus(P(x + fx, y - fy), P(x - fx, y - fy)), minus(P(x - fx, y + fy), P(x - fx, y - fy)), 100, 100, (c) => {
+      c.fillStyle = "#7b3b2e";
+      c.fillRect(0, 0, 100, 100);
+      c.fillStyle = "#d2b98c";
+      c.fillRect(6, 6, 88, 88);
+      c.fillStyle = "#5b2b23";
+      c.fillRect(10, 10, 80, 80);
+      c.fillStyle = "#94503c";
+      c.fillRect(34, 34, 32, 32);
+    });
   } else if (i.type === "plant") {
-    const n = rngOf(i.uid * 97 + 3);
-    g.fillStyle = "#b5a58e";
-    g.beginPath();
-    g.moveTo(cx - bw * 0.22, bot - bh * 0.24);
-    g.lineTo(cx + bw * 0.22, bot - bh * 0.24);
-    g.lineTo(cx + bw * 0.16, bot);
-    g.lineTo(cx - bw * 0.16, bot);
-    g.closePath();
-    g.fill();
+    const pot = tall * 0.24, px = spread * 0.55;
+    const bw = spread * 2, bot = cy, top = cy - tall * h, bh = bot - top;
+    quad(g, [[cx - px, bot - pot * h], [cx + px, bot - pot * h], [cx + px * 0.74, bot], [cx - px * 0.74, bot]], "#b5a58e");
     g.strokeStyle = "#54432f";
     g.lineWidth = Math.max(1.5, bw * 0.03);
     g.beginPath();
-    g.moveTo(cx, bot - bh * 0.24);
+    g.moveTo(cx, bot - pot * h);
     g.quadraticCurveTo(cx - bw * 0.08, top + bh * 0.5, cx, top + bh * 0.2);
     g.stroke();
+    const n = rngOf(i.uid * 97 + 3);
     for (let k = 0; k < 44; k++) {
       const a = n() * Math.PI * 2, d = Math.sqrt(n());
       g.save();
@@ -269,114 +295,181 @@ function piece(g, i, b, w, h, time) {
       g.restore();
     }
   } else if (i.type === "vase") {
-    const f = g.createLinearGradient(l, 0, r, 0);
+    const bw = spread * 2, top = cy - tall * h, bot = cy;
+    const f = g.createLinearGradient(cx - bw / 2, 0, cx + bw / 2, 0);
     f.addColorStop(0, "#39485a");
     f.addColorStop(0.35, "#7e95ab");
     f.addColorStop(1, "#27333f");
     g.fillStyle = f;
     g.beginPath();
     g.moveTo(cx - bw * 0.16, top);
-    g.bezierCurveTo(cx - bw * 0.6, top + bh * 0.45, cx - bw * 0.5, bot - bh * 0.1, cx - bw * 0.18, bot);
+    g.bezierCurveTo(cx - bw * 0.6, top + (bot - top) * 0.45, cx - bw * 0.5, bot - (bot - top) * 0.1, cx - bw * 0.18, bot);
     g.lineTo(cx + bw * 0.18, bot);
-    g.bezierCurveTo(cx + bw * 0.5, bot - bh * 0.1, cx + bw * 0.6, top + bh * 0.45, cx + bw * 0.16, top);
+    g.bezierCurveTo(cx + bw * 0.5, bot - (bot - top) * 0.1, cx + bw * 0.6, top + (bot - top) * 0.45, cx + bw * 0.16, top);
     g.closePath();
     g.fill();
-  } else if (i.type === "painting") {
-    shadow(g, cx + bw * 0.02, bot, bw * 0.6, bh * 0.1, 0.25);
-    g.fillStyle = "#2a2118";
-    g.fillRect(l, top, bw, bh);
-    g.fillStyle = "#efe7d8";
-    g.fillRect(l + bw * 0.05, top + bw * 0.05, bw * 0.9, bh - bw * 0.1);
-    const n = rngOf(i.uid * 131 + 5);
-    const px = l + bw * 0.14, py = top + bw * 0.14, pw = bw * 0.72, ph = bh - bw * 0.28;
-    g.fillStyle = ["#b7664a", "#3f5a6e", "#c79a4a", "#5f6e4a"][i.uid % 4];
-    g.fillRect(px, py, pw, ph);
-    for (let k = 0; k < 4; k++) {
-      g.fillStyle = `rgba(${n() > 0.5 ? "245,235,215" : "30,24,18"},.6)`;
-      g.beginPath();
-      g.ellipse(px + n() * pw, py + n() * ph, pw * (0.08 + n() * 0.2), ph * (0.06 + n() * 0.16), n() * 3, 0, Math.PI * 2);
-      g.fill();
-    }
+  }
+}
+function glass(g, i, w, h) {
+  const t = ITEMS.case, tall = t.h * project(i, "floor").s;
+  const [fx, fy] = footOf("case");
+  box(g, w, h, i.x, i.y, fx, fy, tall * t.top, tall * (1 - t.top), ["rgba(235,245,250,.08)", "rgba(235,245,250,.1)", "rgba(235,245,250,.05)"]);
+  g.strokeStyle = "rgba(235,245,250,.5)";
+  g.lineWidth = 1;
+  const P = (a, b, c) => at(w, h, a, b, c);
+  const T = tall, B = tall * t.top, { x, y } = i;
+  g.beginPath();
+  for (const [a, b] of [[x - fx, y + fy], [x + fx, y + fy], [x + fx, y - fy]]) {
+    g.moveTo(...P(a, b, B));
+    g.lineTo(...P(a, b, T));
+  }
+  g.moveTo(...P(x - fx, y + fy, T));
+  g.lineTo(...P(x + fx, y + fy, T));
+  g.lineTo(...P(x + fx, y - fy, T));
+  g.lineTo(...P(x - fx, y - fy, T));
+  g.closePath();
+  g.stroke();
+}
+function onTheWall(g, i, w, h) {
+  const t = ITEMS[i.type], p = project(i, "wall");
+  const width = (t.w * p.s * h), tall = t.h * p.s * h;
+  const run = wallRun(i, w, h, width);
+  const c = [p.X * w, p.Y * h];
+  const o = [c[0] - run[0] / 2, c[1] - run[1] / 2 - tall / 2];
+  if (i.type === "painting") {
+    surface(g, [o[0] + 4, o[1] + 6], run, [0, tall], 10, 10, (x) => {
+      x.fillStyle = "rgba(0,0,0,.3)";
+      x.fillRect(0, 0, 10, 10);
+    });
+    surface(g, o, run, [0, tall], 100, 130, (x, W, H) => {
+      x.fillStyle = "#2a2118";
+      x.fillRect(0, 0, W, H);
+      x.fillStyle = "#efe7d8";
+      x.fillRect(5, 5, W - 10, H - 10);
+      x.fillStyle = ["#b7664a", "#3f5a6e", "#c79a4a", "#5f6e4a"][i.uid % 4];
+      x.fillRect(15, 15, W - 30, H - 30);
+      const n = rngOf(i.uid * 131 + 5);
+      for (let k = 0; k < 4; k++) {
+        x.fillStyle = `rgba(${n() > 0.5 ? "245,235,215" : "30,24,18"},.6)`;
+        x.beginPath();
+        x.ellipse(15 + n() * 70, 15 + n() * 100, 6 + n() * 16, 6 + n() * 18, n() * 3, 0, Math.PI * 2);
+        x.fill();
+      }
+    });
+  } else if (i.type === "shelf") {
+    const thick = Math.max(3, tall);
+    quad(g, [o, [o[0] + run[0], o[1] + run[1]], [o[0] + run[0], o[1] + run[1] + thick], [o[0], o[1] + thick]], "#6e5236");
+    shadow(g, c[0], c[1] + thick * 2.4, Math.abs(run[0]) * 0.6, thick * 1.8, 0.3);
   } else if (i.type === "sconce") {
-    const glow = g.createRadialGradient(cx, top, 0, cx, top + bh, bh * 3.4);
+    const glow = g.createRadialGradient(c[0], c[1], 0, c[0], c[1], tall * 3.2);
     glow.addColorStop(0, "rgba(255,226,170,.5)");
     glow.addColorStop(1, "rgba(255,226,170,0)");
     g.fillStyle = glow;
-    g.fillRect(cx - bh * 3.4, top - bh * 2.4, bh * 6.8, bh * 6.8);
+    g.fillRect(c[0] - tall * 3.2, c[1] - tall * 3.2, tall * 6.4, tall * 6.4);
     g.fillStyle = "#b08d57";
-    g.fillRect(cx - bw * 0.25, top, bw * 0.5, bh);
+    g.fillRect(c[0] - tall * 0.16, c[1] - tall / 2, tall * 0.32, tall);
   }
 }
 
-/** Draws a whole room at w by h pixels, `t` in seconds. `selected` is a uid. */
-export function drawRoom(g, w, h, layout, artifacts, { t = 0, selected = null, editing = false } = {}) {
+// your robot: the arena's, on a visit. It bobs as it walks and settles to sit.
+function robot(g, w, h, r, t) {
+  const [cx, cy] = at(w, h, r.x, r.y);
+  const size = h * 0.024;
+  const bob = r.moving ? Math.abs(Math.sin(t * 16)) * size * 0.22 : 0;
+  const lift = r.sitting ? ITEMS[r.seat].h * project({ x: 0, y: 0 }, "floor").s * h * 0.62 + size * 0.7 : size * 1.05 + bob;
+  shadow(g, cx, cy, size * 1.2, size * 0.5, 0.5);
+  const y = cy - lift;
+  const f = g.createRadialGradient(cx - size * 0.35, y - size * 0.4, size * 0.1, cx, y, size);
+  f.addColorStop(0, "#ffa98f");
+  f.addColorStop(1, "#d94f30");
+  g.fillStyle = f;
+  g.beginPath();
+  g.arc(cx, y, size, 0, Math.PI * 2);
+  g.fill();
+  g.lineWidth = Math.max(2, size * 0.16);
+  g.strokeStyle = "#fff";
+  g.stroke();
+  const look = r.face ?? [0.7, 0.7];
+  const dx = (look[0] - look[1]) * size * 0.32, dy = (look[0] + look[1]) * size * 0.16;
+  g.fillStyle = "rgba(0,0,0,.65)";
+  g.beginPath();
+  g.arc(cx + dx, y + dy, size * 0.42, 0, Math.PI * 2);
+  g.fill();
+}
+
+/** Draws a whole room at w by h pixels, `t` in seconds. */
+export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, selected = null, editing = false, walker = null, near = null } = {}) {
+  g.drawImage(shell(w, h, dpr, layout), 0, 0, w, h);
   const look = LIGHT[layout.light] ?? LIGHT.warm;
-  wall(g, w, h, layout.wall);
-  floor(g, w, h, layout.floor);
-  g.fillStyle = look.tint;
-  g.fillRect(0, 0, w, h);
-  // ambient darkness, before the lights, so pools read as light on the room
-  g.fillStyle = `rgba(10,8,12,${look.dark})`;
-  g.fillRect(0, 0, w, h);
   const items = order(layout.items);
-  // pools of light on the wall and the floor, behind every thing
+  // rugs first, then pools of light on top of them, then everything upright
+  for (const i of items) if (ITEMS[i.type].flat) piece(g, i, w, h);
   g.save();
   g.globalCompositeOperation = "lighter";
   for (const i of items) {
     if (ITEMS[i.type].group !== "stand" || !artifacts[i.artifact ?? ""]) continue;
-    const r = restOn(i);
-    const cx = r.X * w, cy = r.Y * h, R = h * 0.36 * r.s;
-    const f = g.createRadialGradient(cx, cy, 0, cx, cy, R);
-    f.addColorStop(0, `rgba(${look.pool},${look.wash * 0.5})`);
-    f.addColorStop(1, `rgba(${look.pool},0)`);
-    g.fillStyle = f;
-    g.fillRect(cx - R, cy - R, R * 2, R * 2);
-    // the beam, faintly, from the ceiling
-    const beam = g.createLinearGradient(0, 0, 0, cy);
-    beam.addColorStop(0, `rgba(${look.pool},${look.wash * 0.12})`);
-    beam.addColorStop(1, `rgba(${look.pool},0)`);
+    const r = restOn(i), on = i.uid === near;
+    const cx = r.X * w, cy = r.Y * h;
+    const [fx, fy] = ITEMS[i.type].place === "wall" ? [cx, cy + h * 0.1] : at(w, h, i.x, i.y);
+    const R = h * (on ? 0.25 : 0.19);
+    const pool = g.createRadialGradient(fx, fy, 0, fx, fy, R);
+    pool.addColorStop(0, `rgba(${look.pool},${look.wash * (on ? 0.62 : 0.4)})`);
+    pool.addColorStop(1, `rgba(${look.pool},0)`);
+    g.save();
+    g.translate(0, fy * 0.5);
+    g.scale(1, 0.5);
+    g.fillStyle = pool;
+    g.fillRect(fx - R, fy - R, R * 2, R * 2);
+    g.restore();
+    const beam = g.createLinearGradient(0, cy - h * 0.34, 0, cy);
+    beam.addColorStop(0, `rgba(${look.pool},0)`);
+    beam.addColorStop(1, `rgba(${look.pool},${look.wash * 0.2})`);
     g.fillStyle = beam;
     g.beginPath();
-    g.moveTo(cx - R * 0.08, 0);
-    g.lineTo(cx + R * 0.08, 0);
-    g.lineTo(cx + R * 0.5, cy);
-    g.lineTo(cx - R * 0.5, cy);
+    g.moveTo(cx - h * 0.012, cy - h * 0.34);
+    g.lineTo(cx + h * 0.012, cy - h * 0.34);
+    g.lineTo(cx + h * 0.075, cy);
+    g.lineTo(cx - h * 0.075, cy);
     g.closePath();
     g.fill();
   }
   g.restore();
+  let walked = !walker;
+  const walkerDepth = walker ? walker.x + walker.y : 0;
   for (const i of items) {
-    const b = bounds(i);
-    piece(g, i, b, w, h, t);
+    const t0 = ITEMS[i.type];
+    if (t0.flat) continue;
+    if (!walked && t0.place === "floor" && i.x + i.y > walkerDepth) {
+      robot(g, w, h, walker, t);
+      walked = true;
+    }
+    piece(g, i, w, h);
     const a = artifacts[i.artifact ?? ""];
     if (a) {
-      const r = restOn(i);
-      const size = h * 0.05 * r.s;
-      // a small contact shadow, so it sits on the stand rather than hovers
-      shadow(g, r.X * w, r.Y * h, size * 0.8, size * 0.14, 0.4);
-      drawItem(g, a, r.X * w + (a.kind === "door" ? size * 0.25 : 0), r.Y * h - size * 0.72, size, t);
-      if (i.type === "case") {
-        const left = b.left * w, width = (b.right - b.left) * w, top = b.top * h, ch = (b.bottom - b.top) * h * 0.74;
-        const glare = g.createLinearGradient(left, top, left + width, top + ch);
-        glare.addColorStop(0.2, "rgba(255,255,255,0)");
-        glare.addColorStop(0.4, "rgba(255,255,255,.1)");
-        glare.addColorStop(0.6, "rgba(255,255,255,0)");
-        g.fillStyle = glare;
-        g.fillRect(left, top, width, ch);
-      }
+      const r = restOn(i), size = h * 0.042;
+      shadow(g, r.X * w, r.Y * h, size * 0.8, size * 0.2, 0.4);
+      drawItem(g, a, r.X * w + (a.kind === "door" ? size * 0.25 : 0), r.Y * h - size * (i.uid === near ? 1.05 : 0.75), size, i.uid === near ? stir : t * 0.25);
     }
+    if (i.type === "case") glass(g, i, w, h);
     if (editing && i.uid === selected) {
+      const b = bounds(i);
       g.strokeStyle = "#d8b878";
       g.lineWidth = 2;
       g.setLineDash([6, 4]);
-      g.strokeRect(b.left * w - 4, b.top * h - 4, (b.right - b.left) * w + 8, (b.bottom - b.top) * h + 8);
+      g.strokeRect(b.left * w - 3, b.top * h - 3, (b.right - b.left) * w + 6, (b.bottom - b.top) * h + 6);
       g.setLineDash([]);
     }
   }
-  // a vignette, as a lens would
-  const v = g.createRadialGradient(w / 2, h * 0.48, h * 0.45, w / 2, h * 0.48, w * 0.72);
-  v.addColorStop(0, "rgba(0,0,0,0)");
-  v.addColorStop(1, "rgba(0,0,0,.42)");
-  g.fillStyle = v;
-  g.fillRect(0, 0, w, h);
+  if (!walked) robot(g, w, h, walker, t);
+  if (editing && selected !== null) {
+    const i = items.find((x) => x.uid === selected && ITEMS[x.type].flat);
+    if (i) {
+      const b = bounds(i);
+      g.strokeStyle = "#d8b878";
+      g.setLineDash([6, 4]);
+      g.lineWidth = 2;
+      g.strokeRect(b.left * w, b.top * h, (b.right - b.left) * w, (b.bottom - b.top) * h);
+      g.setLineDash([]);
+    }
+  }
 }

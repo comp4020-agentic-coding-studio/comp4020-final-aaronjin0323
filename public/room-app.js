@@ -2,7 +2,7 @@
 // show; its owner, and only its owner, can arrange it. The server is what
 // enforces that: POST /room names no room. Everything here shows or edits a
 // draft; a layout counts once the server has saved it.
-import { DEFAULT_ROOM, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALLS, bounds, freeSpot, hitItem, nextUid, project, unproject } from "./room.js";
+import { FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, bounds, freeNear, freeSpot, hitItem, iso, nextUid, project, reachable, route, stepWalker, unproject } from "./room.js";
 import { MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
 import { itemName, waitingWords } from "./arena-ui.js";
@@ -21,6 +21,13 @@ let editing = false;
 let selected = null;
 let dirty = false;
 let drag = null;
+// ---- your robot, on a visit: local, never stored or sent
+let walker = null;
+let path = []; // points to walk to
+let goal = null; // the item to use on arrival
+let near = null; // the item in reach
+const held = new Set(); // steering keys down
+let stir = 0;
 
 const say = (text) => {
   const s = $("[data-status]");
@@ -55,6 +62,7 @@ function show(j) {
   shelf = j.shelf ?? [];
   draft = structuredClone(j.layout);
   dirty = false;
+  walker = { ...freeNear(WALK_START, draft.items), moving: false, sitting: false, seat: null, face: [-0.7, -0.7] };
   $("[data-name]").textContent = j.name;
   $("[data-kicker]").textContent = mine ? "Your exhibition room" : "Exhibition room";
   document.title = `${j.name} · Exhibition room`;
@@ -210,8 +218,11 @@ for (const b of document.querySelectorAll("[data-nudge]")) {
     const i = selectedItem();
     if (!i) return;
     const [dx, dy] = b.dataset.nudge.split(",").map(Number);
-    i.x = Math.max(0, Math.min(1, Math.round((i.x + dx * 0.02) * 1000) / 1000));
-    i.y = Math.max(0, Math.min(1, Math.round((i.y + (ITEMS[i.type].place === "wall" ? -dy : dy) * 0.02) * 1000) / 1000));
+    // as it looks on screen: on the floor, right is along x and away from y
+    const wall = ITEMS[i.type].place === "wall";
+    const mx = wall ? dx : dx + dy, my = wall ? -dy : dy - dx;
+    i.x = Math.max(0, Math.min(1, Math.round((i.x + mx * 0.02) * 1000) / 1000));
+    i.y = Math.max(0, Math.min(1, Math.round((i.y + my * 0.02) * 1000) / 1000));
     changed();
   });
 }
@@ -221,6 +232,11 @@ function setEditing(on) {
   $("[data-panel]").hidden = !on;
   $("[data-owner-tools]").hidden = !mine || on || !shelf.length;
   if (!on) selected = null;
+  path = [];
+  goal = null;
+  $("[data-prompt]").hidden = true;
+  $("[data-walk-hint]").hidden = on;
+  if (!on && draft) walker = { ...walker, ...freeNear(walker, draft.items), sitting: false };
 }
 $("[data-edit]").addEventListener("click", () => setEditing(true));
 $("[data-done]").addEventListener("click", () => {
@@ -263,12 +279,8 @@ const inView = (e) => {
 canvas.addEventListener("pointerdown", (e) => {
   if (!draft) return;
   const [X, Y] = inView(e);
+  if (!editing) return; // a visitor walks, on the click that follows
   const hit = hitItem(draft.items, X, Y);
-  if (!editing) {
-    const a = hit && artifactsNow()[hit.artifact ?? ""];
-    if (a) closer(a);
-    return;
-  }
   e.preventDefault();
   selected = hit?.uid ?? null;
   renderSelection();
@@ -279,7 +291,10 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 canvas.addEventListener("pointermove", (e) => {
   const [X, Y] = inView(e);
-  if (!editing && draft) canvas.style.cursor = artifactsNow()[hitItem(draft.items, X, Y)?.artifact ?? ""] ? "zoom-in" : "default";
+  if (!editing && draft) {
+    const h = hitItem(draft.items, X, Y);
+    canvas.style.cursor = h && (artifactsNow()[h.artifact ?? ""] || ITEMS[h.type].seat) ? "pointer" : "default";
+  }
   if (!drag || e.pointerId !== drag.id) return;
   const i = selectedItem();
   if (!i) return;
@@ -297,8 +312,103 @@ const drop = (e) => {
 canvas.addEventListener("pointerup", drop);
 canvas.addEventListener("pointercancel", drop);
 
+// ---- walking: a click or tap goes there, round whatever's in the way;
+// pressing something goes to it and uses it
+function standUp() {
+  if (!walker.sitting) return;
+  walker.sitting = false;
+  walker.seat = null;
+  Object.assign(walker, freeNear({ x: walker.x + 0.08, y: walker.y + 0.08 }, draft.items));
+}
+function walkTo(to, item = null) {
+  standUp();
+  path = route(walker, to, draft.items);
+  goal = item;
+  if (!path.length && item) arrive();
+}
+function use(i) {
+  const a = artifactsNow()[i.artifact ?? ""];
+  if (a) return closer(a);
+  if (ITEMS[i.type].seat) {
+    Object.assign(walker, { x: i.x, y: i.y, sitting: true, seat: i.type, moving: false });
+    path = [];
+  }
+}
+function arrive() {
+  const i = goal;
+  goal = null;
+  if (i) use(i);
+}
+canvas.addEventListener("click", (e) => {
+  if (editing || !draft) return;
+  const [X, Y] = inView(e);
+  const hit = hitItem(draft.items, X, Y);
+  if (hit && ITEMS[hit.type].place === "floor" && (artifactsNow()[hit.artifact ?? ""] || ITEMS[hit.type].seat)) return walkTo(hit, hit);
+  const [x, y] = unproject(X, Y, "floor");
+  const b = iso(x, y);
+  if (Math.hypot(b.X - X, b.Y - Y) < 0.02) walkTo({ x, y }); // on the floor, not a wall
+});
+const STEER = { ArrowUp: [-1, -1], ArrowDown: [1, 1], ArrowLeft: [-1, 1], ArrowRight: [1, -1], w: [-1, -1], s: [1, 1], a: [-1, 1], d: [1, -1] };
+canvas.addEventListener("keydown", (e) => {
+  if (editing || dialog.open) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (STEER[k]) {
+    e.preventDefault();
+    held.add(k);
+    path = [];
+    goal = null;
+    standUp();
+  } else if (k === "e" || k === "Enter") {
+    e.preventDefault();
+    act();
+  } else if (k === "Escape") standUp();
+});
+addEventListener("keyup", (e) => held.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
+canvas.addEventListener("blur", () => held.clear());
+function act() {
+  if (walker.sitting) return standUp();
+  if (near) use(near);
+}
+$("[data-prompt]").addEventListener("click", act);
+function walk(dt) {
+  if (dialog.open) return;
+  let dir = [0, 0];
+  for (const k of held) dir = [dir[0] + STEER[k][0], dir[1] + STEER[k][1]];
+  if (!dir[0] && !dir[1] && path.length) {
+    const p = path[0];
+    dir = [p.x - walker.x, p.y - walker.y];
+    if (Math.hypot(dir[0], dir[1]) < 0.012) {
+      path.shift();
+      if (!path.length) arrive();
+      dir = [0, 0];
+    }
+  }
+  walker.moving = !!(dir[0] || dir[1]);
+  if (walker.moving) {
+    const n = stepWalker(walker, dir, dt, draft.items);
+    if (n === walker && path.length) path = []; // pressed against something: stop trying
+    walker.x = n.x;
+    walker.y = n.y;
+    walker.face = dir;
+  }
+}
+function showPrompt() {
+  const was = near?.uid;
+  near = walker.sitting ? null : reachable(walker, draft.items, artifactsNow());
+  const p = $("[data-prompt]");
+  const a = near && artifactsNow()[near.artifact ?? ""];
+  const words = walker.sitting ? "Stand up" : a ? `Look closely at the ${itemName(a.kind, a.material).toLowerCase()}` : near ? `Sit on the ${ITEMS[near.type].name.toLowerCase()}` : "";
+  if (words !== p.textContent) p.textContent = words;
+  p.hidden = !words || editing;
+  $("[data-walk-hint]").hidden = !p.hidden || editing;
+  if (near?.uid !== was) stir = 0;
+}
+
 // ---- the room's picture
+let lastFrame = 0;
 function frame(ms) {
+  const dt = Math.min(0.05, (ms - lastFrame) / 1000 || 0);
+  lastFrame = ms;
   const dpr = Math.min(devicePixelRatio || 1, 2);
   const w = canvas.clientWidth, h = w / ROOM_ASPECT;
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
@@ -306,8 +416,13 @@ function frame(ms) {
     canvas.height = Math.round(h * dpr);
   }
   if (draft) {
+    if (!editing) {
+      walk(dt);
+      showPrompt();
+    }
+    if (!reduced.matches && near) stir += dt;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRoom(g, w, h, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 4000, selected, editing });
+    drawRoom(g, w, h, dpr, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 1000, stir, selected, editing, walker: editing ? null : walker, near: near?.uid ?? null });
   }
   requestAnimationFrame(frame);
 }
@@ -384,6 +499,9 @@ canvas.probe = () => {
   return {
     mine,
     dirty,
+    walker: walker && { x: walker.x, y: walker.y, sitting: walker.sitting, moving: walker.moving, cx: r.left + iso(walker.x, walker.y).X * r.width, cy: r.top + iso(walker.x, walker.y).Y * r.height },
+    near: near?.uid ?? null,
+    prompt: $("[data-prompt]").hidden ? "" : $("[data-prompt]").textContent,
     rev: room?.rev ?? null,
     tag: room?.tag ?? null,
     wall: draft?.wall,

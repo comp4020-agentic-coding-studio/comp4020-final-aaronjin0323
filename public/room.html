@@ -19,7 +19,9 @@
   </header>
   <main class="stage">
     <div class="gallery">
-      <canvas data-room tabindex="0" aria-label="The room. What's on show is listed below." aria-describedby="onshow-h"></canvas>
+      <canvas data-room tabindex="0" aria-label="The room. Your robot walks in it. What's on show is listed below." aria-describedby="walk-hint"></canvas>
+      <p class="walk-hint" id="walk-hint" data-walk-hint>Tap the floor to walk. Keys: arrows or WASD, E to use.</p>
+      <button type="button" class="primary prompt" data-prompt hidden></button>
       <p class="status" data-status role="status" hidden></p>
     </div>
     <aside class="panel" data-panel hidden aria-label="Arrange your room">
