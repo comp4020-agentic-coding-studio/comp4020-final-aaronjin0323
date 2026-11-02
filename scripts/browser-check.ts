@@ -213,6 +213,24 @@ async function room(browser: Browser) {
   await a.mouse.down();
   await a.mouse.move(stand.cx + 90, stand.cy + 10, { steps: 4 });
   await a.mouse.up();
+  // each kind of control looks like its job, not like every other button
+  await a.click('[data-walls] button:has-text("Sage")');
+  const styleOf = (sel: string) => a.locator(sel).first().evaluate((el) => {
+    const c = getComputedStyle(el);
+    return { bg: c.backgroundColor, border: `${c.borderTopStyle} ${c.borderTopWidth}`, weight: c.fontWeight };
+  });
+  const save = await styleOf("[data-save]"), discard = await styleOf("[data-discard]"), done = await styleOf("[data-done]");
+  const addOne = await styleOf("[data-add-stand] button"), finish = await styleOf('[data-walls] button[aria-pressed="false"]'), chosen = await styleOf('[data-walls] button[aria-pressed="true"]'), remove = await styleOf("[data-remove]");
+  const clear = (c: string) => c === "rgba(0, 0, 0, 0)";
+  check(!clear(save.bg) && clear(discard.bg), "Save is the one filled action", `${save.bg}`);
+  check(clear(discard.bg) && discard.border.startsWith("none") && done.border.startsWith("none"), "Discard and Done are quiet");
+  check(addOne.border.startsWith("dashed"), "adding looks like adding", addOne.border);
+  check(JSON.stringify(finish) !== JSON.stringify(addOne), "a finish doesn't look like an add");
+  check(JSON.stringify(chosen) !== JSON.stringify(finish), "the chosen finish stands out");
+  check((await a.locator('[data-walls] button[aria-pressed="false"] .chip').count()) === 3, "each finish shows its material");
+  check(JSON.stringify(remove) !== JSON.stringify(discard), "Remove doesn't look like Discard");
+  check((await a.locator("[data-dirty]").textContent()) === "Unsaved changes", "the panel says there are unsaved changes");
+  await a.screenshot({ path: ".shots/edit-1440.png" });
   await a.click('[data-walls] button:has-text("Walnut")');
   await a.click('[data-floors] button:has-text("Terrazzo")');
   await a.click('[data-lights] button:has-text("After hours")');
@@ -463,6 +481,10 @@ async function phoneroom(browser: Browser) {
   await p.tap('[data-nudge="1,0"]');
   await p.tap('[data-nudge="0,1"]');
   await p.screenshot({ path: ".shots/edit-390.png", fullPage: true });
+  await p.locator('[data-add-decor] button').last().scrollIntoViewIfNeeded();
+  const bar = await p.locator("[data-save]").boundingBox();
+  check(!!bar && bar.y >= 0 && bar.y + bar.height <= 844, "Save stays in reach deep in the panel");
+  await p.screenshot({ path: ".shots/edit-390-deep.png" });
   await p.tap("[data-save]");
   await p.waitForFunction(() => document.querySelector("[data-status]")?.textContent === "Saved.");
   await p.reload();

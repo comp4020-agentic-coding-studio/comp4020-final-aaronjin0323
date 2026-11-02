@@ -23,29 +23,37 @@
       <p class="status" data-status role="status" hidden></p>
     </div>
     <aside class="panel" data-panel hidden aria-label="Arrange your room">
-      <div class="actions">
-        <button type="button" class="primary" data-save disabled>Save room</button>
-        <button type="button" data-discard disabled>Discard changes</button>
-        <button type="button" data-done>Done</button>
+      <div class="panel-head">
+        <h2>Arrange your room</h2>
+        <button type="button" class="quiet" data-done>Done</button>
       </div>
-      <p class="hint">Drag anything to move it. Select a stand to choose what it shows.</p>
-      <div data-selection hidden class="selection">
-        <h2 data-selected-name></h2>
+      <div class="selection" data-selection hidden>
+        <h3 data-selected-name></h3>
         <label data-artifact-label>On show <select data-artifact></select></label>
-        <p class="keys">
+        <p class="keys" role="group" aria-label="Move it">
           <button type="button" data-nudge="-1,0" aria-label="Move left">←</button>
-          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
           <button type="button" data-nudge="0,-1" aria-label="Move back or up">↑</button>
           <button type="button" data-nudge="0,1" aria-label="Move forward or down">↓</button>
-          <button type="button" data-remove>Remove</button>
+          <button type="button" data-nudge="1,0" aria-label="Move right">→</button>
+          <button type="button" class="danger" data-remove>Remove</button>
         </p>
       </div>
-      <fieldset><legend>Walls</legend><div class="swatches" data-walls></div></fieldset>
-      <fieldset><legend>Flooring</legend><div class="swatches" data-floors></div></fieldset>
-      <fieldset><legend>Light</legend><div class="swatches" data-lights></div></fieldset>
+      <p class="hint" data-select-hint>Select anything in the room to move it, or to choose what a stand shows.</p>
+      <h3 class="group">Add to the room</h3>
       <fieldset><legend>Display stands</legend><div class="adds" data-add-stand></div></fieldset>
       <fieldset><legend>Furniture</legend><div class="adds" data-add-furniture></div></fieldset>
       <fieldset><legend>Decoration</legend><div class="adds" data-add-decor></div></fieldset>
+      <h3 class="group">Room finish</h3>
+      <fieldset><legend>Walls</legend><div class="swatches" data-walls></div></fieldset>
+      <fieldset><legend>Flooring</legend><div class="swatches" data-floors></div></fieldset>
+      <fieldset><legend>Light</legend><div class="swatches" data-lights></div></fieldset>
+      <div class="savebar">
+        <p class="dirty" data-dirty aria-live="polite">No changes</p>
+        <div class="saves">
+          <button type="button" class="quiet" data-discard disabled>Discard</button>
+          <button type="button" class="primary" data-save disabled>Save room</button>
+        </div>
+      </div>
     </aside>
   </main>
   <section class="below">
@@ -67,10 +75,9 @@
       <p data-closer-detail></p>
       <p class="hint">Move across it to carry the light.</p>
       <div class="actions">
-        <button type="button" data-further>Further</button>
-        <button type="button" data-nearer>Closer</button>
-        <button type="button" data-wake>Wake it</button>
-        <button type="button" data-close>Close</button>
+        <span class="pair" role="group" aria-label="Distance"><button type="button" data-further>Further</button><button type="button" data-nearer>Closer</button></span>
+        <button type="button" class="primary" data-wake>Wake it</button>
+        <button type="button" class="quiet" data-close>Close</button>
       </div>
     </div>
   </dialog>

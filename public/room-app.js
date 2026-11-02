@@ -114,23 +114,31 @@ async function loadRooms(more = false) {
 $("[data-rooms-more]").addEventListener("click", () => loadRooms(true));
 
 // ---- arranging: a draft, for the owner's eyes, until it's saved
+function showDirty() {
+  $("[data-save]").disabled = !dirty;
+  $("[data-discard]").disabled = !dirty;
+  const d = $("[data-dirty]");
+  d.textContent = dirty ? "Unsaved changes" : "No changes";
+  d.toggleAttribute("data-on", dirty);
+}
 function changed() {
   dirty = true;
-  $("[data-save]").disabled = false;
-  $("[data-discard]").disabled = false;
+  showDirty();
   say("");
   renderOnShow();
   renderSelection();
 }
 function renderPanel() {
-  $("[data-save]").disabled = !dirty;
-  $("[data-discard]").disabled = !dirty;
+  showDirty();
   const pick = (host, table, key) => {
     $(host).replaceChildren(
       ...Object.entries(table).map(([k, v]) => {
         const b = document.createElement("button");
         b.type = "button";
-        b.textContent = v.name;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.dataset.finish = k;
+        b.append(chip, v.name);
         b.setAttribute("aria-pressed", String(draft[key] === k));
         b.addEventListener("click", () => {
           draft[key] = k;
@@ -172,6 +180,7 @@ function add(type) {
 function renderSelection() {
   const i = selectedItem();
   $("[data-selection]").hidden = !i;
+  $("[data-select-hint]").hidden = !!i;
   if (!i) return;
   $("[data-selected-name]").textContent = ITEMS[i.type].name;
   const isStand = ITEMS[i.type].group === "stand";
