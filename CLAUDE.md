@@ -249,5 +249,10 @@ countdowns, upgrades, elimination, rate limiting.
   `spec/not-production.ts` makes the spec refuse any `fly.dev` host before
   it sends a request, held by `spec/not-production.test.ts`. Don't weaken it
   to get a check to run.
+- **Anything sent to the live site by hand is read-only: `GET` only.** The
+  guard above covers the checks, not a one-off request, and any request can
+  create a visitor. A `POST` to confirm a deploy once left a stray visitor in
+  the live database (22 Oct). Confirm a deploy by fetching pages and files;
+  drive the live page in a browser only with every non-`GET` request blocked.
 - **Ask before every push.** The repo is public, so a push to `main` is a
   deploy. One yes doesn't cover the next.
