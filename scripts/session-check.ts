@@ -116,6 +116,11 @@ class Session {
   here() {
     return A.advance(this.me, Date.now());
   }
+  /** Every robot this session can see has come to rest. */
+  get still(): boolean {
+    const now = Date.now();
+    return this.last.robots.every((r: any) => A.advance(r, now).vel.every((v: number) => v === 0));
+  }
   async launchAt(to: number[], power = 1) {
     if (!this.me) return null;
     const p = this.here().pos;
@@ -138,9 +143,26 @@ class Session {
   grab(n = 1, ms = 20_000) {
     return this.chase(() => this.nearest(), () => this.carrying.length >= n, ms);
   }
-  deliver(ms = 15_000) {
+  /** Carry `n` with every robot at rest, so the cargo can't be banked by
+   * coasting into the vault or lost in a bump after the check looks at it. */
+  async holding(n: number, ms = 40_000) {
+    for (const end = Date.now() + ms; Date.now() < end; ) {
+      if (this.carrying.length < n) await this.grab(n, Math.max(0, end - Date.now()));
+      if (await until(() => this.still, 10_000) && this.carrying.length >= n) return true;
+    }
+    return false;
+  }
+  /** A point beyond the robot, directly away from the vault. */
+  awayFromVault() {
+    const p = this.here().pos, d = [p[0] - A.VAULT[0], p[1] - A.VAULT[1]];
+    const len = Math.hypot(d[0], d[1]) || 1;
+    return [p[0] + (d[0] / len) * 3, p[1] + (d[1] / len) * 3];
+  }
+  /** Bank something. A contact on the way can scatter the cargo (another
+   * robot often waits at the vault), so, like a player, it picks up again. */
+  deliver(ms = 25_000) {
     const before = this.total;
-    return this.chase(() => A.VAULT, () => this.total > before, ms);
+    return this.chase(() => (this.carrying.length ? A.VAULT : this.nearest()), () => this.total > before, ms);
   }
   req(path: string, init: RequestInit = {}) {
     return fetch(BASE + path, { ...init, headers: { ...(init.headers as object), cookie: this.cookie } });
@@ -363,6 +385,7 @@ async function ownership() {
   const items = async (s: Session) => (await (await s.req("/collection")).json()).items as any[];
   const [ia, ib] = [await items(a), await items(b)];
   check(ia.length >= 1 && ib.length >= 1 && !ia.some((x) => ib.some((y) => y.id === x.id)), "two sessions hold separate collections", `${ia.length} and ${ib.length}`);
+  if (!ia.length || !ib.length) return closeAll([a, b]);
   const layout = (id: string) => ({ wall: "sage", floor: "slate", light: "cool", items: [{ uid: 1, type: "plinth", x: 0.4, y: 0.4, artifact: id }] });
   check((await a.saveRoom({ layout: layout(ia[0].id), was: 0 })).status === 200, "a session shows its own artifact");
   const r = await b.saveRoom({ layout: layout(ia[0].id), was: 0 });
@@ -378,7 +401,7 @@ async function ownership() {
 
 async function refresh() {
   const [a, b] = await sessions(2);
-  await a.grab(2);
+  check(await a.holding(2), "a robot holds two artifacts, at rest");
   const slot = a.me.slot, cargo = a.carrying.map((i) => i.id).join(), tag = a.tag;
   a.close();
   await until(() => b.last.robots.find((r: any) => r.tag === tag)?.away === true, 1000);
@@ -387,7 +410,8 @@ async function refresh() {
   await a.open();
   check(a.tag === tag && a.me.slot === slot && !a.me.away, "a refresh in time: the same robot in the same slot");
   check(a.carrying.map((i) => i.id).join() === cargo, "and the same cargo", a.carrying.length);
-  check((await a.launchAt([8, 5]))?.status === 200, "and it still launches");
+  // gently, away from the vault, so it keeps its cargo for the grace test below
+  check((await a.launchAt(a.awayFromVault(), 0.3))?.status === 200, "and it still launches");
   // two tabs: closing one changes nothing
   const tab = new Session();
   tab.cookie = a.cookie;
@@ -396,11 +420,13 @@ async function refresh() {
   await sleep(300);
   check(!b.last.robots.find((r: any) => r.tag === tag)?.away, "closing a second tab leaves the robot alone");
   // past the grace
-  const floor = b.last.artifacts.length;
+  await until(() => b.still, 10_000);
+  check(a.carrying.length >= cargo.split(",").length, "it still carries its cargo as it leaves", a.carrying.length);
+  const floor = b.last.artifacts.length, aboard = a.carrying.length;
   a.close();
   await sleep(A.GRACE_MS + 500);
   check(!b.last.robots.some((r: any) => r.tag === tag), "away past the grace: the robot goes");
-  check(b.last.artifacts.length >= floor + cargo.split(",").length, "and its cargo returns to the floor", `${floor} to ${b.last.artifacts.length}`);
+  check(b.last.artifacts.length >= floor + aboard, "and its cargo returns to the floor", `${floor} to ${b.last.artifacts.length}`);
   await a.open();
   check(a.carrying.length === 0, "coming back, it starts empty");
   // a fifth session waits, then plays
@@ -416,11 +442,15 @@ async function refresh() {
 async function restarts() {
   const [a, b] = await sessions(2);
   await a.grab(1);
-  await a.deliver();
-  await a.grab(1);
+  check(await a.deliver(), "a session banks an artifact");
   await b.grab(1);
   const items = (await (await a.req("/collection")).json() as any).items;
+  if (!items.length) return closeAll([a, b]);
   await a.saveRoom({ layout: { wall: "walnut", floor: "terrazzo", light: "dusk", items: [{ uid: 1, type: "case", x: 0.3, y: 0.3, artifact: items[0].id }] }, was: 0 });
+  // the floor is only a fixed thing to compare once nobody is moving: a robot
+  // still coasting from its grab can pick up another artifact after we look
+  check(await a.holding(1), "before the restart, it carries one and every robot has come to rest");
+  if (!a.carrying.length) return closeAll([a, b]);
   const total = a.total, vault = a.last.vault, carried = a.carrying[0].id, floorIds = a.last.artifacts.map((f: any) => f.id).sort().join();
   const saved = () => a.req("/rooms/me").then((r) => r.json()) as Promise<any>;
 
