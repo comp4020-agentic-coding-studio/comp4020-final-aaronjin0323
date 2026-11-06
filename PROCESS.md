@@ -36,6 +36,6 @@ These taught me that passing checks doesn't mean the app is good. User experienc
 
 ## Where it stands
 
-`README.md` argues what good means here [`50feaf2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/50feaf2). At least five friends tried an earlier version of the arena with the same mechanics and picked it up without hints from me; nobody has yet tried the current version. `session-check` fails intermittently, including on an earlier commit [`0379730`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/0379730), and I haven't found why.
+`README.md` argues what good means here [`50feaf2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/50feaf2). At least five friends tried an earlier version of the arena with the same mechanics and picked it up without hints from me, and every change since came from my own play. `session-check` fails intermittently, including on an earlier commit [`0379730`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-aaronjin0323/commit/0379730), and I haven't found why.
 
 I made the decisions and the agent wrote the code, sometimes after I asked for its suggestions. The agent found problems through checks; I found them by trying the game, playing it and feeling it.

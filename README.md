@@ -16,7 +16,7 @@ The rooms keep the rivalry going. Players show off their spoils, and seeing an a
 
 The arena plays the same on desktop and mobile: drag and release. A larger screen helps most in the room, where it allows more precise placement.
 
-At least five friends tried an earlier version with the same mechanics, with no hints from me, and picked it up easily. This is informal observation, and nobody has yet tried the current lower-text version.
+At least five friends tried an earlier version with the same mechanics, with no hints from me, and picked it up easily. I played every version myself, and each change, including the cut to fewer words, came from that play. This is informal observation, not a study.
 
 ## What's tested and what's judged
 
