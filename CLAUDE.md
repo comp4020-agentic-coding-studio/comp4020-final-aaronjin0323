@@ -232,7 +232,7 @@ store with a test clock), `spec/room.test.ts`, `spec/store.test.ts` and `spec/ht
   done: `node scripts/browser-check.ts` against the local app plays it as
   several visitors (launching, a launch while moving, keys, a scatter, the
   line for a robot, a refused stream, no script, a room edited, saved and
-  visited) and screenshots into `.shots/`. Read the shots; it isn't in CI,
+  visited, two people in one room seeing each other walk) and screenshots into `.shots/`. Read the shots; it isn't in CI,
   which has no Chrome.
 - Before calling multiplayer behaviour done, run
   `node scripts/session-check.ts`: 2 to 5 independent sessions on throwaway

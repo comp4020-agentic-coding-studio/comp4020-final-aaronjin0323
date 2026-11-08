@@ -257,6 +257,9 @@ export const nextUid = (items) => items.reduce((m, i) => Math.max(m, i.uid), 0) 
 export const WALK_SPEED = 0.32; // of the room's side, per second
 export const WALK_R = 0.035;
 export const WALK_START = { x: 0.9, y: 0.9 };
+/** Each visitor's colour in a room, from their tag: the same in every room. */
+export const WALKER_COLOURS = ["#f4a39a", "#8fd3c8", "#f3d68a", "#c3a8f0", "#9cc5f0", "#f0b3d1"];
+export const walkerColour = (tag = "") => WALKER_COLOURS[(parseInt(String(tag).slice(0, 6), 16) || 0) % WALKER_COLOURS.length];
 const EDGE = 0.04;
 const REACH = 0.1;
 /** How far from a thing's centre it stops a walker, or 0 if it doesn't. */

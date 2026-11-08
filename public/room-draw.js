@@ -510,27 +510,32 @@ function onTheWall(g, i, w, h) {
   }
 }
 
-// your robot: the arena's, on a visit. It bobs as it walks and settles to sit.
+// a robot on a visit: yours ringed in white, everyone else's in their own
+// colour (ADR 36). It bobs as it walks and settles to sit.
 function robot(g, w, h, r, t) {
   const [cx, cy] = at(w, h, r.x, r.y);
   const size = h * 0.024;
-  const bob = r.moving ? Math.abs(Math.sin(t * 16)) * size * 0.22 : 0;
-  const lift = r.sitting ? ITEMS[r.seat].h * project({ x: 0, y: 0 }, "floor").s * h * 0.62 + size * 0.7 : size * 1.05 + bob;
+  const bob = r.moving ? Math.abs(Math.sin(t * 16 + (r.phase ?? 0))) * size * 0.22 : 0;
+  const lift = r.sitting && ITEMS[r.seat] ? ITEMS[r.seat].h * project({ x: 0, y: 0 }, "floor").s * h * 0.62 + size * 0.7 : size * 1.05 + bob;
   shadow(g, cx, cy, size * 1.2, size * 0.5, 0.5);
   const y = cy - lift;
-  const f = g.createRadialGradient(cx - size * 0.35, y - size * 0.4, size * 0.1, cx, y, size);
-  f.addColorStop(0, "#ffa98f");
-  f.addColorStop(1, "#d94f30");
-  g.fillStyle = f;
+  const colour = r.colour ?? "#f4a39a";
+  g.fillStyle = colour;
   g.beginPath();
   g.arc(cx, y, size, 0, Math.PI * 2);
   g.fill();
-  g.lineWidth = Math.max(2, size * 0.16);
-  g.strokeStyle = "#fff";
+  const shine = g.createRadialGradient(cx - size * 0.35, y - size * 0.4, size * 0.1, cx, y, size);
+  shine.addColorStop(0, "rgba(255,255,255,.55)");
+  shine.addColorStop(0.6, "rgba(255,255,255,0)");
+  shine.addColorStop(1, "rgba(20,21,43,.25)");
+  g.fillStyle = shine;
+  g.fill();
+  g.lineWidth = r.isMe ? Math.max(2, size * 0.16) : Math.max(1, size * 0.07);
+  g.strokeStyle = r.isMe ? "#fff" : "rgba(20,21,43,.55)";
   g.stroke();
   const look = r.face ?? [0.7, 0.7];
   const dx = (look[0] - look[1]) * size * 0.32, dy = (look[0] + look[1]) * size * 0.16;
-  g.fillStyle = "rgba(0,0,0,.65)";
+  g.fillStyle = "rgba(20,21,43,.6)";
   g.beginPath();
   g.arc(cx + dx, y + dy, size * 0.42, 0, Math.PI * 2);
   g.fill();
@@ -595,7 +600,7 @@ export function finishThumb(place, kind, colour, size = 72) {
 }
 
 /** Draws a whole room at w by h pixels, `t` in seconds. */
-export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, selected = null, editing = false, walker = null, near = null } = {}) {
+export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, selected = null, editing = false, walker = null, others = [], near = null } = {}) {
   g.drawImage(shell(w, h, dpr, layout), 0, 0, w, h);
   const look = LIGHT[layout.light] ?? LIGHT.warm;
   const items = order(layout.items);
@@ -635,15 +640,13 @@ export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, sel
     g.fill();
   }
   g.restore();
-  let walked = !walker;
-  const walkerDepth = walker ? walker.x + walker.y : 0;
+  // everyone in the room, back to front, drawn in turn with the furniture
+  const walkers = [...others, ...(walker ? [{ ...walker, isMe: true }] : [])].sort((a, b) => a.x + a.y - (b.x + b.y));
+  let next = 0;
   for (const i of items) {
     const t0 = ITEMS[i.type];
     if (t0.flat) continue;
-    if (!walked && t0.place === "floor" && i.x + i.y > walkerDepth) {
-      robot(g, w, h, walker, t);
-      walked = true;
-    }
+    while (next < walkers.length && t0.place === "floor" && i.x + i.y > walkers[next].x + walkers[next].y) robot(g, w, h, walkers[next++], t);
     const up = baseOf(i, layout.items);
     if (editing && i.uid === selected && !up) footprint(g, i, w, h);
     g.save();
@@ -659,5 +662,5 @@ export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, sel
     if (i.type === "case") glass(g, i, w, h);
     if (editing && i.uid === selected) marker(g, i, w, h, up);
   }
-  if (!walked) robot(g, w, h, walker, t);
+  while (next < walkers.length) robot(g, w, h, walkers[next++], t);
 }

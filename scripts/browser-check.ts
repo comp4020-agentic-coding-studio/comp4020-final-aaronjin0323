@@ -537,6 +537,40 @@ async function stall(browser: Browser) {
 }
 
 /** Arranging on a phone: tap, choose, the arrow buttons, save. */
+// a room is shared (ADR 36): two people in one room see each other walk
+async function visitors(browser: Browser) {
+  const a = await visitor(browser);
+  await a.goto(`${APP}/room/`);
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().tag);
+  const tag = (await roomProbe(a)).tag;
+  const b = await visitor(browser, PHONE);
+  await b.goto(`${APP}/room/${tag}`);
+  const sees = (p: Page, n: number) => p.waitForFunction((n) => (document.querySelector("[data-room]") as any).probe().others.length === n, n, { timeout: 3000 }).then(() => true, () => false);
+  check(await sees(a, 1), "the owner sees a visitor arrive in their room");
+  check(await sees(b, 1), "and the visitor sees the owner there");
+  const pa = await roomProbe(a), pb = await roomProbe(b);
+  check(pa.others[0].tag === pb.me && pb.others[0].tag === pa.me, "each sees the other, not themselves");
+  check(/^#[0-9a-f]{6}$/.test(pa.others[0].colour) && pa.others[0].colour === pb.myColour && pb.others[0].colour === pa.myColour, "each drawn in the same colour on both screens", `${pa.myColour} and ${pb.myColour}`);
+  // the visitor walks; the owner's screen follows within a second
+  await b.locator("[data-room]").focus();
+  await b.keyboard.down("ArrowUp");
+  await b.waitForTimeout(700);
+  await b.keyboard.up("ArrowUp");
+  const there = (await roomProbe(b)).walker;
+  const at = Date.now();
+  const followed = await a.waitForFunction(([x, y]) => {
+    const o = (document.querySelector("[data-room]") as any).probe().others[0];
+    return o && Math.abs(o.x - x) < 0.02 && Math.abs(o.y - y) < 0.02 && !o.moving;
+  }, [there.x, there.y], { timeout: 1500 }).then(() => true, () => false);
+  check(followed, "the owner sees the visitor walk there, within a second", `${Date.now() - at} ms`);
+  await a.waitForTimeout(400);
+  await a.screenshot({ path: ".shots/visitors-1440.png" });
+  await b.screenshot({ path: ".shots/visitors-390.png" });
+  await b.close();
+  check(await sees(a, 0), "and sees them leave when they close the page");
+  await a.close();
+}
+
 async function phoneroom(browser: Browser) {
   const p = await visitor(browser, PHONE);
   check(await earn(p), "a phone earns an artifact");
@@ -622,7 +656,7 @@ async function budget(browser: Browser) {
   }
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, budget };
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, visitors, budget };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

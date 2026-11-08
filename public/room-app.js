@@ -2,7 +2,7 @@
 // show; its owner, and only its owner, can arrange it. The server is what
 // enforces that: POST /room names no room. Everything here shows or edits a
 // draft; a layout counts once the server has saved it.
-import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
+import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, walkerColour, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
 import { CATALOG, MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
 import { catalogCell, itemName, waitingCount } from "./arena-ui.js";
@@ -28,6 +28,15 @@ let goal = null; // the item to use on arrival
 let near = null; // the item in reach
 const held = new Set(); // steering keys down
 let stir = 0;
+// ---- everyone else in this room (ADR 36): their last walk, eased towards
+let others = new Map();
+let myTag = null;
+let live = null;
+let liveRoom = null;
+let liveTries = 0;
+let sentKey = "";
+let sentAt = 0;
+let sending = false;
 
 const say = (text) => {
   const s = $("[data-status]");
@@ -69,6 +78,73 @@ function show(j) {
   renderOnShow();
   renderPanel();
   if (mine) loadCatalog();
+  joinLive(j.tag);
+}
+
+// ---- the room is shared: a stream of who's here, and your walk sent to them
+function joinLive(tag) {
+  if (!tag || (live && liveRoom === tag)) return;
+  live?.close();
+  liveRoom = tag;
+  sentKey = "";
+  const es = (live = new EventSource(`/rooms/${tag}/live`));
+  es.addEventListener("room", (e) => {
+    liveTries = 0;
+    const d = JSON.parse(e.data);
+    myTag = d.you.tag;
+    const seen = new Set();
+    for (const w of d.walkers) {
+      if (w.tag === myTag) continue;
+      seen.add(w.tag);
+      const o = others.get(w.tag);
+      if (o) Object.assign(o, { tx: w.x, ty: w.y, face: w.face, moving: w.moving, sitting: w.sitting, seat: w.seat });
+      else others.set(w.tag, { ...w, tx: w.x, ty: w.y, colour: walkerColour(w.tag), phase: (parseInt(w.tag.slice(0, 4), 16) % 7) || 0 });
+    }
+    for (const t of [...others.keys()]) if (!seen.has(t)) others.delete(t);
+    // the owner changed the room: everyone in it sees the new layout
+    if (!mine && room && d.rev > room.rev) refreshLayout(tag);
+  });
+  es.addEventListener("error", () => {
+    if (es.readyState !== EventSource.CLOSED || live !== es) return;
+    es.close();
+    live = null;
+    others.clear();
+    const wait = Math.min(15000, 1000 * 2 ** liveTries++);
+    setTimeout(() => {
+      if (!live && liveRoom === tag) {
+        liveRoom = null;
+        joinLive(tag);
+      }
+    }, wait);
+  });
+}
+async function refreshLayout(tag) {
+  const j = await fetch(`/rooms/${tag}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!j || mine || j.rev <= (room?.rev ?? 0)) return;
+  room = j;
+  draft = structuredClone(j.layout);
+  if (walker) Object.assign(walker, freeNear(walker, draft.items), walker.sitting ? { sitting: false, seat: null } : {});
+  renderOnShow();
+}
+/** Sends your walk when it changes, at most ten times a second. */
+function sendWalk(ms) {
+  if (!live || !walker || !liveRoom || sending || ms - sentAt < 100) return;
+  const b = { x: +walker.x.toFixed(4), y: +walker.y.toFixed(4), face: walker.face.map((v) => +(+v).toFixed(3)), moving: !!walker.moving, sitting: !!walker.sitting, seat: walker.sitting ? walker.seat : null };
+  const key = JSON.stringify(b);
+  if (key === sentKey) return;
+  sentKey = key;
+  sentAt = ms;
+  sending = true;
+  fetch(`/rooms/${liveRoom}/walk`, { method: "POST", headers: { "Content-Type": "application/json" }, body: key })
+    .catch(() => {})
+    .finally(() => (sending = false));
+}
+function easeOthers(dt) {
+  const k = reduced.matches ? 1 : Math.min(1, dt * 10);
+  for (const o of others.values()) {
+    o.x += (o.tx - o.x) * k;
+    o.y += (o.ty - o.y) * k;
+  }
 }
 /** What the owner can do next: decorate, or go and win something to decorate with. */
 function showOwner() {
@@ -595,10 +671,12 @@ function frame(ms) {
     if (!editing) {
       walk(dt);
       showPrompt();
+      sendWalk(ms);
     }
+    easeOthers(dt);
     if (!reduced.matches && near) stir += dt;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRoom(g, w, h, dpr, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 1000, stir, selected, editing, walker: editing ? null : walker, near: near?.uid ?? null });
+    drawRoom(g, w, h, dpr, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 1000, stir, selected, editing, walker: editing ? null : { ...walker, colour: myTag ? walkerColour(myTag) : undefined }, others: [...others.values()], near: near?.uid ?? null });
   }
   requestAnimationFrame(frame);
 }
@@ -672,6 +750,9 @@ canvas.probe = () => {
     dirty,
     walker: walker && { x: walker.x, y: walker.y, sitting: walker.sitting, moving: walker.moving, cx: r.left + iso(walker.x, walker.y).X * r.width, cy: r.top + iso(walker.x, walker.y).Y * r.height },
     near: near?.uid ?? null,
+    me: myTag,
+    myColour: myTag ? walkerColour(myTag) : null,
+    others: [...others.values()].map((o) => ({ tag: o.tag, x: o.tx, y: o.ty, moving: o.moving, sitting: o.sitting, colour: o.colour })),
     prompt: $("[data-prompt]").hidden ? "" : $("[data-prompt]").textContent,
     rev: room?.rev ?? null,
     tag: room?.tag ?? null,
