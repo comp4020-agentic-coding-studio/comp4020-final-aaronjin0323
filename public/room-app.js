@@ -37,6 +37,18 @@ let liveTries = 0;
 let sentKey = "";
 let sentAt = 0;
 let sending = false;
+let placed = false; // you've been given a spot clear of everyone already here
+// where arrivals stand, nearest the door first: the first one nobody's on
+const ARRIVALS = [[0.9, 0.9], [0.9, 0.76], [0.76, 0.9], [0.9, 0.62], [0.62, 0.9], [0.78, 0.78], [0.9, 0.48], [0.48, 0.9]];
+function standClear(list) {
+  placed = true;
+  if (!walker || walker.moving || walker.sitting || path.length) return;
+  const clear = (p) => list.every((w) => Math.hypot(w.x - p.x, w.y - p.y) > 0.08);
+  for (const [x, y] of ARRIVALS) {
+    const p = freeNear({ x, y }, draft.items);
+    if (clear(p)) return Object.assign(walker, p);
+  }
+}
 
 const say = (text) => {
   const s = $("[data-status]");
@@ -72,6 +84,7 @@ function show(j) {
   draft = structuredClone(j.layout);
   dirty = false;
   walker = { ...freeNear(WALK_START, draft.items), moving: false, sitting: false, seat: null, face: [-0.7, -0.7] };
+  placed = false;
   $("[data-name]").textContent = j.name;
   document.title = `${j.name} · Exhibition room`;
   showOwner();
@@ -101,6 +114,7 @@ function joinLive(tag) {
       else others.set(w.tag, { ...w, tx: w.x, ty: w.y, colour: walkerColour(w.tag), phase: (parseInt(w.tag.slice(0, 4), 16) % 7) || 0 });
     }
     for (const t of [...others.keys()]) if (!seen.has(t)) others.delete(t);
+    if (!placed) standClear(d.walkers.filter((w) => w.tag !== myTag));
     // the owner changed the room: everyone in it sees the new layout
     if (!mine && room && d.rev > room.rev) refreshLayout(tag);
   });

@@ -550,6 +550,9 @@ async function visitors(browser: Browser) {
   check(await sees(b, 1), "and the visitor sees the owner there");
   const pa = await roomProbe(a), pb = await roomProbe(b);
   check(pa.others[0].tag === pb.me && pb.others[0].tag === pa.me, "each sees the other, not themselves");
+  // two people who come in together don't stand on one spot
+  const apart = Math.hypot(pa.walker.x - pb.walker.x, pa.walker.y - pb.walker.y);
+  check(apart > 0.03 || pa.walker.moving || pb.walker.moving, "two arrivals don't stand on one spot", apart.toFixed(3));
   check(/^#[0-9a-f]{6}$/.test(pa.others[0].colour) && pa.others[0].colour === pb.myColour && pb.others[0].colour === pa.myColour, "each drawn in the same colour on both screens", `${pa.myColour} and ${pb.myColour}`);
   // the visitor walks; the owner's screen follows within a second
   await b.locator("[data-room]").focus();
