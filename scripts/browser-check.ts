@@ -206,8 +206,22 @@ const roomProbe = (p: Page) => p.evaluate(() => (document.querySelector("[data-r
 async function room(browser: Browser) {
   const a = await visitor(browser);
   check(await earn(a), "a visitor earns an artifact to show");
+  // one look for the whole site (ADR 38): the arena wears the room's type and palette
+  const siteLook = () => a.evaluate(() => {
+    const cs = getComputedStyle(document.documentElement);
+    return { font: cs.fontFamily.split(",")[0].trim(), ink: cs.color };
+  });
+  const arenaLook = await siteLook();
+  const floor = await a.evaluate(() => {
+    const c = document.querySelector("canvas.arena") as HTMLCanvasElement;
+    const [r, g, b] = c.getContext("2d")!.getImageData(Math.round(c.width * 0.2), Math.round(c.height * 0.25), 1, 1).data;
+    return { r, g, b };
+  });
+  check(floor.r > floor.b + 20 && floor.g > floor.b, "the arena floor is warm wood, like the rooms", `rgb(${floor.r},${floor.g},${floor.b})`);
   await a.goto(`${APP}/room/`);
   await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+  const roomLook = await siteLook();
+  check(arenaLook.font === roomLook.font && arenaLook.ink === roomLook.ink, "the arena and the room share a typeface and ink", `${arenaLook.font} ${arenaLook.ink} / ${roomLook.font} ${roomLook.ink}`);
   check((await roomProbe(a)).mine, "/room/ is your own room");
   const cards = await a.locator("[data-onshow] button").evaluateAll((bs) => bs.map((b) => ({ rarity: (b as HTMLElement).dataset.rarity, text: (b.textContent ?? "").toLowerCase(), border: getComputedStyle(b).borderColor })));
   check(cards.length > 0 && cards.every((c) => c.rarity && c.border), "each collection card is drawn in its material", cards.map((c) => `${c.rarity} ${c.border}`).join(", "));
