@@ -71,6 +71,7 @@ test("a launch reaches another visitor's stream within 1000 ms, without any id b
   const e = await sb.until((x) => x.robots?.some((r: any) => r.tag === me.tag && r.seq === 1), 1000);
   expect(Date.now() - at).toBeLessThan(1000);
   expect(JSON.stringify(e)).not.toMatch(/"pid"|"name"/);
+  expect(Array.isArray(e.exits)).toBe(true); // who came to rest in the door (ADR 39)
   sa.close();
   sb.close();
 });

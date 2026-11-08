@@ -88,13 +88,21 @@ const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) *
 export const inVault = (pos) => dist(pos, VAULT) < VAULT_R;
 /** A robot at `pos` touches an artifact at `at`. */
 export const touches = (pos, at) => dist(pos, at) < ROBOT_R + ARTIFACT_R;
-/** Where artifacts may appear: a grid inside the walls, clear of the vault
- * and of every robot's starting spot. */
+// ---- the door to your room (ADR 39): the middle of the top wall
+/** Half its width along the wall, and how far it reaches in, in metres. */
+export const EXIT = { x: ARENA.w / 2, half: 0.9, depth: 1.25 };
+/** A robot at `pos` is in the door. */
+export const inExit = (pos) => Math.abs(pos[0] - EXIT.x) < EXIT.half && pos[1] < EXIT.depth;
+/** Clear of the door, with room for an artifact to be drawn whole. */
+const nearExit = (pos) => Math.abs(pos[0] - EXIT.x) < EXIT.half + ARTIFACT_R && pos[1] < EXIT.depth + ARTIFACT_R;
+
+/** Where artifacts may appear: a grid inside the walls, clear of the vault,
+ * the door, and every robot's starting spot. */
 export const SPOTS = [];
 for (let x = 1.4; x < ARENA.w - 1; x += 1.8) {
   for (let y = 1.4; y < ARENA.h - 1; y += 1.8) {
     const p = [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
-    if (dist(p, VAULT) > VAULT_R + ROBOT_R + ARTIFACT_R && SPAWNS.every((q) => !touches(q, p))) SPOTS.push(p);
+    if (dist(p, VAULT) > VAULT_R + ROBOT_R + ARTIFACT_R && !nearExit(p) && SPAWNS.every((q) => !touches(q, p))) SPOTS.push(p);
   }
 }
 
@@ -145,7 +153,7 @@ const WALL_GAP = 0.7;
 const FAN = [[1, 0], [0.766, 0.643], [0.766, -0.643], [0.174, 0.985], [0.174, -0.985]];
 /** Where `n` artifacts from a robot at `pos` land: spread outward around
  * `away` (a unit vector from the other robot), inside the walls and out of
- * the vault, pushed to its edge if one fell in. */
+ * the vault and the door, pushed out if one fell in. */
 export function scatterSpots(pos, away, n) {
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -153,6 +161,7 @@ export function scatterSpots(pos, away, n) {
     const d = [away[0] * f[0] - away[1] * f[1], away[0] * f[1] + away[1] * f[0]];
     const reach = ROBOT_R + ARTIFACT_R + 0.9 + 0.3 * (i % 2);
     const q = [clamp(pos[0] + d[0] * reach, WALL_GAP, ARENA.w - WALL_GAP), clamp(pos[1] + d[1] * reach, WALL_GAP, ARENA.h - WALL_GAP)];
+    if (nearExit(q)) q[1] = EXIT.depth + ARTIFACT_R + 0.05; // never into the door
     const v = [q[0] - VAULT[0], q[1] - VAULT[1]];
     const len = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
     const edge = VAULT_R + ARTIFACT_R + 0.1;

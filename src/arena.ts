@@ -14,6 +14,7 @@ import {
   advance,
   checkLaunch,
   collide,
+  inExit,
   inVault,
   launch,
   nearestFree,
@@ -34,6 +35,7 @@ type Entry = {
   walked: Robot; // where the tick has stepped it to, on the grid
   streams: number;
   awayUntil: number | null; // with no stream open: a ghost until then, then gone
+  knocked: boolean; // moving from a contact, not its own launch: the door won't take it
 };
 /** A contact: where, and every artifact it sent out, the same for every page. */
 export type Hit = { pos: number[]; at: number; scattered: { id: string; kind: string; by: string; from: number[]; to: number[] }[] };
@@ -50,6 +52,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   let floor = store.floor(); // the artifacts available, as the store last said
   let hits: Hit[] = [];
   let deliveries: Delivery[] = [];
+  let exits: string[] = []; // tags that came to rest in the door
   let steps = 0;
   let nextSpawnAt = clock + spawn.everyMs[1];
   const tagOf = (pid: string) => store.who(pid)?.tag ?? "";
@@ -83,7 +86,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   function seat(pid: string, streams: number) {
     const slot = freeSlot();
     const robot = standing(SPAWNS[slot], clock) as Robot;
-    robots.set(pid, { slot, robot, walked: robot, streams, awayUntil: null });
+    robots.set(pid, { slot, robot, walked: robot, streams, awayUntil: null, knocked: false });
   }
 
   /** Everything `pid` carries back on the floor, nearest `at`. Safe twice. */
@@ -132,6 +135,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     if (!c) return false;
     a.walked = a.robot = { ...c.a, t };
     b.walked = b.robot = { ...c.b, t };
+    a.knocked = b.knocked = true;
     const from = { [pa]: c.a.pos, [pb]: c.b.pos };
     const lost = store.scatter(
       [
@@ -152,9 +156,20 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
   function stepAll(t: number): boolean {
     let changed = false;
     const all = [...robots].sort(([, x], [, y]) => x.slot - y.slot);
+    const was = new Map(all.map(([pid, e]) => [pid, moving(e.walked)]));
     for (const [, e] of all) e.walked = moving(e.walked) ? advance(e.walked, t) : { ...e.walked, t };
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (meet(all[i][0], all[i][1], all[j][0], all[j][1], t)) changed = true;
     for (const [pid, e] of all) if (contacts(pid, e, t)) changed = true;
+    // the door (ADR 39): coming to rest in it, from your own launch, empty
+    for (const [pid, e] of all) {
+      if (!was.get(pid) || moving(e.walked) || away(e)) continue;
+      const knocked = e.knocked;
+      e.knocked = false;
+      if (knocked || !inExit(e.walked.pos) || store.cargo(pid).length) continue;
+      exits.push(tagOf(pid));
+      log("door", { tag: tagOf(pid) });
+      changed = true;
+    }
     // the grace runs out: cargo back to the floor nearest the robot, robot gone
     for (const [pid, e] of all) {
       if (e.awayUntil === null || e.awayUntil > t) continue;
@@ -242,6 +257,7 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
       if (c.launch.seq <= e.robot.seq) return { ok: false as const, status: 409, error: "stale-launch", message: "That launch was already overtaken", robot: e.robot };
       stepTo(now);
       e.robot = e.walked = launch(e.walked, c.launch, clock, store.cargo(pid).length) as Robot;
+      e.knocked = false;
       return { ok: true as const, robot: e.robot };
     },
     /** The tick: step every robot up to now. True if the pages need telling. */
@@ -256,6 +272,12 @@ export function createArena(store: Store, { now = Date.now(), random = Math.rand
     deliveries() {
       const out = deliveries;
       deliveries = [];
+      return out;
+    },
+    /** Tags that came to rest in the door since the last call. */
+    exits() {
+      const out = exits;
+      exits = [];
       return out;
     },
     /** Re-reads the floor, after the store was changed from outside. */

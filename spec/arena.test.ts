@@ -391,3 +391,90 @@ test("a hit says whose each scattered artifact was, by tag", () => {
   const [hit] = w.arena.hits();
   expect(hit.scattered.map((s: any) => s.by)).toEqual([w.store.who(a).tag, w.store.who(a).tag]);
 });
+
+// ---- the door to your room (ADR 39)
+/** Runs `ms` and says every tag that went through the door meanwhile. */
+function through(w: any, ms: number): string[] {
+  const out: string[] = [];
+  for (let t = 0; t < ms; t += 20) {
+    w.run(20);
+    out.push(...w.arena.exits());
+  }
+  return out;
+}
+/** The weakest launch from `pos` along `dir` whose path stops in the door. */
+function intoDoor(pos: number[], dir: number[], load = 0): number {
+  for (let p = 0.05; p <= 1; p += 0.01) {
+    const pts = A.path(A.standing(pos, 0), { dir, power: p, seq: 1 }, load);
+    if (A.inExit(pts[pts.length - 1])) return p;
+  }
+  throw new Error("no launch stops in the door");
+}
+
+test("the door sits at the middle of the top wall, and nothing spawns or scatters into it", () => {
+  expect(A.inExit([A.ARENA.w / 2, A.ROBOT_R])).toBe(true);
+  expect(A.inExit(A.VAULT)).toBe(false);
+  expect(A.SPOTS.every((s: number[]) => !A.inExit(s))).toBe(true);
+  for (const away of [[0, -1], [1, 0], [-1, 0], [0.6, -0.8]]) {
+    for (const s of A.scatterSpots([A.ARENA.w / 2, 1.2], away, A.CARRY_MAX)) expect(A.inExit(s)).toBe(false);
+  }
+});
+
+test("coming to rest in the door from your own launch, carrying nothing, sends you through", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  const from = [A.ARENA.w / 2, 3];
+  w.place(p, from);
+  w.launch(p, [0, -1], intoDoor(from, [0, -1]));
+  expect(through(w, 3000)).toEqual([w.store.who(p).tag]);
+  expect(A.inExit(w.robot(p).pos)).toBe(true);
+  expect(through(w, 2000)).toEqual([]); // standing in it sends you once, not again
+});
+
+test("coasting through the door sends nobody", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  w.place(p, [4, 0.8]);
+  w.launch(p, [1, 0], 1);
+  expect(through(w, 6000)).toEqual([]);
+  expect(A.inExit(w.robot(p).pos)).toBe(false);
+});
+
+test("a robot knocked into the door stays; it must launch itself", () => {
+  const w = world();
+  w.clearFloor();
+  const a = w.join(), b = w.join();
+  w.place(a, [A.ARENA.w / 2, 2.2]);
+  w.place(b, [A.ARENA.w / 2, 3.2], [0, -3.2]);
+  expect(through(w, 4000)).toEqual([]);
+  expect(A.inExit(w.robot(a).pos)).toBe(true); // it did come to rest in the door
+});
+
+test("the door is shut to a robot that carries anything", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  w.give(p, 1);
+  const from = [A.ARENA.w / 2, 3];
+  w.place(p, from);
+  w.launch(p, [0, -1], intoDoor(from, [0, -1], 1));
+  expect(through(w, 3000)).toEqual([]);
+  expect(A.inExit(w.robot(p).pos)).toBe(true);
+  expect(w.store.cargo(p)).toHaveLength(1);
+});
+
+test("back within the grace, a robot standing in the door stays in the arena", () => {
+  const w = world();
+  w.clearFloor();
+  const p = w.join();
+  const from = [A.ARENA.w / 2, 3];
+  w.place(p, from);
+  w.launch(p, [0, -1], intoDoor(from, [0, -1]));
+  expect(through(w, 3000)).toHaveLength(1);
+  w.leave(p);
+  through(w, 2000);
+  w.join(p);
+  expect(through(w, 3000)).toEqual([]);
+});
