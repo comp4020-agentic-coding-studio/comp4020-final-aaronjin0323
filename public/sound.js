@@ -23,7 +23,7 @@ const ROOM_CHORDS = [
   [note(2, 3), note(3, 4), note(4, 1)],
 ];
 const MUSIC = {
-  arena: { chords: ARENA_CHORDS, chordEvery: 8, noteGap: [1.6, 3.4], noteChance: 0.65, octave: 5, level: 1 },
+  arena: { chords: ARENA_CHORDS, chordEvery: 8, noteGap: [1.6, 3.4], noteChance: 0.65, octave: 5, level: 0.6 }, // turned down after playing it
   room: { chords: ROOM_CHORDS, chordEvery: 12, noteGap: [3.5, 7], noteChance: 0.55, octave: 4, level: 0.8 },
 };
 

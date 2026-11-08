@@ -19,7 +19,8 @@ assets are out of scope, so whatever plays is made in the page.
   over the music or over another sound still harmonises.
 - **The music is generative and quiet:** in the arena, a slow pad with a
   few notes drifting over it; in a room, sparser, like a gallery at night.
-  It sits well under the sounds.
+  It sits well under the sounds. Playing it, the student found the arena's
+  music a little loud, so it plays at 0.6 of its first level.
 - **Sounds answer what you do and what happens to you,** never anyone
   else's chatter: your launch (a soft pluck, higher the harder you pull),
   a pickup (a rising bell), a contact that scatters your cargo (a falling
