@@ -125,6 +125,12 @@ ADR 28 says which still stand.
   `409 stale-room`. Layouts persist across restarts.
 - **No free text in a room.** Names are generated from the tag; no titles or
   captions. Rooms are public, and read-only to everyone but their owner.
+- **A room is shared in real time** ([ADR 36](docs/adr/0036-rooms-are-shared-in-real-time.md)):
+  everyone with the room open sees everyone else in it walk or sit, within
+  about a second, as a robot coloured by their tag (yours ringed white).
+  Presence is memory only, never stored, at most `PRESENCE_MAX` walkers a
+  room, one per visitor; the server checks a walk's shape and that you're in
+  that room, nothing more. An owner's save reaches everyone in the room.
 - **Arranging works like a decorating game** ([ADR 34](docs/adr/0034-room-editor-like-a-decorating-game.md)):
   three tabs over picture tiles ([ADR 35](docs/adr/0035-say-less-show-the-next-thing.md));
   a tile places its item, selected; Turn, Colour and Remove appear on the room
@@ -203,6 +209,8 @@ is `{ error, message }`.
 | `GET /rooms/:tag` | | a room: `layout`, `rev`, `name`, its `artifacts`, and `mine` | `404` |
 | `GET /rooms?before=<cursor>` | | 12 rooms with something on show, newest change first, and the next cursor | `400` |
 | `POST /room` | `{ layout, was }` | save your own room, from revision `was` | `400`, `409 stale-room`, `409 not-owned` |
+| `GET /rooms/:tag/live` | | SSE in that room: `room`, every `walkers` entry `{ tag, x, y, face, moving, sitting, seat }`, `you`, `rev`, `serverTime` | `404`, `429` over 4 streams |
+| `POST /rooms/:tag/walk` | `{ x, y, face: [x, y], moving, sitting, seat }` | where you are in a room you have open | `400`, `404`, `409 not-in-room`, `429 too-fast` |
 | `POST /launch` | `{ dir: [x, y], power, seq }` | launch your robot; answers its snapshot | `409 no-robot`, `409 stale-launch`, `400` |
 
 Held by `spec/arena-rule.test.ts`, `spec/arena.test.ts` (the real arena and
