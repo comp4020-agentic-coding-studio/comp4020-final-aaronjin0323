@@ -156,6 +156,14 @@ ADR 28 says which still stand.
   move and a short wake. The room also lists them as
   buttons, so nothing depends on the canvas.
 
+- **A door joins the arena and your room** ([ADR 39](docs/adr/0039-a-door-between-arena-and-room.md)),
+  at the middle of the arena's top wall. Come to rest in it, from your own
+  launch, carrying nothing, and you go to your room; coasting through,
+  knocked in or loaded does nothing, and it's dark while you carry. The
+  server decides. While you aim, it lights if you'd stop in it. A room's
+  door is its front corner: walk into it and you're back in the arena.
+  Nothing spawns or scatters into the door. The buttons stay.
+
 ### Staying and leaving
 
 - **Four robots at most** (`MAX_PLAYERS`). Anyone else watches, sees their
@@ -210,7 +218,7 @@ is `{ error, message }`.
 |---|---|---|---|
 | `GET /` | | the arena | |
 | `GET /readme/` | | README.md rendered | |
-| `GET /events` | | SSE: `arena`, every robot, the floor, `hits`, `deliveries`, `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
+| `GET /events` | | SSE: `arena`, every robot, the floor, `hits`, `deliveries`, `exits` (tags that came to rest in the door), `mine`, `you`, `serverTime` (ms) | `429` over 4 streams |
 | `GET /collection` | | your newest 60 banked artifacts and your catalog counts | |
 | `GET /room/`, `GET /room/:tag` | | the room page, yours or theirs | |
 | `GET /rooms/me` | | your room, your `shelf` for editing, `mine: true` | |
