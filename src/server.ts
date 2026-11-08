@@ -8,6 +8,7 @@ import { marked } from "marked";
 import { openStore } from "./db.ts";
 import { log } from "./log.ts";
 import { createArena } from "./arena.ts";
+import { createPresence } from "./presence.ts";
 // @ts-ignore -- plain JS module shared with the page
 import { BEAT_MS } from "../public/arena.js";
 
@@ -54,10 +55,24 @@ function broadcast() {
 setInterval(() => {
   if (arena.tick(Date.now())) broadcast();
 }, TICK_MS).unref();
+// ---- rooms are shared (ADR 36): who's in each, and where, to everyone there
+type RoomClient = { res: ServerResponse; pid: string; tag: string; room: string };
+const roomClients = new Map<string, Set<RoomClient>>();
+const presence = createPresence();
+const revs = new Map<string, number>(); // each open room's layout revision
+function roomcast(room: string) {
+  const walkers = presence.walkers(room);
+  const rev = revs.get(room) ?? 0;
+  const now = Date.now();
+  for (const c of roomClients.get(room) ?? []) c.res.write(`event: room\ndata: ${JSON.stringify({ walkers, rev, you: { tag: c.tag }, serverTime: now })}\n\n`);
+}
+const roomStreamsOf = (pid: string) => [...roomClients.values()].reduce((n, set) => n + [...set].filter((c) => c.pid === pid).length, 0);
+
 setInterval(() => {
   // an event, not a comment: a page can't hear a comment, and silence is
   // how it tells that its network has gone
   for (const c of clients) c.res.write("event: beat\ndata: {}\n\n");
+  for (const set of roomClients.values()) for (const c of set) c.res.write("event: beat\ndata: {}\n\n");
 }, BEAT_MS).unref();
 
 // ---- requests
@@ -169,6 +184,34 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       const r = store.rooms(new URL(req.url ?? "/", "http://x").searchParams.get("before"));
       return r.ok ? json(res, 200, { entries: r.entries, next: r.next }) : refuse(res, r);
     }
+    const live = /^\/rooms\/([0-9a-f]{8})\/live$/.exec(path);
+    if (live) {
+      const room = live[1];
+      const v = visitorOf(req, res);
+      const r = store.roomOf(room);
+      if (!r) return refuse(res, { status: 404, error: "no-room", message: "No such room" });
+      if (roomStreamsOf(v.pid) >= STREAMS_PER_VISITOR)
+        return refuse(res, { status: 429, error: "too-many-streams", message: `At most ${STREAMS_PER_VISITOR} rooms open at once` });
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      const c: RoomClient = { res, pid: v.pid, tag: v.tag, room };
+      let set = roomClients.get(room);
+      if (!set) roomClients.set(room, (set = new Set()));
+      set.add(c);
+      revs.set(room, r.rev);
+      presence.join(room, v.tag);
+      log("enter", { room, tag: v.tag, here: set.size });
+      roomcast(room);
+      req.on("close", () => {
+        set!.delete(c);
+        if (!set!.size) {
+          roomClients.delete(room);
+          revs.delete(room);
+        }
+        if (presence.leave(room, v.tag)) log("leave", { room, tag: v.tag });
+        roomcast(room);
+      });
+      return;
+    }
     if (path === "/rooms/me") {
       const v = visitorOf(req, res);
       return json(res, 200, { ...store.roomOf(v.tag), mine: true, shelf: store.shelf(v.pid) });
@@ -204,7 +247,25 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return refuse(res, saved);
     }
     log("room", { tag: who.tag, rev: saved.rev });
-    return json(res, 200, { rev: saved.rev });
+    json(res, 200, { rev: saved.rev });
+    if (roomClients.has(who.tag)) {
+      revs.set(who.tag, saved.rev);
+      roomcast(who.tag);
+    }
+    return;
+  }
+  const walking = /^\/rooms\/([0-9a-f]{8})\/walk$/.exec(path);
+  if (walking) {
+    const room = walking[1];
+    const who = visitorOf(req, res);
+    const r = presence.walk(room, who.tag, body, Date.now());
+    if (!r.ok) {
+      if (r.error === "not-in-room" && !store.roomOf(room)) return refuse(res, { status: 404, error: "no-room", message: "No such room" });
+      return refuse(res, r);
+    }
+    json(res, 200, {});
+    roomcast(room);
+    return;
   }
   if (path !== "/launch") return refuse(res, { status: 404, error: "not-found", message: "No such route" });
   const v = visitorOf(req, res);
@@ -229,6 +290,7 @@ server.listen(PORT, "0.0.0.0", () => log("listening", { port: PORT, db: DB_PATH 
 
 process.on("SIGTERM", () => {
   for (const c of clients) c.res.end();
+  for (const set of roomClients.values()) for (const c of set) c.res.end();
   server.close();
   server.closeAllConnections();
   store.close();

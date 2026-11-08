@@ -12,9 +12,9 @@ function visitor() {
   };
   const launch = (body: unknown, headers: Record<string, string> = {}) =>
     req("/launch", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
-  const stream = async () => {
+  const stream = async (path = "/events") => {
     const c = new AbortController();
-    const r = await req("/events", { signal: c.signal });
+    const r = await req(path, { signal: c.signal });
     const reader = r.body!.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -48,7 +48,9 @@ function visitor() {
     };
     return { until, events, close: () => c.abort() };
   };
-  return { req, launch, stream };
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+    req(path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  return { req, launch, stream, post };
 }
 
 test("the page is the arena, and the old museum's routes are gone", async () => {
@@ -150,4 +152,52 @@ test("rooms: no such room is 404, a bad cursor 400, cross-site saves 403, stale 
 
 test("the arena links to your room, in plain HTML", async () => {
   expect(await (await visitor().req("/")).text()).toMatch(/href="\/room\/"/);
+});
+
+// ---- shared rooms (ADR 36)
+const walk = { x: 0.3, y: 0.55, face: [1, 0], moving: true, sitting: false, seat: null };
+
+test("two visitors in one room see each other walk within 1000 ms, and leave", async () => {
+  const owner = visitor(), guest = visitor();
+  const room = (await (await owner.req("/rooms/me")).json()).tag;
+  const so = await owner.stream(`/rooms/${room}/live`);
+  const sg = await guest.stream(`/rooms/${room}/live`);
+  const g = (await sg.until((e) => e.you)).you.tag;
+  await so.until((e) => e.walkers?.some((w: any) => w.tag === g));
+  const at = Date.now();
+  expect((await guest.post(`/rooms/${room}/walk`, walk)).status).toBe(200);
+  const e = await so.until((x) => x.walkers?.some((w: any) => w.tag === g && w.x === 0.3 && w.moving), 1000);
+  expect(Date.now() - at).toBeLessThan(1000);
+  expect(JSON.stringify(e)).not.toMatch(/"pid"|"name"/);
+  sg.close();
+  await so.until((x) => x.walkers && !x.walkers.some((w: any) => w.tag === g), 2000);
+  so.close();
+});
+
+test("a walk is refused outside a room you have open, or in the wrong shape", async () => {
+  const owner = visitor(), guest = visitor();
+  const room = (await (await owner.req("/rooms/me")).json()).tag;
+  expect((await guest.req("/rooms/ffffffff/live")).status).toBe(404);
+  expect((await guest.post("/rooms/ffffffff/walk", walk)).status).toBe(404);
+  const r = await guest.post(`/rooms/${room}/walk`, walk);
+  expect(r.status).toBe(409);
+  expect((await r.json()).error).toBe("not-in-room");
+  const s = await guest.stream(`/rooms/${room}/live`);
+  await s.until((e) => e.you);
+  const bad = await guest.post(`/rooms/${room}/walk`, { ...walk, x: 7 });
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).error).toBe("bad-walk");
+  expect((await guest.post(`/rooms/${room}/walk`, walk, { origin: "https://elsewhere.example" })).status).toBe(403);
+  s.close();
+});
+
+test("an owner's save reaches everyone in the room", async () => {
+  const owner = visitor(), guest = visitor();
+  const mine = await (await owner.req("/rooms/me")).json();
+  const sg = await guest.stream(`/rooms/${mine.tag}/live`);
+  await sg.until((e) => e.you);
+  const layout = { ...mine.layout, wall: mine.layout.wall === "sage" ? "plaster" : "sage" };
+  expect((await owner.post("/room", { layout, was: mine.rev })).status).toBe(200);
+  await sg.until((e) => e.rev === mine.rev + 1, 1000);
+  sg.close();
 });
