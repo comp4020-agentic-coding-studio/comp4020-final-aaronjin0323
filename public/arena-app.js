@@ -6,6 +6,10 @@
 import { ARENA, ARTIFACT_R, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
 import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, connection, connectionMessage, deliveryWords, dropWords, flying, guide, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, roomCalls, silent, trust } from "./arena-ui.js";
 import { drawAura, drawItem } from "./arena-draw.js";
+import { drawFloor } from "./look-floor.js";
+import { drawBurst, drawVault as paintVault } from "./look-vault.js";
+import { drawRobot as paintRobot, drawTrail as paintTrail } from "./look-robot.js";
+import { drawCargoSlot, drawFlash, drawSettling, drawTether } from "./look-effects.js";
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $("[data-arena]");
@@ -220,11 +224,7 @@ function draw() {
   resize();
   const now = serverNow();
   g.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-  g.fillStyle = "#211f33";
-  g.fillRect(0, 0, px(ARENA.w), px(ARENA.h));
-  g.strokeStyle = "#57527a";
-  g.lineWidth = 4;
-  g.strokeRect(2, 2, px(ARENA.w) - 4, px(ARENA.h) - 4);
+  drawFloor(g, { w: px(ARENA.w), h: px(ARENA.h), m: view.scale, now, reduced: reducedMotion.matches });
   drawVault(now);
   drawBursts(now);
   for (const a of artifacts) drawArtifact(a, now);
@@ -249,7 +249,7 @@ function draw() {
     if (r.away) g.globalAlpha = 0.3; // a ghost while its player reconnects
     if (!reducedMotion.matches) drawTrail(p, snap.vel, SLOT_COLOURS[r.slot]);
     drawCargo(p, snap.vel, r.carrying ?? [], now);
-    drawRobot(p, r.slot, isMe);
+    drawRobot(p, r.slot, isMe, snap.vel, now);
     g.globalAlpha = 1;
   }
   drawGuide(now);
@@ -327,50 +327,16 @@ function drawGuide(now) {
   g.fillText(next.words, x, y + 1);
 }
 function drawVault(now) {
-  const x = px(VAULT[0]), y = px(VAULT[1]);
-  const pulse = reducedMotion.matches ? 0 : Math.sin(now / 500) * 0.06;
-  g.beginPath();
-  g.arc(x, y, px(VAULT_R), 0, Math.PI * 2);
-  const lit = held.carrying > 0;
-  g.fillStyle = `rgba(255, 200, 61, ${(lit ? 0.32 : 0.14) + pulse})`;
-  g.fill();
-  g.strokeStyle = "#ffc83d";
-  g.lineWidth = lit ? 5 : 3;
-  g.setLineDash([10, 6]);
-  g.stroke();
-  g.setLineDash([]);
-  g.fillStyle = "#ffc83d";
-  g.font = "700 13px system-ui, sans-serif";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText("VAULT", x, y);
+  paintVault(g, { x: px(VAULT[0]), y: px(VAULT[1]), r: px(VAULT_R), lit: held.carrying > 0, now, reduced: reducedMotion.matches });
 }
 // a delivery: solid gold rings out of the vault, the opposite of a scatter
 function drawBursts(now) {
   bursts = bursts.filter((b) => now - b.at < 900);
-  for (const b of bursts) {
-    const k = (now - b.at) / 900;
-    for (const lag of [0, 0.22]) {
-      const f = reducedMotion.matches ? 1 : Math.max(0, k - lag);
-      g.beginPath();
-      g.arc(px(VAULT[0]), px(VAULT[1]), px(VAULT_R) * (1 + f * 0.9), 0, Math.PI * 2);
-      g.strokeStyle = `rgba(255,215,102,${1 - k})`;
-      g.lineWidth = 5;
-      g.stroke();
-    }
-  }
+  for (const b of bursts) drawBurst(g, { x: px(VAULT[0]), y: px(VAULT[1]), r: px(VAULT_R), k: (now - b.at) / 900, reduced: reducedMotion.matches });
 }
 function drawTrail(p, vel, colour) {
-  const s = Math.hypot(vel[0], vel[1]);
-  if (s < 2) return;
-  g.beginPath();
-  g.moveTo(px(p[0]), px(p[1]));
-  g.lineTo(px(p[0] - vel[0] * 0.09), px(p[1] - vel[1] * 0.09));
-  g.strokeStyle = `${colour}66`;
-  g.lineWidth = px(ROBOT_R) * 1.5;
-  g.lineCap = "round";
-  g.stroke();
-  g.lineCap = "butt";
+  if (Math.hypot(vel[0], vel[1]) < 2) return;
+  paintTrail(g, { x: px(p[0]), y: px(p[1]), back: [px(p[0] - vel[0] * 0.09), px(p[1] - vel[1] * 0.09)], r: px(ROBOT_R), colour });
 }
 // an artifact: faded with a ring filling while it can't be taken yet
 function drawArtifact(a, now) {
@@ -386,34 +352,13 @@ function drawArtifact(a, now) {
   drawItem(g, a, x, y, size, spin);
   g.globalAlpha = 1;
   if (ready >= 1) return;
-  g.beginPath();
-  g.arc(x, y, px(ARTIFACT_R) + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ready);
-  g.strokeStyle = "#ffffff";
-  g.lineWidth = 2.5;
-  g.stroke();
+  drawSettling(g, { x, y, r: px(ARTIFACT_R), ready });
 }
 // a contact: a ring opening out where it happened
 function drawFlashes(now) {
   flashes = flashes.filter((f) => now - f.at < 700);
-  for (const f of flashes) {
-    const k = (now - f.at) / 700;
-    g.beginPath();
-    g.arc(px(f.pos[0]), px(f.pos[1]), px(ARTIFACT_R) + (reducedMotion.matches ? 10 : 30 * k), 0, Math.PI * 2);
-    g.strokeStyle = `rgba(255,107,74,${1 - k})`;
-    g.lineWidth = 3;
-    g.stroke();
-    // each thing thrown, a line from the contact to where it's landing
-    g.setLineDash([5, 5]);
-    g.strokeStyle = `rgba(255,182,72,${0.8 * (1 - k)})`;
-    g.lineWidth = 2;
-    for (const s of f.scattered ?? []) {
-      g.beginPath();
-      g.moveTo(px(s.from[0]), px(s.from[1]));
-      g.lineTo(px(s.to[0]), px(s.to[1]));
-      g.stroke();
-    }
-    g.setLineDash([]);
-  }
+  for (const f of flashes)
+    drawFlash(g, { x: px(f.pos[0]), y: px(f.pos[1]), r: px(ARTIFACT_R), k: (now - f.at) / 700, lines: (f.scattered ?? []).map((t) => [px(t.from[0]), px(t.from[1]), px(t.to[0]), px(t.to[1])]), reduced: reducedMotion.matches });
 }
 // cargo trails behind a robot: what it carries, then rings for the room left
 function drawCargo(p, vel, carrying, now) {
@@ -422,45 +367,18 @@ function drawCargo(p, vel, carrying, now) {
   const held = carrying.filter(Boolean);
   if (!held.length) return;
   // a tether: this is on the robot, not yet anyone's for good
-  g.beginPath();
-  g.moveTo(px(p[0]), px(p[1]));
-  g.lineTo(px(p[0] + b[0] * (ROBOT_R + step * (held.length - 0.2))), px(p[1] + b[1] * (ROBOT_R + step * (held.length - 0.2))));
-  g.strokeStyle = "rgba(255,182,72,.6)";
-  g.lineWidth = 2;
-  g.stroke();
+  const end = ROBOT_R + step * (held.length - 0.2);
+  drawTether(g, { x1: px(p[0]), y1: px(p[1]), x2: px(p[0] + b[0] * end), y2: px(p[1] + b[1] * end) });
   held.forEach((item, i) => {
     const d = ROBOT_R + step * (i + 0.8);
     const x = px(p[0] + b[0] * d), y = px(p[1] + b[1] * d);
-    g.beginPath();
-    g.arc(x, y, px(ARTIFACT_R) * 1.05, 0, Math.PI * 2);
-    g.fillStyle = "#211f33";
-    g.fill();
-    g.setLineDash([4, 3]);
-    g.strokeStyle = "#ffb648";
-    g.lineWidth = 2;
-    g.stroke();
-    g.setLineDash([]);
+    drawCargoSlot(g, { x, y, r: px(ARTIFACT_R) * 1.05 });
     drawItem(g, item, x, y, px(ARTIFACT_R) * 0.8, reducedMotion.matches ? 0 : now / 1000);
   });
 }
 // a robot: its slot's colour and mark, so no one depends on colour alone
-function drawRobot(p, slot, isMe) {
-  const [x, y] = [px(p[0]), px(p[1])];
-  g.beginPath();
-  g.arc(x, y, px(ROBOT_R), 0, Math.PI * 2);
-  g.fillStyle = SLOT_COLOURS[slot];
-  g.fill();
-  g.lineWidth = isMe ? 4 : 1.5;
-  g.strokeStyle = isMe ? "#ffffff" : "rgba(0,0,0,.5)";
-  g.stroke();
-  g.fillStyle = "rgba(0,0,0,.65)";
-  const m = px(ROBOT_R) * 0.42;
-  g.beginPath();
-  if (slot === 0) g.arc(x, y, m, 0, Math.PI * 2);
-  else if (slot === 1) g.rect(x - m, y - m, m * 2, m * 2);
-  else if (slot === 2) { g.moveTo(x, y - m * 1.2); g.lineTo(x + m * 1.1, y + m); g.lineTo(x - m * 1.1, y + m); g.closePath(); }
-  else { g.moveTo(x, y - m * 1.3); g.lineTo(x + m * 1.3, y); g.lineTo(x, y + m * 1.3); g.lineTo(x - m * 1.3, y); g.closePath(); }
-  g.fill();
+function drawRobot(p, slot, isMe, vel, now) {
+  paintRobot(g, { x: px(p[0]), y: px(p[1]), r: px(ROBOT_R), slot, colour: SLOT_COLOURS[slot], isMe, vel, now, reduced: reducedMotion.matches });
 }
 function drawAim(p, snap) {
   // the band: from the robot, back the way you pulled
