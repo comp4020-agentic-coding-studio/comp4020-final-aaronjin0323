@@ -201,3 +201,15 @@ test("an owner's save reaches everyone in the room", async () => {
   await sg.until((e) => e.rev === mine.rev + 1, 1000);
   sg.close();
 });
+
+test("the list of rooms says how many are playing, and how many are in each room", async () => {
+  const a = visitor();
+  const s = await a.stream();
+  const e = await s.until((x) => x.you);
+  const j = await (await a.req("/rooms")).json();
+  // the same count the arena's own stream shows: robots whose players are there
+  expect(j.playing).toBe(e.robots.filter((r: any) => !r.away).length);
+  expect(j.entries.every((e: any) => Number.isInteger(e.here) && e.here >= 0)).toBe(true);
+  expect(JSON.stringify(j)).not.toMatch(/"pid"/);
+  s.close();
+});

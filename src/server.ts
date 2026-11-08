@@ -182,7 +182,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     }
     if (path === "/rooms") {
       const r = store.rooms(new URL(req.url ?? "/", "http://x").searchParams.get("before"));
-      return r.ok ? json(res, 200, { entries: r.entries, next: r.next }) : refuse(res, r);
+      if (!r.ok) return refuse(res, r);
+      // the live counts that give a reason to go (ADR 37): how many, never who
+      const playing = arena.view(Date.now()).filter((b: { away?: boolean }) => !b.away).length;
+      return json(res, 200, { entries: r.entries.map((e: { tag: string }) => ({ ...e, here: presence.walkers(e.tag).length })), next: r.next, playing });
     }
     const live = /^\/rooms\/([0-9a-f]{8})\/live$/.exec(path);
     if (live) {
