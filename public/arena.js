@@ -82,7 +82,7 @@ export function rollMaterial(players, r1, r2, spawn = SPAWN) {
   return names[Math.min(names.length - 1, Math.floor(r2 * names.length))];
 }
 export const VAULT = [ARENA.w / 2, ARENA.h / 2];
-export const VAULT_R = 1.3;
+export const VAULT_R = 1.1;
 const dist = (a, b) => Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
 /** A robot at `pos` is in the vault. */
 export const inVault = (pos) => dist(pos, VAULT) < VAULT_R;
