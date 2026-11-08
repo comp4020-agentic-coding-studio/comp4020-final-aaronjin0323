@@ -16,20 +16,27 @@ mythic artifact read like a common one.
 ## Decision
 
 - **The header holds two buttons, and each carries its reason.**
-  - In your own room: **Play**, to the arena, with how many are playing now;
+  - In your own room: **← Arena**, to the arena, with how many are playing now;
     and **Visit rooms**, to the list of rooms, with how many people are in
     rooms now.
   - In anyone else's room: **Your room**, back to the one you decorate, in
     your colour and with a count when something new is waiting to go on
-    show; and **Play**. The list of rooms stays below the room.
+    show; and **← Arena**. The list of rooms stays below the room.
 - **Each room in the list says how many are in it now.** Who's there is a
   reason to visit (ADR 36).
 - **The live counts come with the list,** in `GET /rooms`: `playing`, the
   robots in the arena, and each entry's `here`. Counts only: never who.
 - **A collection shows rarity at a glance.** Cards are sorted rarest first,
   and each card is drawn in its material: tin plain, glass cool, gold warm,
-  starlight a night sky, with its rarity as a label. Rarity was already a
-  halo on the floor; now the card says it too.
+  starlight a night sky. No word on the card says the tier: the card's
+  look is the label, as the halo is on the floor.
+
+## Amended the same day
+
+Playing it, the student found "Play" didn't read as the way back to the
+arena, and the rarity words on each card were noise once the cards looked
+different. So the arena button reads **← Arena** (its count stays), and the
+cards carry no tier word.
 
 ## Consequences
 

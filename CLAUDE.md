@@ -132,10 +132,11 @@ ADR 28 says which still stand.
   room, one per visitor; the server checks a walk's shape and that you're in
   that room, nothing more. An owner's save reaches everyone in the room.
 - **Every way out of a room says why** ([ADR 37](docs/adr/0037-every-way-out-says-why.md)):
-  in your own room, Play (how many are playing) and Visit rooms (how many are
+  in your own room, ← Arena (how many are playing) and Visit rooms (how many are
   in rooms); in anyone else's, Your room (in your colour, with anything new)
-  and Play. The list of rooms says how many are in each now. A collection
-  shows rarity at a glance: rarest first, each card in its material.
+  and ← Arena. The list of rooms says how many are in each now. A collection
+  shows rarity at a glance: rarest first, each card in its material, with
+  no tier word on it.
 - **Arranging works like a decorating game** ([ADR 34](docs/adr/0034-room-editor-like-a-decorating-game.md)):
   three tabs over picture tiles ([ADR 35](docs/adr/0035-say-less-show-the-next-thing.md));
   a tile places its item, selected; Turn, Colour and Remove appear on the room
