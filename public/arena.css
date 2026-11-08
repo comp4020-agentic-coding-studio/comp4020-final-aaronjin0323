@@ -4,6 +4,8 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; overflow-x: hidden; }
 body { background: #14131f; min-height: 100svh; }
+/* your robot's colour, faintly, behind everything: who you are at a glance */
+:root[data-slot] body { background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--you) 22%, #14131f), color-mix(in srgb, var(--you) 9%, #14131f) 70%); background-attachment: fixed; }
 :focus-visible { outline: 3px solid #7fb2ff; outline-offset: 2px; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .wrap { width: min(100%, calc((100svh - 24px) * 1.6), 1320px); min-width: min(100%, 320px); margin: 0 auto; padding: var(--gap); }
@@ -32,6 +34,7 @@ body { background: #14131f; min-height: 100svh; }
 @media (pointer: coarse) {
   /* the rest of the screen is for your thumb, so it never hides the action */
   .pad { display: grid; place-items: center; color: #77738f; font-size: 1rem; height: calc(100svh - (100vw - 24px) * 10 / 16 - 36px); min-height: 96px; margin-top: 12px; border-radius: 8px; border: 2px solid #2d2a45; background: #1c1a2c; touch-action: none; user-select: none; -webkit-user-select: none; }
+  :root[data-slot] .pad { border-color: color-mix(in srgb, var(--you) 40%, #2d2a45); background: color-mix(in srgb, var(--you) 12%, #1c1a2c); color: color-mix(in srgb, var(--you) 55%, #77738f); }
 }
 /* upright on a phone: the way out sits in the thumb's area, off the arena */
 @media (pointer: coarse) and (orientation: portrait) {

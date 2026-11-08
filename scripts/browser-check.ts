@@ -14,6 +14,8 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { refuseProduction } from "../spec/not-production.ts";
 // @ts-ignore -- plain JS module shared with the page
 import * as A from "../public/arena.js";
+// @ts-ignore -- plain JS module shared with the page
+import { SLOT_COLOURS } from "../public/arena-ui.js";
 
 const APP = process.env.APP_URL ?? "http://localhost:8080";
 refuseProduction(APP);
@@ -451,6 +453,11 @@ async function together(browser: Browser) {
   check(all.every((s) => s.robots.length === 4), "four pages, four robots on every screen");
   check(new Set(all.map((s) => s.you)).size === 4, "each its own player");
   check(new Set(all.map((s) => s.robots.map((r: any) => r.slot).sort().join())).size === 1, "each in its own slot");
+  // each page is washed in its own robot's colour, so a player back from their room knows which is theirs
+  const tints = await Promise.all(pages.map((p) => p.evaluate(() => ({ slot: document.documentElement.dataset.slot, you: getComputedStyle(document.documentElement).getPropertyValue("--you").trim(), bg: getComputedStyle(document.body).backgroundImage }))));
+  const slots = all.map((s) => String(me(s).slot));
+  check(tints.every((t, i) => t.slot === slots[i] && t.you.toLowerCase() === SLOT_COLOURS[Number(slots[i])]), "each page is tinted with its own robot's colour", tints.map((t) => t.you).join(" "));
+  check(new Set(tints.map((t) => t.you)).size === 4 && tints.every((t) => t.bg.includes("gradient")), "four players, four different tints");
   const floor = (s: any) => s.artifacts.map((f: any) => `${f.id}:${f.pos}`).sort().join();
   check(new Set(all.map(floor)).size === 1, "and every screen shows the same floor");
   // the same robot, in motion, on four screens at one moment

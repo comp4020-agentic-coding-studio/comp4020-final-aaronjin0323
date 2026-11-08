@@ -91,6 +91,7 @@ function connect() {
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
     renderHud(server?.carrying ?? [], d.mine);
+    tintYou(server);
     place = d.mine.place;
     showStatus();
   });
@@ -104,6 +105,22 @@ function connect() {
 // ---- what you hold, and the one thing to do next
 let launched = localStorage.getItem("arena-launched") === "yes";
 let held = { carrying: 0, total: 0, onShow: 0 };
+// the page takes a faint wash of your robot's colour, so coming back from your
+// room you see at once which robot is yours, even when your slot has changed
+let tinted = null;
+function tintYou(r) {
+  const slot = r ? r.slot : null;
+  if (slot === tinted) return;
+  tinted = slot;
+  const root = document.documentElement;
+  if (slot === null) {
+    root.style.removeProperty("--you");
+    delete root.dataset.slot;
+  } else {
+    root.style.setProperty("--you", SLOT_COLOURS[slot]);
+    root.dataset.slot = String(slot);
+  }
+}
 function renderHud(carrying, m) {
   held = { carrying: carrying.length, total: m.total, onShow: m.onShow };
   const count = $("[data-banked]");

@@ -39,7 +39,9 @@ ADR 28 says which still stand.
 - **Movement is the only voice.** No names, chat, emotes, or words about
   other players. Your aim is private until you let go.
 - **A robot's slot (0 to 3) is its identity on screen:** a colour and a
-  mark, the lowest free slot, for as long as the robot lasts.
+  mark, the lowest free slot, for as long as the robot lasts. Your page is
+  washed faintly in your slot's colour, so coming back from your room you
+  see which robot is yours even if your slot changed.
 
 ### One rule
 
