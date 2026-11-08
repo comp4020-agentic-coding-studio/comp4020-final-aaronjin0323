@@ -21,7 +21,9 @@ the vault while everyone else tries to hit you.
 **Good, here:** the fun is what strangers do to each other in the moment.
 Every launch answers at once, and a hit always means something. Being
 loaded is a choice you feel. Nothing needs reading first, and nobody says
-a word: chasing, circling and backing off are the conversation. These are
+a word: chasing, circling and backing off are the conversation. The whole
+site is one dim, warm gallery ([ADR 38](docs/adr/0038-one-look-the-gallery.md)):
+the arena is its floor seen from above, the rooms are its rooms. These are
 starting decisions: change them when evidence warrants it, with the reason
 recorded here and in an ADR.
 
