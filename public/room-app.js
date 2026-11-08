@@ -2,7 +2,7 @@
 // show; its owner, and only its owner, can arrange it. The server is what
 // enforces that: POST /room names no room. Everything here shows or edits a
 // draft; a layout counts once the server has saved it.
-import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_MAX_ITEMS, WALK_START, WALLS, walkerColour, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
+import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_DOOR, ROOM_MAX_ITEMS, WALK_START, WALLS, inRoomDoor, walkerColour, baseOf, bounds, canTurn, dropSpot, freeNear, freeSpot, hitItem, hitShown, iso, nextUid, project, reachable, restOn, route, snapSpot, stepWalker, unproject } from "./room.js";
 import { CATALOG, MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
 import { catalogCell, itemName, waitingCount } from "./arena-ui.js";
@@ -648,6 +648,8 @@ canvas.addEventListener("click", (e) => {
   if (shownHit) return walkTo(shownHit, shownHit);
   const hit = hitItem(draft.items, X, Y);
   if (hit && ITEMS[hit.type].place === "floor" && (artifactsNow()[hit.artifact ?? ""] || ITEMS[hit.type].seat)) return walkTo(hit, hit);
+  const d = iso(ROOM_DOOR.x, ROOM_DOOR.y);
+  if (Math.hypot(d.X - X, d.Y - Y) < 0.05) return walkTo(ROOM_DOOR); // the door back to the arena
   const [x, y] = unproject(X, Y, "floor");
   const b = iso(x, y);
   if (Math.hypot(b.X - X, b.Y - Y) < 0.02) walkTo({ x, y }); // on the floor, not a wall
@@ -697,6 +699,19 @@ function walk(dt) {
     walker.y = n.y;
     walker.face = dir;
   }
+  // walking into the door takes you back to the arena (ADR 39); arriving in
+  // or beside it never does, only stepping into it
+  const inDoor = inRoomDoor(walker);
+  if (inDoor && wasOutside && walker.moving) throughDoor();
+  wasOutside = !inDoor;
+}
+let wasOutside = false; // set once the walker is placed
+let leaving = false;
+function throughDoor() {
+  if (leaving) return;
+  leaving = true;
+  document.documentElement.dataset.leaving = "";
+  setTimeout(() => location.assign("/"), reduced.matches ? 0 : 380);
 }
 function showPrompt() {
   const was = near?.uid;
@@ -730,7 +745,7 @@ function frame(ms) {
     easeOthers(dt);
     if (!reduced.matches && near) stir += dt;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRoom(g, w, h, dpr, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 1000, stir, selected, editing, walker: editing ? null : { ...walker, colour: myTag ? walkerColour(myTag) : undefined }, others: [...others.values()], near: near?.uid ?? null });
+    drawRoom(g, w, h, dpr, draft, artifactsNow(), { t: reduced.matches ? 0 : ms / 1000, stir, selected, editing, door: !editing, walker: editing ? null : { ...walker, colour: myTag ? walkerColour(myTag) : undefined }, others: [...others.values()], near: near?.uid ?? null });
   }
   requestAnimationFrame(frame);
 }
@@ -804,6 +819,7 @@ canvas.probe = () => {
     dirty,
     walker: walker && { x: walker.x, y: walker.y, sitting: walker.sitting, moving: walker.moving, cx: r.left + iso(walker.x, walker.y).X * r.width, cy: r.top + iso(walker.x, walker.y).Y * r.height },
     near: near?.uid ?? null,
+    door: { cx: r.left + iso(ROOM_DOOR.x, ROOM_DOOR.y).X * r.width, cy: r.top + iso(ROOM_DOOR.x, ROOM_DOOR.y).Y * r.height },
     me: myTag,
     myColour: myTag ? walkerColour(myTag) : null,
     others: [...others.values()].map((o) => ({ tag: o.tag, x: o.tx, y: o.ty, moving: o.moving, sitting: o.sitting, colour: o.colour })),

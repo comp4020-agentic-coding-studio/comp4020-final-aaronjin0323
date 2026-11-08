@@ -685,7 +685,49 @@ async function budget(browser: Browser) {
   }
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, visitors, budget };
+/** The door between the arena and your room (ADR 39), both ways, by moving. */
+async function door(browser: Browser) {
+  const a = await visitor(browser);
+  await a.waitForTimeout(300);
+  const s = await probe(a);
+  check(s.door.open, "the door is open to a robot carrying nothing");
+  // the weakest launch whose path stops in the door, from where the robot stands
+  const from = me(s).pos, target = [A.EXIT.x, A.EXIT.depth / 2];
+  const dir = [target[0] - from[0], target[1] - from[1]];
+  let power = 0;
+  for (let p = 0.1; p <= 1 && !power; p += 0.01) {
+    const pts = A.path(A.standing(from, 0), { dir, power: p, seq: 1 }, 0);
+    if (A.inExit(pts[pts.length - 1])) power = p + 0.02;
+  }
+  check(power > 0, "a launch from the start can stop in the door", power.toFixed(2));
+  const box = (await a.locator("[data-arena]").boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2, len = Math.hypot(dir[0], dir[1]);
+  const pull = power * A.PULL_MAX * s.metre;
+  await a.mouse.move(cx, cy);
+  await a.mouse.down();
+  await a.mouse.move(cx - (dir[0] / len) * pull, cy - (dir[1] / len) * pull, { steps: 4 });
+  await a.waitForTimeout(80);
+  check((await probe(a)).door.aimed, "aiming to stop in it lights the door");
+  await a.screenshot({ path: ".shots/door-aim-1440.png" });
+  await a.mouse.up();
+  const went = await a.waitForURL(/\/room\/$/, { timeout: 8000 }).then(() => true, () => false);
+  check(went, "coming to rest in the door goes to your room");
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().walker, null, { timeout: 5000 });
+  await a.waitForTimeout(1500);
+  check(new URL(a.url()).pathname === "/room/", "arriving at the room's door doesn't send you back");
+  await a.screenshot({ path: ".shots/door-room-1440.png" });
+  const d = (await roomProbe(a)).door;
+  await a.mouse.click(d.cx, d.cy);
+  const back = await a.waitForURL((u) => new URL(u).pathname === "/", { timeout: 8000 }).then(() => true, () => false);
+  check(back, "walking into the room's door goes back to the arena");
+  await a.waitForFunction(() => (document.querySelector("[data-arena]") as any).probe?.().you, null, { timeout: 5000 });
+  await a.waitForTimeout(2000);
+  const again = await probe(a);
+  check(new URL(a.url()).pathname === "/" && A.inExit(me(again).pos), "back within the grace, standing in the door, you stay in the arena");
+  await a.close();
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, visitors, door, budget };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

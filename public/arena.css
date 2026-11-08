@@ -48,3 +48,6 @@ body { background: var(--bg); min-height: 100svh; }
   .wrap { padding: 4px 8px; width: calc((100svh - 8px) * 1.6); }
   .pad { display: none; }
 }
+/* through the door to your room (ADR 39): the arena fades as you go */
+:root[data-leaving] .wrap { opacity: 0; transform: translateY(-12px); transition: opacity .35s ease, transform .35s ease; }
+@media (prefers-reduced-motion: reduce) { :root[data-leaving] .wrap { transform: none; transition: none; } }

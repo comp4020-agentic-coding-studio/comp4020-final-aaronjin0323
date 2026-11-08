@@ -3,10 +3,11 @@
 // server's snapshot advanced on the shared clock by arena.js; the page only
 // predicts your own launch until the server's answer arrives. What's carried
 // and banked comes only from the server's stream.
-import { ARENA, ARTIFACT_R, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, launch, loadCap, path } from "./arena.js";
+import { ARENA, ARTIFACT_R, EXIT, MAX_PLAYERS, ROBOT_R, STEP_MS, VAULT, VAULT_R, advance, inExit, launch, loadCap, path } from "./arena.js";
 import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay, connection, connectionMessage, deliveryWords, dropWords, flying, guide, keyAim, launchOfKeyAim, placeWords, readiness, retryDelay, roomCalls, silent, trust } from "./arena-ui.js";
 import { drawAura, drawItem } from "./arena-draw.js";
 import { drawFloor } from "./look-floor.js";
+import { drawDoor } from "./look-door.js";
 import { drawBurst, drawVault as paintVault } from "./look-vault.js";
 import { drawRobot as paintRobot, drawTrail as paintTrail } from "./look-robot.js";
 import { drawCargoSlot, drawFlash, drawSettling, drawTether } from "./look-effects.js";
@@ -24,6 +25,15 @@ let artifacts = []; // on the floor: { id, kind, pos, readyAt }
 let mine = null; // your own predicted snapshot, until the server's catches up
 let seq = 0;
 let aim = null; // { dir, power } while aiming
+let doorAimed = false; // the aim's path stops in the door (ADR 39)
+let leaving = false;
+/** You came to rest in the door: through it to your room, the arena fading. */
+function throughDoor() {
+  if (leaving) return;
+  leaving = true;
+  document.documentElement.dataset.leaving = "";
+  setTimeout(() => location.assign("/room/"), reducedMotion.matches ? 0 : 380);
+}
 let keyAiming = null; // { angle, power } while aiming by keys
 let lastKeyAim = KEY_AIM_START; // keys start from the last shot, so Enter again repeats it
 let pull = null; // { from, to } in metres, while dragging
@@ -88,6 +98,7 @@ function connect() {
       bursts.push(b);
       if (b.tag === you.tag) toast("kept", deliveryWords(b.items));
     }
+    if ((d.exits ?? []).includes(you.tag)) throughDoor();
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
     renderHud(server?.carrying ?? [], d.mine);
@@ -239,10 +250,12 @@ function toArena(e) {
 
 function draw() {
   resize();
+  if (!aim) doorAimed = false;
   const now = serverNow();
   g.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   drawFloor(g, { w: px(ARENA.w), h: px(ARENA.h), m: view.scale, now, reduced: reducedMotion.matches });
   drawVault(now);
+  drawDoor(g, { x: px(EXIT.x), half: px(EXIT.half), depth: px(EXIT.depth), m: view.scale, open: !!myRobot() && myLoad() === 0, aimed: doorAimed, now, reduced: reducedMotion.matches });
   drawBursts(now);
   for (const a of artifacts) drawArtifact(a, now);
   drawFlashes(now);
@@ -409,6 +422,7 @@ function drawAim(p, snap) {
   }
   // the path it will take from here, at this speed and load
   const pts = path({ pos: p, vel: snap.vel, t: 0, seq: 0 }, { dir: aim.dir, power: aim.power, seq: 0 }, myLoad());
+  doorAimed = myLoad() === 0 && inExit(pts[pts.length - 1]); // the door lights: you'd go through
   pts.forEach((q, i) => {
     if (i % 2) return;
     g.beginPath();
@@ -441,6 +455,7 @@ function showAim() {
   else delete canvas.dataset.aiming;
 }
 function cancelAim() {
+  doorAimed = false;
   aim = null;
   pull = null;
   keyAiming = null;
@@ -534,6 +549,7 @@ canvas.probe = () => {
     mark: nextThing()?.mark ?? null,
     held,
     players: MAX_PLAYERS,
+    door: { ...at([EXIT.x, EXIT.depth / 2]), aimed: doorAimed, open: !!myRobot() && myLoad() === 0 },
   };
 };
 

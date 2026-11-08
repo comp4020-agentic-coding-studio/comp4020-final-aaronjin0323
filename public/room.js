@@ -257,6 +257,10 @@ export const nextUid = (items) => items.reduce((m, i) => Math.max(m, i.uid), 0) 
 export const WALK_SPEED = 0.32; // of the room's side, per second
 export const WALK_R = 0.035;
 export const WALK_START = { x: 0.9, y: 0.9 };
+/** The room's door (ADR 39): its front corner, beside where everyone
+ * arrives. Walking into it takes you back to the arena. */
+export const ROOM_DOOR = { x: 0.955, y: 0.955 };
+export const inRoomDoor = (p) => p.x > 0.93 && p.y > 0.93;
 /** Each visitor's colour in a room, from their tag: the same in every room. */
 export const WALKER_COLOURS = ["#f4a39a", "#8fd3c8", "#f3d68a", "#c3a8f0", "#9cc5f0", "#f0b3d1"];
 export const walkerColour = (tag = "") => WALKER_COLOURS[(parseInt(String(tag).slice(0, 6), 16) || 0) % WALKER_COLOURS.length];

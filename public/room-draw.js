@@ -600,8 +600,38 @@ export function finishThumb(place, kind, colour, size = 72) {
 }
 
 /** Draws a whole room at w by h pixels, `t` in seconds. */
-export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, selected = null, editing = false, walker = null, others = [], near = null } = {}) {
+/** The door back to the arena (ADR 39), at the floor's front corner: the
+ * arena's lamplight falling in across the boards, and a lit sill. */
+function doorway(g, w, h, t) {
+  const P = (x, y, up = 0) => { const p = iso(x, y, up); return [p.X * w, p.Y * h]; };
+  const breath = 0.5 + 0.5 * Math.sin(t * 2 * Math.PI / 3.2);
+  g.save();
+  g.beginPath();
+  for (const [x, y] of [[0.84, 1], [0.84, 0.84], [1, 0.84], [1, 1]]) g.lineTo(...P(x, y));
+  g.closePath();
+  g.clip();
+  const [cx, cy] = P(1, 1);
+  const glow = g.createRadialGradient(cx, cy, 0, cx, cy, w * 0.12);
+  glow.addColorStop(0, `rgba(255,222,170,${0.42 + 0.12 * breath})`);
+  glow.addColorStop(1, "rgba(255,222,170,0)");
+  g.fillStyle = glow;
+  g.fillRect(cx - w * 0.13, cy - w * 0.13, w * 0.26, w * 0.26);
+  g.restore();
+  // the sill: a lit edge along the corner, where the floor opens
+  g.beginPath();
+  g.moveTo(...P(0.84, 1));
+  g.lineTo(...P(1, 1));
+  g.lineTo(...P(1, 0.84));
+  g.strokeStyle = `rgba(243,223,162,${0.6 + 0.25 * breath})`;
+  g.lineWidth = Math.max(2, w * 0.003);
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  g.stroke();
+}
+
+export function drawRoom(g, w, h, dpr, layout, artifacts, { t = 0, stir = 0, selected = null, editing = false, walker = null, others = [], near = null, door = false } = {}) {
   g.drawImage(shell(w, h, dpr, layout), 0, 0, w, h);
+  if (door) doorway(g, w, h, t);
   const look = LIGHT[layout.light] ?? LIGHT.warm;
   const items = order(layout.items);
   // rugs first, then pools of light on top of them, then everything upright

@@ -177,3 +177,7 @@ body[data-editing] .below { display: none; }
   .tools .colours { display: flex; flex-wrap: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .tools .colours button { flex: none; width: 34px; min-height: 34px; }
 }
+
+/* through the door back to the arena (ADR 39): the room fades as you go */
+:root[data-leaving] body { opacity: 0; transition: opacity .35s ease; }
+@media (prefers-reduced-motion: reduce) { :root[data-leaving] body { transition: none; } }
