@@ -255,7 +255,7 @@ store with a test clock), `spec/room.test.ts`, `spec/store.test.ts` and `spec/ht
 
 Accounts, names, chat, emotes, avatars, uploaded assets, runtime AI models,
 a physics library, more arenas, bots, leaderboards of people, free text
-in rooms, a 3D renderer, shared presence in rooms, rounds,
+in rooms, a 3D renderer, rounds,
 countdowns, upgrades, elimination, rate limiting.
 
 ## The live arena is not a test fixture
