@@ -77,10 +77,6 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
 .onshow button[data-material="gold"] { border-color: rgba(232,201,122,.75); background: linear-gradient(160deg, rgba(243,223,162,.22), var(--panel) 72%); }
 .onshow button[data-material="starlight"] { border-color: #c3a8f0; color: #f6f1ff; box-shadow: 0 0 18px rgba(195,168,240,.28);
   background: radial-gradient(1.2px 1.2px at 18% 28%, #fff, transparent), radial-gradient(1px 1px at 72% 18%, #fff, transparent), radial-gradient(1px 1px at 84% 62%, #fff, transparent), radial-gradient(1.4px 1.4px at 34% 78%, #fff, transparent), radial-gradient(1px 1px at 58% 44%, #e9e4ff, transparent), linear-gradient(160deg, #31275e, #19152e 75%); }
-.tier-chip { align-self: flex-start; font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: var(--soft); }
-[data-material="glass"] .tier-chip { color: #8fd3c8; }
-[data-material="gold"] .tier-chip { color: #e8c97a; }
-[data-material="starlight"] .tier-chip { color: #d9c8ff; }
 @media (prefers-reduced-motion: reduce) { .onshow button, .onshow button:hover { transition: none; transform: none; } }
 
 /* the header: two ways out, each with its reason (ADR 37) */
@@ -92,7 +88,6 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
 .way .why:empty { display: none; }
 .way .dot { grid-row: 1 / span 2; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
 .way.play { border-color: rgba(216,184,120,.55); }
-.way.play .label::before { content: "▶"; font-size: .7em; margin-right: 6px; color: var(--accent); }
 [data-way-rooms] .label::before { content: "⌂"; margin-right: 6px; color: var(--accent); }
 .here { margin-top: 2px; font-size: .78rem; color: #8fd3c8; }
 .here::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #8fd3c8; box-shadow: 0 0 6px #8fd3c8; vertical-align: 1px; }

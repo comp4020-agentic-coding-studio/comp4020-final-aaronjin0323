@@ -188,10 +188,7 @@ function renderOnShow() {
       const tier = MATERIALS[a.material].rarity;
       b.dataset.material = a.material;
       b.dataset.rarity = tier;
-      const chip = document.createElement("span");
-      chip.className = "tier-chip";
-      chip.textContent = tier === "mythic" ? "✦ Mythic" : tier === "rare" ? "Rare" : "Common";
-      b.append(chip, itemIcon(a, 72), itemName(a.kind, a.material));
+      b.append(itemIcon(a, 72), itemName(a.kind, a.material));
       b.addEventListener("click", () => closer(a));
       li.append(b);
       return li;
@@ -264,7 +261,7 @@ async function refreshCounts() {
   if (j) showCounts(j);
 }
 setInterval(() => document.visibilityState === "visible" && refreshCounts(), 15000);
-/** In your own room: Play and Visit rooms. In anyone else's: Your room and Play. */
+/** In your own room: ← Arena and Visit rooms. In anyone else's: Your room and ← Arena. */
 async function showWays() {
   $("[data-way-rooms]").hidden = !mine;
   $("[data-way-home]").hidden = mine;
