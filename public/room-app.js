@@ -91,6 +91,7 @@ function show(j) {
   renderOnShow();
   renderPanel();
   if (mine) loadCatalog();
+  showWays();
   joinLive(j.tag);
 }
 
@@ -174,7 +175,8 @@ function showOwner() {
 // ---- what's on show, or all you've collected: buttons, so nothing depends on the canvas
 function renderOnShow() {
   const all = artifactsNow();
-  const list = mine ? shelf : draft.items.filter((i) => all[i.artifact ?? ""]).map((i) => all[i.artifact]);
+  const RANK = { mythic: 0, rare: 1, common: 2 };
+  const list = (mine ? [...shelf] : draft.items.filter((i) => all[i.artifact ?? ""]).map((i) => all[i.artifact])).sort((a, b) => RANK[MATERIALS[a.material].rarity] - RANK[MATERIALS[b.material].rarity]);
   $("[data-nothing]").hidden = mine || list.length > 0;
   $("#onshow-h").textContent = mine ? "Your collection" : "On show";
   $("#onshow-h").hidden = mine && !list.length;
@@ -183,10 +185,13 @@ function renderOnShow() {
       const li = document.createElement("li");
       const b = document.createElement("button");
       b.type = "button";
-      const sub = document.createElement("span");
-      sub.className = "sub";
-      sub.textContent = MATERIALS[a.material].rarity;
-      b.append(itemIcon(a, 72), itemName(a.kind, a.material), sub);
+      const tier = MATERIALS[a.material].rarity;
+      b.dataset.material = a.material;
+      b.dataset.rarity = tier;
+      const chip = document.createElement("span");
+      chip.className = "tier-chip";
+      chip.textContent = tier === "mythic" ? "✦ Mythic" : tier === "rare" ? "Rare" : "Common";
+      b.append(chip, itemIcon(a, 72), itemName(a.kind, a.material));
       b.addEventListener("click", () => closer(a));
       li.append(b);
       return li;
@@ -224,15 +229,53 @@ async function loadRooms(more = false) {
     const sub = document.createElement("span");
     sub.className = "sub";
     sub.textContent = `${e.onShow} on show · ${WALLS[e.wall]?.name ?? ""}`;
-    a.append(e.name, sub);
+    const here = document.createElement("span");
+    here.className = "here";
+    here.dataset.here = e.tag;
+    showHere(here, e.here);
+    a.append(e.name, sub, here);
     li.append(a);
     return li;
   });
+  showCounts(j);
   if (more) $("[data-rooms]").append(...lis);
   else $("[data-rooms]").replaceChildren(...lis);
   if (!more && !lis.length) $("[data-rooms]").replaceChildren(Object.assign(document.createElement("li"), { className: "muted", textContent: "No rooms have anything on show yet." }));
 }
 $("[data-rooms-more]").addEventListener("click", () => loadRooms(true));
+
+// ---- the header (ADR 37): two ways out, each saying why
+function showHere(el, n) {
+  el.textContent = n ? `${n} here now` : "";
+  el.hidden = !n;
+}
+function showCounts(j) {
+  const playing = j.playing ?? 0;
+  $("[data-playing]").textContent = playing ? `${playing} playing` : "win artifacts";
+  const inRooms = j.entries.reduce((n, e) => n + (e.here ?? 0), 0);
+  $("[data-visiting]").textContent = inRooms ? `${inRooms} inside` : "";
+  for (const e of j.entries) {
+    const el = document.querySelector(`[data-here="${e.tag}"]`);
+    if (el) showHere(el, e.here);
+  }
+}
+async function refreshCounts() {
+  const j = await fetch("/rooms").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (j) showCounts(j);
+}
+setInterval(() => document.visibilityState === "visible" && refreshCounts(), 15000);
+/** In your own room: Play and Visit rooms. In anyone else's: Your room and Play. */
+async function showWays() {
+  $("[data-way-rooms]").hidden = !mine;
+  $("[data-way-home]").hidden = mine;
+  if (mine) return;
+  const me = await fetch("/rooms/me").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!me) return;
+  $("[data-my-dot]").style.background = walkerColour(me.tag);
+  const waiting = waitingCount(me.shelf ?? [], me.layout?.items ?? []);
+  $("[data-home-why]").textContent = waiting ? `${waiting} new` : "";
+  $("[data-way-home]").setAttribute("aria-label", `Your room${waiting ? `, ${waiting} new to put on show` : ""}`);
+}
 
 // ---- decorating: a draft, for the owner's eyes, until Done saves it
 function changed() {

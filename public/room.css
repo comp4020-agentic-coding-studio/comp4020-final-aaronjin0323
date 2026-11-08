@@ -13,7 +13,6 @@ a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; 
 .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 8px 32px; max-width: 1360px; margin: 0 auto; padding: 22px 28px 14px; }
 h1 { margin: 0; font-size: 1.75rem; font-weight: 400; letter-spacing: .01em; }
 nav { display: flex; gap: 20px; font-size: .92rem; }
-nav a { display: inline-flex; align-items: center; min-height: 32px; }
 .stage { display: flex; gap: 20px; max-width: 1360px; margin: 0 auto; padding: 0 28px; align-items: flex-start; }
 .gallery { position: relative; flex: 1; min-width: 0; }
 canvas[data-room] { display: block; width: min(100%, calc((100svh - 140px) * 12 / 7)); margin-inline: auto; aspect-ratio: 12 / 7; border-radius: 2px; touch-action: pan-y; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
@@ -64,16 +63,44 @@ select { width: 100%; margin-top: 4px; background: var(--bg); }
   .gallery { width: 100%; }
   .panel { width: 100%; max-height: none; border-inline: 0; }
   .top, .below { padding-inline: 14px; }
-  nav { gap: 14px; }
+  nav { gap: 8px; }
+  .way { padding: 5px 12px; }
   .closer[open] { flex-direction: column; }
   .closer canvas { width: 100%; max-height: 50svh; }
 }
 
-.onshow button { border: 1px solid #a58a3f; }
+/* a collection shows rarity at a glance (ADR 37): each card in its material */
+.onshow button { position: relative; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); padding-top: 12px; transition: border-color .2s, transform .2s; }
+.onshow button:hover { transform: translateY(-2px); }
+.onshow button[data-material="tin"] { border-color: #4a443a; }
+.onshow button[data-material="glass"] { border-color: rgba(143,211,200,.6); background: linear-gradient(160deg, rgba(143,211,200,.18), var(--panel) 72%); }
+.onshow button[data-material="gold"] { border-color: rgba(232,201,122,.75); background: linear-gradient(160deg, rgba(243,223,162,.22), var(--panel) 72%); }
+.onshow button[data-material="starlight"] { border-color: #c3a8f0; color: #f6f1ff; box-shadow: 0 0 18px rgba(195,168,240,.28);
+  background: radial-gradient(1.2px 1.2px at 18% 28%, #fff, transparent), radial-gradient(1px 1px at 72% 18%, #fff, transparent), radial-gradient(1px 1px at 84% 62%, #fff, transparent), radial-gradient(1.4px 1.4px at 34% 78%, #fff, transparent), radial-gradient(1px 1px at 58% 44%, #e9e4ff, transparent), linear-gradient(160deg, #31275e, #19152e 75%); }
+.tier-chip { align-self: flex-start; font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: var(--soft); }
+[data-material="glass"] .tier-chip { color: #8fd3c8; }
+[data-material="gold"] .tier-chip { color: #e8c97a; }
+[data-material="starlight"] .tier-chip { color: #d9c8ff; }
+@media (prefers-reduced-motion: reduce) { .onshow button, .onshow button:hover { transition: none; transform: none; } }
+
+/* the header: two ways out, each with its reason (ADR 37) */
+.ways { display: flex; gap: 10px; align-items: stretch; }
+.way { display: inline-grid; grid-template-columns: auto auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; min-height: 44px; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; background: rgba(31,27,21,.7); transition: border-color .2s, background .2s; }
+.way:hover, .way:focus-visible { border-color: var(--accent); background: rgba(216,184,120,.08); }
+.way .label { grid-column: 2; font-size: .95rem; line-height: 1.1; }
+.way .why { grid-column: 2; font-size: .72rem; color: var(--soft); line-height: 1.2; }
+.way .why:empty { display: none; }
+.way .dot { grid-row: 1 / span 2; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.way.play { border-color: rgba(216,184,120,.55); }
+.way.play .label::before { content: "▶"; font-size: .7em; margin-right: 6px; color: var(--accent); }
+[data-way-rooms] .label::before { content: "⌂"; margin-right: 6px; color: var(--accent); }
+.here { margin-top: 2px; font-size: .78rem; color: #8fd3c8; }
+.here::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #8fd3c8; box-shadow: 0 0 6px #8fd3c8; vertical-align: 1px; }
 
 /* a phone on its side: the room as tall as it can be, the header out of its way */
 @media (max-height: 500px) and (orientation: landscape) {
   .top { padding: 6px 14px; flex-wrap: nowrap; align-items: center; }
+  .way { display: inline-flex; gap: 6px; min-height: 32px; padding: 2px 12px; }
   h1 { font-size: 1.1rem; }
   canvas[data-room] { width: min(100%, calc((100svh - 64px) * 12 / 7)); }
   .below { margin-top: 12px; }

@@ -209,6 +209,8 @@ async function room(browser: Browser) {
   await a.goto(`${APP}/room/`);
   await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
   check((await roomProbe(a)).mine, "/room/ is your own room");
+  const cards = await a.locator("[data-onshow] button").evaluateAll((bs) => bs.map((b) => ({ rarity: (b as HTMLElement).dataset.rarity, chip: b.querySelector(".tier-chip")?.textContent ?? "" })));
+  check(cards.length > 0 && cards.every((c) => c.rarity && c.chip.toLowerCase().includes(c.rarity)), "each collection card shows its rarity", cards.map((c) => c.chip).join(", "));
   await a.screenshot({ path: ".shots/room-default-1440.png" });
   await a.click("[data-edit]");
   let s = await roomProbe(a);
@@ -569,8 +571,16 @@ async function visitors(browser: Browser) {
   await a.waitForTimeout(400);
   await a.screenshot({ path: ".shots/visitors-1440.png" });
   await b.screenshot({ path: ".shots/visitors-390.png" });
+  // the ways out say why, and your own room is one tap away (ADR 37)
+  check(await a.locator("[data-way-rooms]").isVisible() && await a.locator("[data-way-home]").isHidden(), "in your own room: Play and Visit rooms");
+  check(await b.locator("[data-way-home]").isVisible() && await b.locator("[data-way-rooms]").isHidden(), "in someone else's: Your room and Play");
+  const why = (await a.locator("[data-playing]").textContent())?.trim();
+  check(!!why, "Play says why", why);
+  await b.click("[data-way-home]");
+  await b.waitForURL(/\/room\/$/);
+  await b.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().mine === true, null, { timeout: 5000 }).then(() => check(true, "one tap on Your room takes the visitor home"), () => check(false, "one tap on Your room takes the visitor home"));
+  check(await sees(a, 0), "and the owner sees them leave");
   await b.close();
-  check(await sees(a, 0), "and sees them leave when they close the page");
   await a.close();
 }
 
