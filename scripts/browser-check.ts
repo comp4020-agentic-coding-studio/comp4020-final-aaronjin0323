@@ -667,14 +667,14 @@ function within(n: { words: number; controls: number }, words: number, controls:
 async function budget(browser: Browser) {
   for (const [opts, name] of [[DESKTOP, "desktop"], [PHONE, "phone"]] as [Opts, string][]) {
     const p = await visitor(browser, opts);
-    within(await inWindow(p), 12, 2, `${name}, a newcomer's arena`);
+    within(await inWindow(p), 12, 3, `${name}, a newcomer's arena`); // ADR 41: + the sound button
     check(await earn(p), `${name}: earned something`);
     await p.waitForTimeout(5300); // the delivery's message has gone
-    within(await inWindow(p), 12, 2, `${name}, the arena in play`);
+    within(await inWindow(p), 12, 3, `${name}, the arena in play`);
     await p.goto(`${APP}/room/`);
     await p.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
     await p.waitForTimeout(150);
-    within(await inWindow(p), 16, 4, `${name}, your room`);
+    within(await inWindow(p), 16, 5, `${name}, your room`); // ADR 41: + the sound button
     await p.click("[data-edit]");
     await p.waitForTimeout(100);
     within(await inWindow(p), 12, 6, `${name}, decorating with nothing selected`);
@@ -727,7 +727,44 @@ async function door(browser: Browser) {
   await a.close();
 }
 
-const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, visitors, door, budget };
+/** Music, not noise (ADR 41): nothing before a gesture, sounds follow what
+ * happens to you, and off is silence, remembered. */
+async function sound(browser: Browser) {
+  const a = await visitor(browser);
+  const heard = async () => (await probe(a)).sound;
+  check((await heard())?.started === false, "nothing plays before you touch the page");
+  await launch(a, [1, 0.3], 0.6);
+  await a.waitForTimeout(300);
+  let s = await heard();
+  check(s.started && s.music === "arena", "your first launch starts the arena's music", s.music);
+  check(s.played.includes("launch"), "and your launch has a sound", s.played.join(" "));
+  check(await earn(a), "a visitor earns an artifact");
+  await a.waitForTimeout(300);
+  s = await heard();
+  check(s.played.includes("pickup") && s.played.includes("deliver"), "picking up and delivering each have a sound", s.played.join(" "));
+  const button = a.locator("[data-sound]");
+  check(await button.isVisible() && (await button.getAttribute("aria-pressed")) === "true", "a sound button is in reach, and on");
+  await button.click();
+  const before = (await heard()).played.length;
+  await launch(a, [-1, 0.2], 0.6);
+  await a.waitForTimeout(300);
+  s = await heard();
+  check(!s.on && s.music === null && s.played.length === before, "off: no music and no sounds", `${s.played.length - before} played`);
+  await a.reload();
+  await a.waitForFunction(() => (document.querySelector("[data-arena]") as any).probe?.().you);
+  check((await a.locator("[data-sound]").getAttribute("aria-pressed")) === "false", "off is remembered");
+  await a.goto(`${APP}/room/`);
+  await a.waitForFunction(() => (document.querySelector("[data-room]") as any).probe?.().rev !== null);
+  const rb = a.locator("[data-sound]");
+  check(await rb.isVisible() && (await rb.getAttribute("aria-pressed")) === "false", "the room has the same button, still off");
+  await rb.click();
+  await a.waitForTimeout(300);
+  const rs = await a.evaluate(() => (document.querySelector("[data-room]") as any).probe().sound);
+  check(rs.on && rs.music === "room", "turned on in a room, the room's music plays", rs.music);
+  await a.close();
+}
+
+const SECTIONS: Record<string, (b: Browser) => Promise<void>> = { launching, brawl, line, reconnect, phone, room, journey, together, stall, phoneroom, visitors, door, sound, budget };
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 try {
   for (const [name, run] of Object.entries(SECTIONS)) {

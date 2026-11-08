@@ -207,6 +207,10 @@ ADR 28 says which still stand.
 - **At 390x844** the arena fills the width, a pull pad fills the rest, and
   nothing scrolls sideways; at 844x390 the arena fills the height.
 - **Every animation has a `prefers-reduced-motion` path.**
+- **Music, not noise** ([ADR 41](docs/adr/0041-music-not-noise.md)): soft
+  synthesised voices in one key (D major pentatonic), quiet generative music,
+  and sounds only for what you do and what happens to you. Nothing before a
+  gesture; one sound button always in reach; off is remembered.
 
 ## The contract
 
