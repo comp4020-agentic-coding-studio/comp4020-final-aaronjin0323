@@ -21,31 +21,41 @@ export function drawItem(g, { kind, material = "tin", seed = 0 }, x, y, r, t = 0
   g.restore();
 }
 
-/** What marks rarity on the floor: a halo for rare, turning rays for mythic. */
+/** What marks rarity: a soft lantern halo for rare, and for mythic a second,
+ * wider halo breathing slowly with a ring of tiny motes. Pastel, never harsh. */
+const AURA = { glass: "143,211,200", gold: "243,223,162", starlight: "195,168,240" };
 export function drawAura(g, material, x, y, r, t = 0) {
   const tier = MATERIALS[material]?.rarity;
-  if (tier === "common" || !tier) return;
-  const look = LOOK[material];
+  const rgb = AURA[material];
+  if (tier === "common" || !tier || !rgb) return;
   g.save();
   g.translate(x, y);
-  const halo = g.createRadialGradient(0, 0, r * 0.4, 0, 0, r * 2.1);
-  halo.addColorStop(0, `${look.glow}66`);
-  halo.addColorStop(1, `${look.glow}00`);
+  const halo = g.createRadialGradient(0, 0, r * 0.3, 0, 0, r * 2);
+  halo.addColorStop(0, `rgba(${rgb},.38)`);
+  halo.addColorStop(0.55, `rgba(${rgb},.14)`);
+  halo.addColorStop(1, `rgba(${rgb},0)`);
   g.fillStyle = halo;
   g.beginPath();
-  g.arc(0, 0, r * 2.1, 0, Math.PI * 2);
+  g.arc(0, 0, r * 2, 0, Math.PI * 2);
   g.fill();
   if (tier === "mythic") {
-    g.rotate(t * 0.8);
-    g.strokeStyle = `${look.glow}bb`;
-    g.lineWidth = Math.max(1.5, r * 0.08);
-    g.lineCap = "round";
-    for (let i = 0; i < 8; i++) {
-      g.rotate(Math.PI / 4);
+    const breath = 0.5 + 0.5 * Math.sin((t * Math.PI * 2) / 6);
+    const outer = g.createRadialGradient(0, 0, r * 1.4, 0, 0, r * (2.5 + 0.2 * breath));
+    outer.addColorStop(0, `rgba(${rgb},0)`);
+    outer.addColorStop(0.5, `rgba(${rgb},${0.1 + 0.08 * breath})`);
+    outer.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = outer;
+    g.beginPath();
+    g.arc(0, 0, r * 2.8, 0, Math.PI * 2);
+    g.fill();
+    g.rotate(t * 0.12);
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2;
+      const tw = 0.45 + 0.4 * Math.sin(t * 1.1 + i * 1.7);
+      g.fillStyle = `rgba(246,241,255,${tw})`;
       g.beginPath();
-      g.moveTo(r * 1.25, 0);
-      g.lineTo(r * (i % 2 ? 1.6 : 1.95), 0);
-      g.stroke();
+      g.arc(Math.cos(a) * r * 1.7, Math.sin(a) * r * 1.7, Math.max(0.9, r * 0.055), 0, Math.PI * 2);
+      g.fill();
     }
   }
   g.restore();
@@ -69,7 +79,7 @@ export function itemIcon(item, size = 72, { dark = false } = {}) {
     g.fillRect(0, 0, size, size);
     return c;
   }
-  drawAura(g, item.material, size / 2, size / 2, size * 0.24, 0);
+  drawAura(g, item.material, size / 2, size / 2, size * 0.17, 0); // the widest halo, 2.8r, stays inside the card
   drawItem(g, item, size / 2 + (item.kind === "door" ? size * 0.08 : 0), size / 2, size * 0.32, 0);
   return c;
 }

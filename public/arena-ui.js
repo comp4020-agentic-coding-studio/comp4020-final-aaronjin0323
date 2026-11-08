@@ -4,7 +4,7 @@
 import { ARENA, BEAT_MISS_MS, CARRY_MAX, GRACE_MS, KIND_NAMES, MATERIALS, MIN_PULL, PULL_MAX, SETTLE_MS } from "./arena.js";
 
 /** The slots' colours; each differs by a mark too (arena-app.js). */
-export const SLOT_COLOURS = ["#ff6b4a", "#2ec4b6", "#ffc83d", "#b48cff"];
+export const SLOT_COLOURS = ["#f4a39a", "#8fd3c8", "#f3d68a", "#c3a8f0"];
 
 // ---- the connection
 export const INITIAL_CONN = { status: "connecting", hasState: false, everLive: false };

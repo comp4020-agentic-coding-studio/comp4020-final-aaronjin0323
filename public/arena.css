@@ -1,11 +1,11 @@
 /* The arena: the floor is the page. One way out, and a "?" for the curious. */
-:root { --gap: 12px; --risk: #ffb648; --kept: #ffd766; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e6f2; }
+:root { --gap: 12px; --risk: #f2b880; --kept: #f3dfa2; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e9e4ff; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; overflow-x: hidden; }
-body { background: #14131f; min-height: 100svh; }
+body { background: #14152b; min-height: 100svh; }
 /* your robot's colour, faintly, behind everything: who you are at a glance */
-:root[data-slot] body { background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--you) 22%, #14131f), color-mix(in srgb, var(--you) 9%, #14131f) 70%); background-attachment: fixed; }
+:root[data-slot] body { background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--you) 20%, #14152b), color-mix(in srgb, var(--you) 8%, #14152b) 70%); background-attachment: fixed; }
 :focus-visible { outline: 3px solid #7fb2ff; outline-offset: 2px; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .wrap { width: min(100%, calc((100svh - 24px) * 1.6), 1320px); min-width: min(100%, 320px); margin: 0 auto; padding: var(--gap); }
@@ -13,28 +13,28 @@ body { background: #14131f; min-height: 100svh; }
 .arena { display: block; width: 100%; aspect-ratio: 16 / 10; touch-action: none; border-radius: 8px; cursor: crosshair; user-select: none; -webkit-user-select: none; }
 .arena[data-aiming] { cursor: grabbing; }
 .arena[data-pressed]:focus-visible { outline: none; }
-.status { margin: 0 0 8px; padding: 6px 12px; border-radius: 6px; background: #ffc83d; color: #2b2100; font-size: .9rem; }
-.toast { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: max-content; max-width: 92%; margin: 0; padding: 7px 14px; border-radius: 6px; background: #14131f; font-weight: 700; font-size: .92rem; pointer-events: none; }
+.status { margin: 0 0 8px; padding: 6px 12px; border-radius: 6px; background: #f3dfa2; color: #2b2410; font-size: .9rem; }
+.toast { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: max-content; max-width: 92%; margin: 0; padding: 7px 14px; border-radius: 6px; background: #14152b; font-weight: 700; font-size: .92rem; pointer-events: none; }
 .toast[data-kind="risk"] { color: var(--risk); border: 2px dashed var(--risk); }
 .toast[data-kind="kept"] { color: var(--kept); border: 2px solid var(--kept); }
 .corner { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; align-items: flex-start; }
-.roomlink, .how summary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 12px; border-radius: 8px; background: rgba(20,19,31,.82); border: 1px solid #57527a; color: #e8e6f2; font-weight: 600; font-size: .92rem; text-decoration: none; cursor: pointer; list-style: none; }
+.roomlink, .how summary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 12px; border-radius: 8px; background: rgba(20,21,43,.78); border: 1px solid #3b3f6e; color: #e8e6f2; font-weight: 600; font-size: .92rem; text-decoration: none; cursor: pointer; list-style: none; }
 .how summary { padding: 0; }
 .how summary::-webkit-details-marker { display: none; }
 .count { min-width: 22px; padding: 1px 6px; border-radius: 11px; background: var(--kept); color: #2b2100; font-size: .82rem; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
 .count[data-none] { display: none; }
 .roomlink[data-calling] { border-color: var(--kept); color: var(--kept); animation: calling 1.4s ease-in-out infinite; }
-@keyframes calling { 50% { box-shadow: 0 0 0 5px rgba(255,215,102,.3); } }
-@media (prefers-reduced-motion: reduce) { .roomlink[data-calling] { animation: none; box-shadow: 0 0 0 3px rgba(255,215,102,.5); } }
-.howcard { position: absolute; top: 46px; right: 0; width: min(300px, 80vw); padding: 12px 14px; border-radius: 8px; background: #211f33; border: 1px solid #57527a; font-size: .88rem; line-height: 1.4; }
+@keyframes calling { 50% { box-shadow: 0 0 0 5px rgba(243,223,162,.3); } }
+@media (prefers-reduced-motion: reduce) { .roomlink[data-calling] { animation: none; box-shadow: 0 0 0 3px rgba(243,223,162,.5); } }
+.howcard { position: absolute; top: 46px; right: 0; width: min(300px, 80vw); padding: 12px 14px; border-radius: 8px; background: #1d1f3a; border: 1px solid #3b3f6e; font-size: .88rem; line-height: 1.4; }
 .howcard p { margin: 0 0 8px; }
 .howcard p:last-child { margin: 0; }
 .howcard a { color: inherit; }
 .pad { display: none; }
 @media (pointer: coarse) {
   /* the rest of the screen is for your thumb, so it never hides the action */
-  .pad { display: grid; place-items: center; color: #77738f; font-size: 1rem; height: calc(100svh - (100vw - 24px) * 10 / 16 - 36px); min-height: 96px; margin-top: 12px; border-radius: 8px; border: 2px solid #2d2a45; background: #1c1a2c; touch-action: none; user-select: none; -webkit-user-select: none; }
-  :root[data-slot] .pad { border-color: color-mix(in srgb, var(--you) 40%, #2d2a45); background: color-mix(in srgb, var(--you) 12%, #1c1a2c); color: color-mix(in srgb, var(--you) 55%, #77738f); }
+  .pad { display: grid; place-items: center; color: #77738f; font-size: 1rem; height: calc(100svh - (100vw - 24px) * 10 / 16 - 36px); min-height: 96px; margin-top: 12px; border-radius: 8px; border: 2px solid #2c2f55; background: #1d1f3a; touch-action: none; user-select: none; -webkit-user-select: none; }
+  :root[data-slot] .pad { border-color: color-mix(in srgb, var(--you) 40%, #2c2f55); background: color-mix(in srgb, var(--you) 12%, #1d1f3a); color: color-mix(in srgb, var(--you) 60%, #8a8db3); }
 }
 /* upright on a phone: the way out sits in the thumb's area, off the arena */
 @media (pointer: coarse) and (orientation: portrait) {

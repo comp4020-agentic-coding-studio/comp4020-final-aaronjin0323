@@ -295,12 +295,12 @@ function drawGuide(now) {
     g.beginPath();
     g.moveTo(px(press[0]), px(press[1]));
     g.lineTo(px(q[0]), px(q[1]));
-    g.strokeStyle = "rgba(255,255,255,.55)";
+    g.strokeStyle = "rgba(246,241,255,.55)";
     g.lineWidth = 3;
     g.stroke();
     g.beginPath();
     g.arc(px(q[0]), px(q[1]), 12, 0, Math.PI * 2);
-    g.fillStyle = "rgba(255,255,255,.9)";
+    g.fillStyle = "rgba(246,241,255,.9)";
     g.fill();
     // and where the robot would go
     for (let d = 1.2; d <= 1.2 + pulled * 2; d += 0.7) {
@@ -314,7 +314,7 @@ function drawGuide(now) {
     at = a.pos;
     g.beginPath();
     g.arc(px(at[0]), px(at[1]), px(ARTIFACT_R) + 8 + 14 * beat, 0, Math.PI * 2);
-    g.strokeStyle = `rgba(255,255,255,${1 - beat * 0.8})`;
+    g.strokeStyle = `rgba(246,241,255,${1 - beat * 0.8})`;
     g.lineWidth = 3;
     g.stroke();
   } else {
@@ -324,7 +324,7 @@ function drawGuide(now) {
     g.lineTo(px(at[0]), px(at[1]));
     g.setLineDash([8, 10]);
     g.lineDashOffset = reducedMotion.matches ? 0 : -now / 40;
-    g.strokeStyle = "rgba(255,200,61,.8)";
+    g.strokeStyle = "rgba(243,223,162,.8)";
     g.lineWidth = 3;
     g.stroke();
     g.setLineDash([]);
@@ -334,11 +334,11 @@ function drawGuide(now) {
   const w = g.measureText(next.words).width + 18;
   const x = Math.max(w / 2 + 6, Math.min(px(ARENA.w) - w / 2 - 6, px(at[0])));
   const y = next.mark === "pull" || px(at[1]) < 70 ? px(at[1]) + 44 : px(at[1]) - 44; // the pull's words sit clear of your robot
-  g.fillStyle = "rgba(255,255,255,.95)";
+  g.fillStyle = "rgba(246,241,255,.95)";
   g.beginPath();
   g.roundRect(x - w / 2, y - 13, w, 26, 6);
   g.fill();
-  g.fillStyle = "#14131f";
+  g.fillStyle = "#14152b";
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillText(next.words, x, y + 1);
@@ -403,7 +403,7 @@ function drawAim(p, snap) {
     g.beginPath();
     g.moveTo(px(p[0]), px(p[1]));
     g.lineTo(px(p[0] + pull.to[0] - pull.from[0]), px(p[1] + pull.to[1] - pull.from[1]));
-    g.strokeStyle = "rgba(255,255,255,.45)";
+    g.strokeStyle = "rgba(246,241,255,.45)";
     g.lineWidth = 3;
     g.stroke();
   }
@@ -413,7 +413,7 @@ function drawAim(p, snap) {
     if (i % 2) return;
     g.beginPath();
     g.arc(px(q[0]), px(q[1]), 2.5, 0, Math.PI * 2);
-    g.fillStyle = `rgba(255,255,255,${0.9 - (0.75 * i) / pts.length})`;
+    g.fillStyle = `rgba(246,241,255,${0.9 - (0.75 * i) / pts.length})`;
     g.fill();
   });
   // where it ends up, and how hard, in figures
