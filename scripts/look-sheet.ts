@@ -8,6 +8,7 @@
 //
 //   node scripts/look-sheet.ts            # LOOK_PORT=8301 by default
 //   LOOK_T=1.3 node scripts/look-sheet.ts # a different moment, in seconds
+//   LOOK_NAME=robot LOOK_PORT=8302 ...     # its own files and port, to run several at once
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +17,7 @@ import { chromium } from "playwright-core";
 
 const PORT = Number(process.env.LOOK_PORT ?? 8301);
 const T = Number(process.env.LOOK_T ?? 0.8);
+const NAME = process.env.LOOK_NAME ?? "look-sheet";
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const db = join(mkdtempSync(join(tmpdir(), "look-")), "x.db");
 const server = spawn(process.execPath, ["src/server.ts"], { env: { ...process.env, PORT: String(PORT), DB_PATH: db, NODE_ENV: "" }, stdio: "ignore" });
@@ -86,12 +88,12 @@ try {
       for (const kind of ["fish", "cloud", "door"]) strip.append(itemIcon({ kind, material: "tin", seed: 5 }, 72, { dark: true }));
       document.body.append(strip);
     }, { T, w });
-    await page.screenshot({ path: `.shots/look-sheet-${w}.png`, fullPage: true });
+    await page.screenshot({ path: `.shots/${NAME}-${w}.png`, fullPage: true });
     await page.close();
   }
 } finally {
   await browser.close();
   server.kill("SIGKILL");
 }
-console.log(errors.length ? `errors:\n${errors.join("\n")}` : "look sheet: .shots/look-sheet-1440.png, .shots/look-sheet-390.png");
+console.log(errors.length ? `errors:\n${errors.join("\n")}` : `look sheet: .shots/${NAME}-1440.png, .shots/${NAME}-390.png`);
 process.exit(errors.length ? 1 : 0);
