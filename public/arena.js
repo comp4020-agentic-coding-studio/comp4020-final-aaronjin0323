@@ -12,7 +12,7 @@
 
 // ---- every number, in one place
 /** The arena, in metres: x across, y down the screen. */
-export const ARENA = { w: 16, h: 10 };
+export const ARENA = { w: 20, h: 12.5 }; // ADR 40
 export const ROBOT_R = 0.45;
 /** The fastest an empty robot's launch goes, in m/s (at power 1). */
 export const LAUNCH_MAX = 10;
@@ -31,7 +31,7 @@ export const STOP = 0.05;
 /** How many robots at once. */
 export const MAX_PLAYERS = 4;
 /** Where each slot's robot starts. */
-export const SPAWNS = [[1.5, 1.5], [14.5, 8.5], [14.5, 1.5], [1.5, 8.5]];
+export const SPAWNS = [[1.5, 1.5], [ARENA.w - 1.5, ARENA.h - 1.5], [ARENA.w - 1.5, 1.5], [1.5, ARENA.h - 1.5]];
 
 // ---- load: each artifact makes a launch weaker and a turn wider
 export const CARRY_MAX = 5;

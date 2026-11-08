@@ -18,7 +18,8 @@ function canvas(size) {
 }
 
 function labelSize(r) {
-  return Math.max(11, Math.min(15, r * 0.3));
+  // small enough that the word, spaced, stays inside the inlay on a phone
+  return Math.max(7, Math.min(15, r * 0.3));
 }
 
 // The static layers of one pool size: the floor halo, the brass inlay
