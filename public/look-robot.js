@@ -4,13 +4,13 @@
 // `isMe` marks your own robot. `vel` is its velocity in metres per second.
 // With `reduced` nothing may move.
 //
-// Look: a smooth pastel moon-stone. Moonlight washes it from the top-left,
+// Look: a smooth pastel stone. Lamplight washes it from the top-left,
 // it shades softly to the bottom-right, the mark is pressed gently into it,
 // and a faint glow of its own colour breathes around it. Your own robot
-// wears a calm moonlight halo ring. No gloss, no rim, no parts.
+// wears a calm lamplight halo ring. No gloss, no rim, no parts.
 
-const NIGHT = [20, 21, 43]; // #14152b
-const MOON = [246, 241, 255]; // #f6f1ff
+const NIGHT = [22, 18, 14]; // #16130f, the gallery's shadow
+const MOON = [255, 246, 228]; // warm lamplight
 const GLOW_SPAN = 2.1; // glow reaches this many radii from the centre
 const BREATH_MS = 5200;
 

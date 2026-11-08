@@ -5,7 +5,7 @@
 const TAU = Math.PI * 2;
 const CORAL = "241,154,139"; // contact
 const AMBER = "242,184,128"; // at risk
-const MOON = "246,241,255"; // moonlight
+const MOON = "255,246,228"; // lamplight
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const easeOut = (v) => 1 - (1 - v) ** 3;
@@ -170,9 +170,9 @@ function slotSprite(r, dpr) {
   softRing(s, o, o, r, r * 0.5, AMBER, 0.2);
   // the bubble of night: deeper at the heart, misty at the rim, lit a touch from the top-left
   const grad = s.createRadialGradient(o - r * 0.35, o - r * 0.4, r * 0.1, o, o, r);
-  grad.addColorStop(0, "rgba(59,63,110,0.85)");
-  grad.addColorStop(0.55, "rgba(29,31,58,0.9)");
-  grad.addColorStop(1, "rgba(20,21,43,0.8)");
+  grad.addColorStop(0, "rgba(74,58,40,0.85)");
+  grad.addColorStop(0.55, "rgba(38,30,22,0.9)");
+  grad.addColorStop(1, "rgba(22,18,14,0.8)");
   s.fillStyle = grad;
   s.beginPath(); s.arc(o, o, r, 0, TAU); s.fill();
   // the dashed amber outline: at risk

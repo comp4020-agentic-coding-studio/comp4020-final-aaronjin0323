@@ -1,4 +1,5 @@
-// The vault at the centre: a still moon-pool where cargo is kept for good.
+// The vault at the centre: a lit brass inlay in the gallery floor (ADR 38),
+// where cargo is kept for good.
 // Gold is "kept" everywhere (CLAUDE.md), amber and dashed is "at risk", so the
 // pool is solid soft gold with no dashes. `r` is its radius in pixels
 // (VAULT_R, the rule's own size): the pool's edge sits at r, only its glow
@@ -20,7 +21,7 @@ function labelSize(r) {
   return Math.max(11, Math.min(15, r * 0.3));
 }
 
-// The static layers of one pool size: the floor halo, the pool with its moon
+// The static layers of one pool size: the floor halo, the brass inlay
 // and rim, and the label. Each is a square canvas centred on the pool.
 function layers(r) {
   const dpr = dprNow();
@@ -53,7 +54,7 @@ function layers(r) {
   });
 
   const pool = make((q) => {
-    // the water: pale moon-gold, lightest towards the moon (top-left)
+    // the brass: pale gold, lightest towards the lamp (top-left)
     const body = q.createRadialGradient(-r * 0.28, -r * 0.3, r * 0.05, 0, 0, r);
     body.addColorStop(0, "#f8ecc4");
     body.addColorStop(0.45, "#f3dfa2");
@@ -73,31 +74,38 @@ function layers(r) {
     deep.addColorStop(1, "rgba(196, 158, 92, 0)");
     q.fillStyle = deep;
     q.fillRect(-r, -r, r * 2, r * 2);
-    // the moon's reflection: a soft pale disc with a misty glow round it
-    const mx = -r * 0.3, my = -r * 0.4, mr = Math.max(2.5, r * 0.15);
-    const glow = q.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 2.8);
-    glow.addColorStop(0, "rgba(246, 241, 255, 0.3)");
-    glow.addColorStop(1, "rgba(246, 241, 255, 0)");
-    q.fillStyle = glow;
-    q.fillRect(-r, -r, r * 2, r * 2);
-    const moon = q.createRadialGradient(mx, my, 0, mx, my, mr);
-    moon.addColorStop(0, "rgba(250, 247, 255, 0.85)");
-    moon.addColorStop(0.8, "rgba(246, 241, 255, 0.8)");
-    moon.addColorStop(1, "rgba(246, 241, 255, 0)");
-    q.fillStyle = moon;
-    q.beginPath();
-    q.arc(mx, my, mr, 0, TAU);
-    q.fill();
-    // two soft streaks of the moon's light broken on the water below it
-    q.strokeStyle = "rgba(246, 241, 255, 0.35)";
+    // a brass inlay: two engraved rings and a quiet eight-point star,
+    // a lamp's light catching it from above-left
     q.lineCap = "round";
-    q.lineWidth = Math.max(1, r * 0.035);
-    for (const [dy, w] of [[1.7, 0.55], [2.35, 0.35]]) {
+    for (const [k, alpha] of [[0.82, 0.42], [0.66, 0.3]]) {
       q.beginPath();
-      q.moveTo(mx - mr * w * 1.4, my + mr * dy);
-      q.lineTo(mx + mr * w * 1.4, my + mr * dy);
+      q.arc(0, 0, r * k, 0, TAU);
+      q.strokeStyle = `rgba(150, 112, 52, ${alpha})`;
+      q.lineWidth = Math.max(1, r * 0.03);
+      q.stroke();
+      q.beginPath();
+      q.arc(-0.6, -0.6, r * k, Math.PI * 0.9, Math.PI * 1.6);
+      q.strokeStyle = "rgba(255, 246, 220, 0.45)";
+      q.lineWidth = Math.max(0.8, r * 0.018);
       q.stroke();
     }
+    q.beginPath();
+    for (let i = 0; i < 16; i++) {
+      const ang = (i / 16) * TAU - Math.PI / 2, rr = i % 2 ? r * 0.13 : i % 4 ? r * 0.36 : r * 0.52;
+      const px = Math.cos(ang) * rr, py = Math.sin(ang) * rr - r * 0.12;
+      i ? q.lineTo(px, py) : q.moveTo(px, py);
+    }
+    q.closePath();
+    q.fillStyle = "rgba(200, 160, 90, 0.35)";
+    q.fill();
+    q.strokeStyle = "rgba(150, 112, 52, 0.45)";
+    q.lineWidth = Math.max(0.8, r * 0.02);
+    q.stroke();
+    const shine = q.createRadialGradient(-r * 0.35, -r * 0.4, 0, -r * 0.35, -r * 0.4, r * 0.7);
+    shine.addColorStop(0, "rgba(255, 250, 232, 0.5)");
+    shine.addColorStop(1, "rgba(255, 250, 232, 0)");
+    q.fillStyle = shine;
+    q.fillRect(-r, -r, r * 2, r * 2);
     // the inner shade of the rim, so the edge reads as a soft lip
     const lip = q.createRadialGradient(0, 0, r * 0.78, 0, 0, r);
     lip.addColorStop(0, "rgba(201, 160, 88, 0)");
@@ -116,17 +124,17 @@ function layers(r) {
     q.stroke();
   });
 
-  // the label: quiet spaced small caps in pale night-blue on the gold
+  // the label: quiet spaced small caps in dark umber on the gold
   const fs = labelSize(r);
   const label = make((q) => {
-    q.font = `600 ${fs}px "Avenir Next", "Segoe UI", system-ui, sans-serif`;
+    q.font = `600 ${fs}px "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif`;
     if ("letterSpacing" in q) q.letterSpacing = `${(fs * 0.14).toFixed(1)}px`;
     q.textAlign = "center";
     q.textBaseline = "middle";
     const ly = r * 0.2;
     q.fillStyle = "rgba(255, 249, 230, 0.55)";
     q.fillText("VAULT", 0.5, ly + 0.8);
-    q.fillStyle = "#2c2f55";
+    q.fillStyle = "#3a2a14";
     q.fillText("VAULT", 0, ly);
   });
 
@@ -194,7 +202,7 @@ export function drawVault(g, { x, y, r, lit, now, reduced }) {
   g.restore();
 }
 
-// one soft mote of moonlight: a faint wide glow with a small bright core
+// one soft mote of lamplight: a faint wide glow with a small bright core
 function mote(g, x, y, s, a) {
   g.globalAlpha = a * 0.3;
   g.beginPath();
@@ -212,7 +220,7 @@ const MOTES = [
   [0.25, -0.5, 0.8, 0.1],
 ];
 
-/** A delivery, seen by everyone: a soft bloom of moonlight rises from the
+/** A delivery, seen by everyone: a soft bloom of lamplight rises from the
  * pool, gentle ripples spread out, a few pale-gold motes drift up. `k` runs
  * 0 to 1 over 900 ms; everything has faded by k = 1. */
 export function drawBurst(g, { x, y, r, k, reduced }) {
@@ -222,7 +230,7 @@ export function drawBurst(g, { x, y, r, k, reduced }) {
   if (reduced) {
     const a = 0.5 * (1 - k);
     const glow = g.createRadialGradient(x, y, r * 0.2, x, y, r * 1.6);
-    glow.addColorStop(0, `rgba(246, 241, 255, ${a})`);
+    glow.addColorStop(0, `rgba(255, 246, 228, ${a})`);
     glow.addColorStop(0.5, `rgba(243, 223, 162, ${a * 0.45})`);
     glow.addColorStop(1, "rgba(243, 223, 162, 0)");
     g.fillStyle = glow;
@@ -234,10 +242,10 @@ export function drawBurst(g, { x, y, r, k, reduced }) {
   const fade = (1 - k) ** 1.4;
   const rise = Math.min(1, k * 5); // a gentle swell in over the first ~180 ms
 
-  // the bloom: moonlight lifting softly off the water
+  // the bloom: lamplight lifting softly off the brass
   const by = y - r * 0.35 * ease, br = r * (1.1 + 0.7 * ease);
   const bloom = g.createRadialGradient(x, by, 0, x, by, br);
-  bloom.addColorStop(0, `rgba(246, 241, 255, ${0.55 * fade * rise})`);
+  bloom.addColorStop(0, `rgba(255, 246, 228, ${0.55 * fade * rise})`);
   bloom.addColorStop(0.45, `rgba(243, 223, 162, ${0.28 * fade * rise})`);
   bloom.addColorStop(1, "rgba(243, 223, 162, 0)");
   g.fillStyle = bloom;
