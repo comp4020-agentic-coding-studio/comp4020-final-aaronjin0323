@@ -8,6 +8,7 @@ import { INITIAL_CONN, KEY_AIM_START, SLOT_COLOURS, aimFromPull, behind, canPlay
 import { drawAura, drawItem } from "./arena-draw.js";
 import { drawFloor } from "./look-floor.js";
 import { drawDoor } from "./look-door.js";
+import { createSound, soundButton } from "./sound.js";
 import { drawBurst, drawVault as paintVault } from "./look-vault.js";
 import { drawRobot as paintRobot, drawTrail as paintTrail } from "./look-robot.js";
 import { drawCargoSlot, drawFlash, drawSettling, drawTether } from "./look-effects.js";
@@ -16,6 +17,10 @@ const $ = (sel) => document.querySelector(sel);
 const canvas = $("[data-arena]");
 const g = canvas.getContext("2d");
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+// music, not noise (ADR 41): nothing until you touch the page
+const sound = createSound("arena");
+soundButton($("[data-sound]"), sound);
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => sound.gesture(), { capture: true });
 
 let conn = INITIAL_CONN;
 let offset = 0; // server clock minus ours, ms
@@ -31,6 +36,7 @@ let leaving = false;
 function throughDoor() {
   if (leaving) return;
   leaving = true;
+  sound.play("door");
   document.documentElement.dataset.leaving = "";
   setTimeout(() => location.assign("/room/"), reducedMotion.matches ? 0 : 380);
 }
@@ -74,6 +80,7 @@ function connect() {
     you = d.you;
     const now = serverNow();
     const before = new Map(robots.map((r) => [r.tag, shownAt(snapOf(r), now)]));
+    const hadLoad = myLoad();
     robots = d.robots;
     const server = myRobot();
     if (server) {
@@ -92,12 +99,19 @@ function connect() {
       flashes.push(h);
       for (const s of h.scattered) thrown.set(s.id, s.from);
       const lost = h.scattered.filter((s) => s.by === you.tag).length;
-      if (lost) toast("risk", dropWords(lost));
+      if (lost) {
+        toast("risk", dropWords(lost));
+        sound.play("scatter");
+      }
     }
     for (const b of d.deliveries ?? []) {
       bursts.push(b);
-      if (b.tag === you.tag) toast("kept", deliveryWords(b.items));
+      if (b.tag === you.tag) {
+        toast("kept", deliveryWords(b.items));
+        sound.play("deliver");
+      } else sound.play("deliverOther");
     }
+    if (myLoad() > hadLoad) sound.play("pickup");
     if ((d.exits ?? []).includes(you.tag)) throughDoor();
     artifacts = d.artifacts;
     setConn(connection(conn, "state"));
@@ -211,6 +225,7 @@ async function fire(l) {
   const sent = { dir: l.dir, power: l.power, seq };
   const load = myLoad();
   mine = { ...launch(from, sent, serverNow(), load), tag: you.tag };
+  sound.play("launch", { power: l.power });
   if (!launched) {
     launched = true;
     localStorage.setItem("arena-launched", "yes");
@@ -549,6 +564,7 @@ canvas.probe = () => {
     mark: nextThing()?.mark ?? null,
     held,
     players: MAX_PLAYERS,
+    sound: sound.probe(),
     door: { ...at([EXIT.x, EXIT.depth / 2]), aimed: doorAimed, open: !!myRobot() && myLoad() === 0 },
   };
 };

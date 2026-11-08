@@ -677,7 +677,7 @@ async function budget(browser: Browser) {
     within(await inWindow(p), 16, 5, `${name}, your room`); // ADR 41: + the sound button
     await p.click("[data-edit]");
     await p.waitForTimeout(100);
-    within(await inWindow(p), 12, 6, `${name}, decorating with nothing selected`);
+    within(await inWindow(p), 12, 7, `${name}, decorating with nothing selected`); // ADR 41: + the sound button
     await p.click('[data-tab="things"]');
     check((await p.locator(".colours button:visible").count()) === 0, `${name}: no palette until it applies`);
     await p.context().close();

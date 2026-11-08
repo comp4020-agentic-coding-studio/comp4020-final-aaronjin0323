@@ -33,8 +33,9 @@ assets are out of scope, so whatever plays is made in the page.
 
 ## Consequences
 
-- The budget of controls rises by one on the arena (2 to 3) and in a room
-  (4 to 5): turning sound off must never be more than one tap away.
+- The budget of controls rises by one on the arena (2 to 3), in a room
+  (4 to 5) and while decorating (6 to 7): turning sound off must never be
+  more than one tap away.
   The button is an icon, so the word budget is unchanged.
 - `browser-check`'s `sound` section checks that nothing plays before a
   gesture, the sounds follow the events, and off means silence, remembered.

@@ -6,11 +6,16 @@ import { COLOURS, FLOORS, ITEMS, LIGHTS, ROOM_ASPECT, ROOM_DOOR, ROOM_MAX_ITEMS,
 import { CATALOG, MATERIALS } from "./arena.js";
 import { drawItem, itemIcon } from "./arena-draw.js";
 import { catalogCell, itemName, waitingCount } from "./arena-ui.js";
+import { createSound, soundButton } from "./sound.js";
 
 const $ = (s) => document.querySelector(s);
 const canvas = $("[data-room]");
 const g = canvas.getContext("2d");
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+// music, not noise (ADR 41): nothing until you touch the page
+const sound = createSound("room");
+soundButton(document.querySelector("[data-sound]"), sound);
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => sound.gesture(), { capture: true });
 const tagInUrl = /^\/room\/([0-9a-f]{8})$/.exec(location.pathname)?.[1] ?? null;
 
 let room = null; // as the server last said
@@ -112,7 +117,10 @@ function joinLive(tag) {
       seen.add(w.tag);
       const o = others.get(w.tag);
       if (o) Object.assign(o, { tx: w.x, ty: w.y, face: w.face, moving: w.moving, sitting: w.sitting, seat: w.seat });
-      else others.set(w.tag, { ...w, tx: w.x, ty: w.y, colour: walkerColour(w.tag), phase: (parseInt(w.tag.slice(0, 4), 16) % 7) || 0 });
+      else {
+        if (placed) sound.play("arrive");
+        others.set(w.tag, { ...w, tx: w.x, ty: w.y, colour: walkerColour(w.tag), phase: (parseInt(w.tag.slice(0, 4), 16) % 7) || 0 });
+      }
     }
     for (const t of [...others.keys()]) if (!seen.has(t)) others.delete(t);
     if (!placed) standClear(d.walkers.filter((w) => w.tag !== myTag));
@@ -633,6 +641,7 @@ function use(i) {
   if (a) return closer(a);
   if (ITEMS[i.type].seat) {
     Object.assign(walker, { x: i.x, y: i.y, sitting: true, seat: i.type, moving: false });
+    sound.play("sit");
     path = [];
   }
 }
@@ -710,6 +719,7 @@ let leaving = false;
 function throughDoor() {
   if (leaving) return;
   leaving = true;
+  sound.play("door");
   document.documentElement.dataset.leaving = "";
   setTimeout(() => location.assign("/"), reduced.matches ? 0 : 380);
 }
@@ -756,6 +766,7 @@ const up = $("[data-closeup]");
 const cg = up.getContext("2d");
 let look = null; // { item, zoom, light: [x, y], wakeUntil, t }
 function closer(a) {
+  sound.play("look");
   look = { item: a, light: [0.38, 0.3], wakeUntil: 0, t: 0 };
   $("[data-closer-name]").textContent = itemName(a.kind, a.material);
   const when = a.at ? new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "";
@@ -819,6 +830,7 @@ canvas.probe = () => {
     dirty,
     walker: walker && { x: walker.x, y: walker.y, sitting: walker.sitting, moving: walker.moving, cx: r.left + iso(walker.x, walker.y).X * r.width, cy: r.top + iso(walker.x, walker.y).Y * r.height },
     near: near?.uid ?? null,
+    sound: sound.probe(),
     door: { cx: r.left + iso(ROOM_DOOR.x, ROOM_DOOR.y).X * r.width, cy: r.top + iso(ROOM_DOOR.x, ROOM_DOOR.y).Y * r.height },
     me: myTag,
     myColour: myTag ? walkerColour(myTag) : null,

@@ -181,3 +181,14 @@ body[data-editing] .below { display: none; }
 /* through the door back to the arena (ADR 39): the room fades as you go */
 :root[data-leaving] body { opacity: 0; transition: opacity .35s ease; }
 @media (prefers-reduced-motion: reduce) { :root[data-leaving] body { transition: none; } }
+
+/* the sound button (ADR 41): an icon, crossed out while off */
+.sound { display: inline-grid; place-items: center; min-width: 40px; min-height: 40px; padding: 0; border-radius: 8px; background: rgba(31,27,21,.82); border: 1px solid #3a342b; color: #efe8db; cursor: pointer; }
+.sound:hover { border-color: #d8b878; }
+.sound .hush { display: none; }
+.sound[data-off="true"] { color: #a99f8e; }
+.sound[data-off="true"] .waves { display: none; }
+.sound[data-off="true"] .hush { display: inline; }
+.top { align-items: center; }
+.top .sound { min-height: 44px; min-width: 44px; border-radius: 999px; }
+@media (max-height: 500px) and (orientation: landscape) { .top .sound { min-height: 32px; min-width: 32px; } }
